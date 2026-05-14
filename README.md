@@ -72,7 +72,7 @@ For BIN images, place the `.cue` file with the same base name in the same direct
 | GPIO 16     | IF_DATA     | BIDIR     | COMMO data |
 | GPIO 17     | IF_DIR      | OUT       | COMMO direction control |
 
-All CD32 connector signals are 3.3 V. No level shifting required.
+
 
 > **DA_EMPH (GPIO 4):** Driven permanently LOW. Pre-emphasis was a 1982–1986 Red Book audio feature used on a small number of early audiophile CDs; no CD32 game title uses it. The LC78835M DAC on the CD32 mainboard ties its de-emphasis select pin to ground, so the signal has no effect regardless.
 
