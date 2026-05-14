@@ -420,63 +420,6 @@ Connect a serial terminal at 115200 baud to the Pico 2's USB port:
 
 ---
 
-## Upstream Firmware Integration (`cd32_pico`)
-
-The `upstream/` directory contains a complete, verbatim copy of
-[`cd32_pico`](https://github.com/cd32_pico) — a clean Pico 2 port of the
-**original 1992–1993 Philips/Commodore CD32 drive MCU firmware** (originally
-written for an 8051 microcontroller).
-
-### What the upstream firmware does
-
-The original CD32 drive uses a dedicated MCU to:
-- Control the **CXD2500BQ** CD signal processor (EFM decode, PLL, motor control)
-- Drive the **DSIC2** servo IC (focus, radial tracking, sled positioning)
-- Communicate with the **Amiga chipset** via the **COMMO 3-wire serial bus**
-
-The `cd32_pico` project replaces that MCU with a Pico 2, keeping the same
-hardware but using PIO state machines instead of GPIO bit-banging.
-
-### How it integrates with the ODE
-
-The ODE and the upstream firmware address different layers of the same system:
-
-| Layer | `cd32_pico` (upstream) | `cd32_ode` (this project) |
-|-------|----------------------|--------------------------|
-| Data source | Real laser + CXD2500BQ | SD card disc images |
-| Host interface | COMMO 3-wire serial | COMMO 3-wire serial + DA I2S |
-| Hardware needed | Real CXD2500BQ + DSIC2 | None |
-
-In the merged build, the COMMO bus driver from `cd32_pico` lets the ODE
-communicate with a **real CD32 mainboard** over the original 3-wire serial
-bus, delivering disc image data over the DA I2S serial lines exactly as a
-real drive would.
-
-### Build options
-
-```bash
-# Default: standalone ODE (rotary encoder, no real CD32 hardware)
-cmake .. -DPICO_BOARD=pico2
-
-# Real CD32 hardware connection (COMMO bus active, rotary encoder disabled)
-cmake .. -DPICO_BOARD=pico2 -DBUILD_WITH_COMMO=ON -DBUILD_WITH_ROTARY=OFF
-
-# Pico 2 W + real CD32 hardware (COMMO + WiFi web interface)
-cmake .. -DPICO_BOARD=pico2_w -DBUILD_WITH_COMMO=ON -DBUILD_WITH_ROTARY=OFF
-```
-
-
-
-### What changed vs the original cd32_pico
-
-All upstream files are kept verbatim in `upstream/`. The integration layer lives in:
-- `src/commo_bridge.c` — translates COMMO packets into ODE actions (seek, play, TOC); provides PIO HAL stubs so upstream commo.c links without pio_hw.c
-- `src/player_stub.c` — satisfies upstream `player_interface` linkage without player.c
-- `include/upstream_types.h` — resolves type conflicts (cd_time_t ↔ msf_t)
-- `include/commo_bridge.h` — documents GPIO/PIO allocation and conflict resolution
-
-
----
 
 ## References
 
@@ -486,6 +429,9 @@ All upstream files are kept verbatim in `upstream/`. The integration layer lives
 - ECMA-130 (ISO/IEC 10149) — CD-ROM physical format specification
 - Phillipe Boulenguez, "Reverse Engineering the Amiga CD32 Boot Process"
 - no-OS-FatFS-SD-SDIO-SPI-RPi-Pico — MIT, Carl Kugler — SD card library
+
+##
+Thanks to Xvortex, Mick & FastDruid on the EAB forums.
 
 ---
 
