@@ -1,0 +1,10 @@
+Purpose:
+Verify DMA buffers swap seamlessly.
+
+Why it matters:
+FMV streaming cannot tolerate DMA gaps.
+
+Validate:
+- Seamless swap timing
+- No stale data
+- No underruns

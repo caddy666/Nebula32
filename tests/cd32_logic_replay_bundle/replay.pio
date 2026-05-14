@@ -1,0 +1,11 @@
+
+.program replay
+
+pull block
+out pins, 8
+
+pull block
+out x, 16
+
+wait_loop:
+    jmp x-- wait_loop

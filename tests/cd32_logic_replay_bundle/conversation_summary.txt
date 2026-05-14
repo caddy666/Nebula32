@@ -1,0 +1,28 @@
+
+Conversation Summary
+====================
+
+Topics Covered:
+- Unit testing strategy for Pico 2 CD32 ODE
+- FMV streaming validation
+- Sector cadence validation
+- Ring buffer underrun testing
+- SD card stall simulation
+- DMA double-buffer validation
+- PIO timing validation
+- Golden trace replay systems
+- Logic analyzer CSV replay
+- Replay architectures
+- Differential testing against real drives
+
+Important Concepts:
+- Timing relationships matter more than throughput
+- FMV playback depends on deterministic sector cadence
+- PIO + DMA is the ideal replay architecture
+- Sector deadline miss counters are highly predictive
+- Replay harnesses expose timing bugs very effectively
+
+Recommended Hardware:
+- Raspberry Pi Pico 2
+- Saleae or PicoScope logic analyzer
+- Second Pico as replay generator

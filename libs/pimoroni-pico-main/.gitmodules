@@ -1,0 +1,30 @@
+[submodule "micropython/modules/ulab"]
+	path = micropython/modules/ulab
+	url = https://github.com/v923z/micropython-ulab.git
+[submodule "drivers/bme68x-sensor-api/src"]
+	path = drivers/bme68x/src
+	url = https://github.com/BoschSensortec/BME68x-Sensor-API
+[submodule "drivers/bme280/src"]
+	path = drivers/bme280/src
+	url = https://github.com/BoschSensortec/BME280_driver
+[submodule "drivers/bmp280/src"]
+	path = drivers/bmp280/src
+	url = https://github.com/pimoroni/BMP280_driver
+	branch = patch-intf-ptr
+[submodule "drivers/scd4x/src"]
+	path = drivers/scd4x/src
+	url = https://github.com/Sensirion/embedded-i2c-scd4x
+[submodule "micropython/modules/qrcode"]
+	path = micropython/modules/qrcode
+	url = https://github.com/pimoroni/QR-Code-Generator
+	branch = micropython/mp_obj_type_t_upgrade
+[submodule "drivers/vl53l5cx/src"]
+	path = drivers/vl53l5cx/src
+	url = https://github.com/ST-mirror/VL53L5CX_ULD_driver
+	branch = no-fw/lite/en
+[submodule "drivers/mlx90640/src"]
+	path = drivers/mlx90640/src
+	url = https://github.com/melexis/mlx90640-library
+[submodule "drivers/bme69x/src"]
+	path = drivers/bme69x/src
+	url = https://github.com/boschsensortec/BME690_SensorAPI

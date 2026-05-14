@@ -1,0 +1,173 @@
+; =============================================================================
+; commo.pio
+; Amiga CD32 COMMO bidirectional serial interface
+;
+; Hardware: 3-wire serial bus between this firmware and the CD32 host chipset
+; Pins (base = PIN_COMMO_CLK):
+;   pin+0  = CLK   (INPUT from host when receiving; OUTPUT when transmitting)
+;   pin+1  = DATA  (bidirectional — direction toggled by DIR)
+;   pin+2  = DIR   (OUTPUT — 1 = we transmit, 0 = we receive/acknowledge)
+;
+; Two state machines:
+;   SM0 — commo_rx : host drives CLK; we sample DATA on rising edges (8 bits LSB-first)
+;   SM1 — commo_tx : we drive CLK and DATA; host samples on rising edges (8 bits LSB-first)
+;
+; RX state machine:
+;   - Triggered by CPU when DATA goes low (start bit from host)
+;   - Waits for host to raise CLK, samples DATA, 8 times
+;   - After last bit, pulses DIR low briefly (acknowledge) then restores DIR=1
+;   - Pushes byte to RX FIFO; raises IRQ to wake CPU
+;
+; TX state machine:
+;   - CPU writes byte to TX FIFO
+;   - SM drives DATA and CLK for 8 bits (LSB first)
+;   - After last bit: DATA=1, DIR=1 (release bus)
+;   - Raises IRQ when done
+;
+; NOTE: CLK and DATA share a consecutive pin range to allow side-set on CLK
+;       while out drives DATA.  DIR is handled via set on pin+2.
+; =============================================================================
+
+; ---- RX state machine -------------------------------------------------------
+
+.program commo_rx
+.side_set 1 opt            ; optional side-set on CLK (pin+0) for acknowledge pulse
+
+; On entry: DATA (pin+1) has gone low — CPU starts this SM when it detects the start bit.
+; DIR (pin+2) = 1 means we are listening (set by CPU before enabling SM).
+
+    ; Wait for CLK to go high, then sample DATA (8 bits, LSB first)
+    set x, 7           side 0    ; 8 bits to receive
+rx_loop:
+    wait 1 pin 0                 ; wait for CLK rising edge (host drives CLK, pin+0)
+    in pins, 1                   ; sample DATA (pin+1) into ISR
+    wait 0 pin 0                 ; wait for CLK to fall (complete one clock cycle)
+    jmp x-- rx_loop              ; repeat for remaining bits
+
+    ; Brief DIR=0 acknowledge pulse
+    set pins, 0b000              ; DIR=0, DATA=0 (acknowledge, pin+2=0, pin+1=0)
+    nop
+    set pins, 0b100              ; DIR=1 (release)
+
+    push noblock                 ; push received byte to RX FIFO
+    irq set 0                    ; signal CPU: byte received
+
+; SM halts here; CPU re-enables for next byte
+
+; ---- TX state machine -------------------------------------------------------
+
+.program commo_tx
+.side_set 1                ; side-set drives CLK (pin+0)
+
+; CPU must set DIR=1 (we drive) and DATA direction as output before enabling this SM.
+; TX FIFO: byte written by CPU, autopulled (8 bits, shift right = LSB first)
+
+    pull ifempty       side 0    ; get byte from FIFO; CLK=0
+    set x, 7           side 0    ; 8 bits
+
+tx_loop:
+    out pins, 1        side 0    ; CLK=0, put LSB onto DATA (pin+1)
+    nop                side 1    ; CLK=1 — host samples DATA here
+    jmp x-- tx_loop    side 0    ; CLK=0, next bit
+
+    ; Release: DATA=1, then ensure CLK=0, DIR stays high (set by CPU)
+    set pins, 0b110    side 0    ; DATA=1 (pin+1=1), DIR=1 (pin+2=1), CLK=0 (side)
+    irq set 1          side 0    ; signal CPU: byte transmitted
+
+; SM halts; CPU writes next byte or disables SM
+
+% c-sdk {
+#include "hardware/clocks.h"
+
+/**
+ * @brief Initialise the COMMO RX and TX state machines.
+ *
+ * @param pio        PIO instance
+ * @param sm_rx      SM index for receive
+ * @param sm_tx      SM index for transmit
+ * @param offset_rx  Program offset for commo_rx
+ * @param offset_tx  Program offset for commo_tx
+ * @param pin_clk    GPIO for CLK (DATA=pin+1, DIR=pin+2)
+ * @param freq_hz    TX bit clock in Hz (e.g. 100000 for 100 kHz)
+ *                   RX clock is host-driven; this only affects TX SM divider.
+ */
+static inline void commo_program_init(PIO pio,
+                                       uint sm_rx, uint sm_tx,
+                                       uint offset_rx, uint offset_tx,
+                                       uint pin_clk, uint freq_hz)
+{
+    /* Claim and configure pins */
+    pio_gpio_init(pio, pin_clk);        /* CLK */
+    pio_gpio_init(pio, pin_clk + 1);    /* DATA */
+    pio_gpio_init(pio, pin_clk + 2);    /* DIR */
+
+    /* CLK: input for RX, output for TX.
+     * DATA: input for RX, output for TX.
+     * DIR: always output. */
+    /* Start in RX mode: CLK=in, DATA=in, DIR=out=1 */
+    gpio_set_dir(pin_clk,     GPIO_IN);
+    gpio_pull_up(pin_clk);
+    gpio_set_dir(pin_clk + 1, GPIO_IN);
+    gpio_pull_up(pin_clk + 1);
+    gpio_set_dir(pin_clk + 2, GPIO_OUT);
+    gpio_put(pin_clk + 2, 1);   /* DIR=1: we are listening */
+
+    float div_tx = (float)clock_get_hz(clk_sys) / (float)(freq_hz * 2);
+
+    /* ---- RX SM ---- */
+    {
+        pio_sm_config c = commo_rx_program_get_default_config(offset_rx);
+        sm_config_set_in_pins(&c, pin_clk);          /* in base = CLK; DATA = offset+1 */
+        sm_config_set_set_pins(&c, pin_clk + 1, 2);  /* set covers DATA + DIR */
+        sm_config_set_in_shift(&c, true, true, 8);   /* shift right LSB-first, autopush 8 */
+        /* RX SM runs at max speed (host-driven CLK via wait) */
+        sm_config_set_clkdiv(&c, 1.0f);
+        pio_sm_init(pio, sm_rx, offset_rx, &c);
+        /* RX SM enabled on-demand when start bit detected */
+    }
+
+    /* ---- TX SM ---- */
+    {
+        pio_sm_config c = commo_tx_program_get_default_config(offset_tx);
+        sm_config_set_sideset_pins(&c, pin_clk);
+        sm_config_set_out_pins(&c, pin_clk + 1, 1);  /* DATA */
+        sm_config_set_set_pins(&c, pin_clk + 1, 2);  /* DATA + DIR */
+        sm_config_set_out_shift(&c, true, true, 8);  /* shift right LSB-first, autopull 8 */
+        sm_config_set_clkdiv(&c, div_tx);
+        pio_sm_init(pio, sm_tx, offset_tx, &c);
+        /* TX SM enabled on-demand when transmitting */
+    }
+}
+
+/**
+ * @brief Prepare for COMMO receive and enable the RX state machine.
+ */
+static inline void commo_rx_enable(PIO pio, uint sm_rx, uint pin_clk)
+{
+    gpio_set_dir(pin_clk,     GPIO_IN);
+    gpio_set_dir(pin_clk + 1, GPIO_IN);
+    gpio_put(pin_clk + 2, 1);   /* DIR=1 */
+    pio_sm_clear_fifos(pio, sm_rx);
+    pio_sm_restart(pio, sm_rx);
+    pio_sm_set_enabled(pio, sm_rx, true);
+}
+
+/**
+ * @brief Prepare for COMMO transmit, write byte to TX FIFO.
+ */
+static inline void commo_tx_send(PIO pio, uint sm_rx, uint sm_tx,
+                                  uint pin_clk, uint8_t data)
+{
+    /* Stop RX, switch pins to output */
+    pio_sm_set_enabled(pio, sm_rx, false);
+    gpio_put(pin_clk + 2, 1);   /* DIR=1: we transmit */
+    gpio_set_dir(pin_clk,     GPIO_OUT);
+    gpio_set_dir(pin_clk + 1, GPIO_OUT);
+    pio_sm_set_consecutive_pindirs(pio, sm_tx, pin_clk, 2, true);
+
+    pio_sm_clear_fifos(pio, sm_tx);
+    pio_sm_restart(pio, sm_tx);
+    pio_sm_set_enabled(pio, sm_tx, true);
+    pio_sm_put_blocking(pio, sm_tx, (uint32_t)data);
+}
+%}

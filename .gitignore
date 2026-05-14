@@ -1,0 +1,26 @@
+# Build outputs
+*.bin
+*.elf
+*.elf.map
+*.uf2
+*.hex
+*.dis
+
+# CMake build system
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+build/
+
+# pioasm-generated PIO headers (regenerated at build time)
+*.pio.h
+
+# Large logic-analyser capture CSVs (multi-GB, not tracked in git)
+tests/cd32_logic_replay_bundle/*.csv
+
+# Reference documentation and schematics (large binaries, not tracked in git)
+docs/
+
+# Logic analyser application
+*.AppImage

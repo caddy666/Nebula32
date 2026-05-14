@@ -1,0 +1,70 @@
+; =============================================================================
+; subcode_encoder.pio — CD Subcode P/Q channel serialiser
+; =============================================================================
+;
+; The CD subcode consists of 8 channels (P, Q, R, S, T, U, V, W).
+; Each sector carries 98 subcode frames; each frame is 24 bits of EFM-modulated
+; data but we only care about the 8 decoded bits per frame.
+;
+; On a real CXD2545Q the subcode is recovered from the disc stream.
+; In our emulator, Core 0 builds the 12-byte Q-channel block for each sector
+; and pushes it into this PIO's TX FIFO so that the subcode is serialised out
+; on a GPIO pin at exactly the right timing relative to sectors.
+;
+; The CD32 BIOS reads Q-channel data via the CXD2545Q's register interface
+; (not via the raw subcode pin), so this PIO program is mainly for future
+; expansion (external subcode connectors, CD audio sync) and to keep timing
+; accurate.
+;
+; Subcode bit rate:
+;   Each sector = 98 frames × 3 EFM words/frame = 588 channel bits/sector
+;   At 1x speed: 75 sectors/sec × 588 bits/sector = 44,100 channel bits/sec
+;   Wait time between subcode bits ≈ 1 / 44100 ≈ 22.7 µs
+;   At 150 MHz PIO clock: 150e6 / 44100 ≈ 3401 cycles per bit
+; =============================================================================
+
+.program subcode_encoder
+.define SUBCODE_PIN 24   ; GPIO 24: serialised subcode output (optional)
+
+; Clock divider is set in C to achieve 44100 bits/second bit rate.
+; With clkdiv = 3401, each PIO cycle = 1 subcode bit period.
+
+.wrap_target
+    pull block                  ; wait for word from TX FIFO
+    set x, 31                   ; 32 bits (loop 32 times)
+bit_loop:
+    out pins, 1   [30]          ; 31 cycles + 1 cycle jmp = 32 cycles per bit
+    jmp x-- bit_loop
+.wrap
+
+% c-sdk {
+#include "hardware/clocks.h"
+
+// Configure subcode encoder SM.
+// target_bitrate_hz: typically 44100 for 1x, 88200 for 2x
+static inline void subcode_encoder_program_init(PIO pio, uint sm,
+                                                 uint offset,
+                                                 uint subcode_pin,
+                                                 uint32_t target_bitrate_hz) {
+    pio_sm_config cfg = subcode_encoder_program_get_default_config(offset);
+
+    // Output pin = subcode_pin
+    sm_config_set_out_pins(&cfg, subcode_pin, 1);
+    pio_gpio_init(pio, subcode_pin);
+    gpio_set_dir(subcode_pin, GPIO_OUT);
+    gpio_put(subcode_pin, 0);  // idle low
+
+    // Clock divider: each 'out pins, 1 [31]' takes 32 cycles.
+    // So bit_period_cycles = sys_clk / target_bitrate_hz
+    // and clkdiv = bit_period_cycles / 32
+    float sys_clk_hz = (float)clock_get_hz(clk_sys);
+    float clkdiv = sys_clk_hz / ((float)target_bitrate_hz * 32.0f);
+    sm_config_set_clkdiv(&cfg, clkdiv);
+
+    // OSR: shift left, autopull disabled
+    sm_config_set_out_shift(&cfg, false, false, 32);
+
+    pio_sm_init(pio, sm, offset, &cfg);
+    pio_sm_set_enabled(pio, sm, true);
+}
+%}

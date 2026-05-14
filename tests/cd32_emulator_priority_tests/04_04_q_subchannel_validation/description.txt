@@ -1,0 +1,11 @@
+Purpose:
+Validate Q-subchannel timing and addressing.
+
+Why it matters:
+Some CD32 titles depend on correct subcode behavior.
+
+Validate:
+- Track numbers
+- MSF conversion
+- CRC generation
+- Track transitions

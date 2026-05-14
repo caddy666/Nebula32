@@ -1,0 +1,113 @@
+; =============================================================================
+; cxd2500_tx.pio
+; CXD2500BQ serial transmitter
+;
+; Hardware: Sony CXD2500BQ CD signal processor (3-wire control bus)
+; Pins (consecutive, base = PIN_CXD_CLK):
+;   pin+0  = UCL  (clock)
+;   pin+1  = UDAT (data)
+;   pin+2  = ULAT (latch strobe)
+;
+; Protocol (from original firmware):
+;   1. Drive UDAT=0
+;   2. Send 3 dummy clock pulses (UCL 0→1, three times)
+;   3. Shift out 8 bits of data, LSB first, on falling edge of UCL
+;   4. Pulse ULAT low then high to latch
+;   5. Release: UDAT=1
+;
+; The CPU writes a 32-bit word to the TX FIFO.  The state machine
+; autopulls 8 bits (shift right, LSB first) from OSR.
+;
+; Clock divider: set at runtime to achieve the desired bit rate.
+; The original firmware toggled GPIO directly in a tight loop, so
+; any "slow" PIO clock (e.g. 1 MHz) is more than adequate.
+;
+; FIFO: TX only (autopull, threshold = 8 bits)
+; =============================================================================
+
+.program cxd2500_tx
+.side_set 1                ; side-set drives UCL (pin+0)
+
+; On entry: TX FIFO contains the byte to send (right-justified, 8 bits)
+
+.wrap_target
+    ; --- Step 1: UDAT = 0 (data pin = pin+1) ---
+    set pins, 0b00     side 0    ; UDAT=0, ULAT=0, UCL=0 via set+side
+
+    ; --- Step 2: 3 dummy clock pulses ---
+    set x, 2           side 0
+dummy_loop:
+    nop                side 1    ; UCL high
+    jmp x-- dummy_loop side 0    ; UCL low, decrement x
+
+    ; --- Step 3: 8 data bits, LSB first ---
+    ; Autopull grabs 8 bits from FIFO into OSR
+    pull ifempty       side 0    ; pull byte (blocks if FIFO empty)
+    set x, 7           side 0
+data_loop:
+    out pins, 1        side 0    ; clock low, shift 1 bit to UDAT (pin+1)
+    nop                side 1    ; clock high — data sampled by CXD2500
+    jmp x-- data_loop  side 0    ; clock low, next bit
+
+    ; --- Step 4: ULAT pulse (pin+2) ---
+    set pins, 0b100    side 0    ; ULAT=1 (strobe high) — using set on pins[2:0]
+    set pins, 0b000    side 0    ; ULAT=0 (latch)
+
+    ; --- Step 5: Release bus (UDAT=1) ---
+    set pins, 0b010    side 0    ; UDAT=1, ULAT=0, UCL=0
+.wrap
+
+% c-sdk {
+#include "hardware/clocks.h"
+
+/**
+ * @brief Initialise the CXD2500BQ TX state machine.
+ *
+ * @param pio        PIO instance (pio0 or pio1)
+ * @param sm         State machine index (0-3)
+ * @param offset     Program offset (from pio_add_program)
+ * @param pin_clk    GPIO for UCL (clock)   — pin_data = pin_clk+1
+ *                                           — pin_lat  = pin_clk+2
+ * @param freq_hz    Bit clock frequency in Hz (e.g. 500000 for 500 kHz)
+ */
+static inline void cxd2500_tx_program_init(PIO pio, uint sm, uint offset,
+                                            uint pin_clk, uint freq_hz)
+{
+    /* Claim pins */
+    pio_gpio_init(pio, pin_clk);        /* UCL  */
+    pio_gpio_init(pio, pin_clk + 1);    /* UDAT */
+    pio_gpio_init(pio, pin_clk + 2);    /* ULAT */
+
+    /* All three pins are outputs */
+    pio_sm_set_consecutive_pindirs(pio, sm, pin_clk, 3, true);
+
+    pio_sm_config c = cxd2500_tx_program_get_default_config(offset);
+
+    /* side-set: UCL on pin_clk */
+    sm_config_set_sideset_pins(&c, pin_clk);
+
+    /* set/out: UDAT on pin_clk+1, ULAT on pin_clk+2
+     * We use set with base pin_clk+1 for data & latch together */
+    sm_config_set_out_pins(&c, pin_clk + 1, 1);   /* UDAT — 1 bit out */
+    sm_config_set_set_pins(&c, pin_clk + 1, 2);   /* UDAT + ULAT — 2 set pins */
+
+    /* Shift OSR right, autopull at 8 bits */
+    sm_config_set_out_shift(&c, true, true, 8);
+
+    /* Clock divider */
+    float div = (float)clock_get_hz(clk_sys) / (float)(freq_hz * 2);
+    sm_config_set_clkdiv(&c, div);
+
+    pio_sm_init(pio, sm, offset, &c);
+    pio_sm_set_enabled(pio, sm, true);
+}
+
+/**
+ * @brief Send one byte to the CXD2500BQ via PIO (blocking).
+ */
+static inline void cxd2500_pio_write(PIO pio, uint sm, uint8_t data)
+{
+    /* Write to TX FIFO; PIO autopull handles the shift */
+    pio_sm_put_blocking(pio, sm, (uint32_t)data);
+}
+%}

@@ -1,0 +1,106 @@
+; =============================================================================
+; da_output.pio — CD DA serial output to Akiko + LC78835M
+; =============================================================================
+;
+; Outputs the CD digital audio / sector data stream on the 26-pin connector
+; DA lines. Akiko (U5) and the LC78835M DAC (U31) both read these lines.
+;
+; PIN MAPPING (matches 26-pin connector):
+;   base+0 = GPIO 0 = DA_DATA    (connector pin 9)
+;   base+1 = GPIO 1 = DA_BCLK   (connector pin 11)  ← side-set
+;   base+2 = GPIO 2 = DA_LRCLK  (connector pin 8)   ← side-set
+;
+; SIGNAL FORMAT — 24-bit I2S (Philips I2S, MSB first):
+;   BCLK   = 2.1168 MHz at 1× speed (measured: 2.12 MHz)
+;   LRCLK  = 44.1 kHz  (= BCLK / 48, i.e. 24 BCLK cycles per channel)
+;   DATA   transitions on BCLK falling edge, sampled on BCLK rising edge
+;   LRCLK  high = left channel, low = right channel
+;
+; WORD FORMAT in TX FIFO (32-bit, one word per channel):
+;   bits [31:16] = 16-bit PCM sample (MSB at bit 31)
+;   bits [15:0]  = zero padding (lower 8 bits of 24-bit I2S slot + discard byte)
+;
+; DMA feeds two consecutive 32-bit words per stereo pair:
+;   Word 0: left  sample in [31:16], zeros in [15:0]
+;   Word 1: right sample in [31:16], zeros in [15:0]
+;
+; The PIO outputs 24 bits MSB first per channel (bits [31:8] of each word).
+; Autopull (threshold=24) discards the remaining [7:0] of each DMA word
+; when the next pull fires.
+;
+; TIMING — verified against 100M-row logic-analyzer capture (digital.csv):
+;   sys_clk  = 135,475,200 Hz (= 16,934,400 × 8 — set in main.c)
+;   clkdiv   = 32  → SM clock = 4,234,225 Hz → BCLK = 2,117,112 Hz (1×)
+;   clkdiv   = 16  → SM clock = 8,468,450 Hz → BCLK = 4,234,225 Hz (2×)
+;   SM cycles per channel: set(1) + loop×23(46) + final_out(1) = 48 SM cycles
+;   48 SM cycles × 236 ns = 11,328 ns ≈ measured LRCLK half-period (11,339 ns) ✓
+;   96 SM cycles per stereo pair → LRCLK = 4,234,225/96 = 44,106 Hz ≈ 44.1 kHz ✓
+;
+; PIO RESOURCE:
+;   Requires PIO0 SM0.  Loaded by da_output_init() in da_output.c.
+; =============================================================================
+
+.program da_output
+.side_set 2
+; side-set bit 1 = LRCLK (GPIO base+2)
+; side-set bit 0 = BCLK  (GPIO base+1)
+
+; Notation: side 0b<LRCLK><BCLK>
+;   0b10 = LRCLK high, BCLK low   → left channel, data settling
+;   0b11 = LRCLK high, BCLK high  → left channel, data latched
+;   0b00 = LRCLK low,  BCLK low   → right channel, data settling
+;   0b01 = LRCLK low,  BCLK high  → right channel, data latched
+
+; Left channel — 48 SM cycles total for 24 bits:
+;   set x,22 = 1 cycle (BCLK low, no data bit — also latches last right bit
+;              from the previous wrap via the LRCLK-high transition)
+;   loop × 23 = 46 cycles (23 data bits, each 2 SM cycles: settle + latch)
+;   final out  = 1 cycle  (24th bit, LRCLK drops to signal right channel)
+
+.wrap_target
+    set x, 22          side 0b10   ; arm left counter; LRCLK high, BCLK low
+left_loop:
+    out pins, 1        side 0b10   ; data bit settling (BCLK low)
+    jmp x-- left_loop  side 0b11   ; data bit latched  (BCLK high), decrement
+    out pins, 1        side 0b00   ; 24th left bit; LRCLK falls — right channel starts
+
+    set x, 22          side 0b01   ; arm right counter; BCLK high latches left24
+right_loop:
+    out pins, 1        side 0b00   ; data bit settling (BCLK low)
+    jmp x-- right_loop side 0b01   ; data bit latched  (BCLK high), decrement
+    out pins, 1        side 0b10   ; 24th right bit; LRCLK rises — left channel next
+.wrap
+; .wrap → set x,22 side 0b10: BCLK goes low, latching the previous right24.
+
+% c-sdk {
+#include "hardware/clocks.h"
+#include "hardware/gpio.h"
+
+// sys_clk must be set to 135,475,200 Hz (= 16,934,400 × 8) before calling.
+// Autopull threshold = 24: the PIO outputs 24 bits per DMA word (bits [31:8])
+// and the remaining [7:0] are silently discarded when the next autopull fires.
+static inline void da_output_program_init(PIO pio, uint sm, uint offset,
+                                          uint data_pin, bool double_speed) {
+    // data_pin   = GPIO 0 (DA_DATA)
+    // data_pin+1 = GPIO 1 (DA_BCLK)
+    // data_pin+2 = GPIO 2 (DA_LRCLK)
+    pio_gpio_init(pio, data_pin);
+    pio_gpio_init(pio, data_pin + 1);
+    pio_gpio_init(pio, data_pin + 2);
+    pio_sm_set_consecutive_pindirs(pio, sm, data_pin, 3, true);
+
+    pio_sm_config cfg = da_output_program_get_default_config(offset);
+
+    sm_config_set_out_pins(&cfg, data_pin, 1);
+    sm_config_set_sideset_pins(&cfg, data_pin + 1);
+
+    // MSB first, autopull after 24 bits (bits [31:8] used, [7:0] discarded)
+    sm_config_set_out_shift(&cfg, false, true, 24);
+
+    // clkdiv = 32 → BCLK = 135,475,200 / (32 × 2) = 2,117,112 Hz (1× CD)
+    // clkdiv = 16 → BCLK = 4,234,225 Hz (2× CD)
+    sm_config_set_clkdiv(&cfg, double_speed ? 16.0f : 32.0f);
+
+    pio_sm_init(pio, sm, offset, &cfg);
+}
+%}

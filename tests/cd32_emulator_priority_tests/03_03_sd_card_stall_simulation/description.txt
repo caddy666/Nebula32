@@ -1,0 +1,13 @@
+Purpose:
+Simulate real SD card latency spikes.
+
+Why it matters:
+SD cards periodically stall due to wear leveling
+and erase block management.
+
+Test:
+Inject random delays and ensure playback survives.
+
+Pass Criteria:
+- No buffer starvation
+- No missed sectors

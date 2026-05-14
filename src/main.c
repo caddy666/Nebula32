@@ -1,0 +1,505 @@
+// =============================================================================
+// main.c — CD32 Optical Drive Emulator — Entry Point
+//          Raspberry Pi Pico 2 (RP2350)
+// =============================================================================
+//
+// CORE ASSIGNMENT:
+//   Core 0 — COMMO command polling, periodic state updates, USB CDC console,
+//             web server, rotary encoder UI, display, logger flush
+//   Core 1 — Sector prefetch loop: SD card → sector_cache ring buffer
+//
+// BOOT SEQUENCE:
+//   1. Clock RP2350 to 135,475,200 Hz (= 16.9344 MHz × 8 — exact DA timing)
+//   2. Stdio init (USB CDC)
+//   3. Load persistent config from flash
+//   4. Mount SD card via 4-bit SDIO; scan disc images
+//   5. Initialise logger (reads cd32_ode.cfg, opens cd32_cd.log)
+//   6. Open selected disc image; initialise sector_cache
+//   7. Initialise DA output PIO (GPIO 0-2) — starts clocking I2S to Akiko
+//   8. Initialise subcode encoder PIO (GPIO 5-8)
+//   9. Initialise I2C0 (MCP23017 rotary encoder, GPIO 28-29)
+//  10. Initialise ST7789 display (SPI1, GPIO 13/24/26/27)
+//  11. Initialise COMMO bus bridge (PIO1 SM0/SM1, GPIO 15-17)
+//  12. Launch Core 1 (sector prefetch)
+//  13. Core 0 enters main polling loop
+//
+// DA SIGNAL PATH:
+//   SD card → disc_read_sector() → sector_cache ring buffer (Core 1 prefetch)
+//          → da_start_play() → DMA → PIO TX FIFO → DA_DATA/BCLK/LRCLK
+//          → Akiko (U5) + LC78835M DAC (U31)
+//
+// CLOCK:
+//   sys_clk = 135,475,200 Hz gives exact PIO clkdiv = 48 for 1× BCLK
+//   (1,411,200 Hz) and clkdiv = 24 for 2× BCLK (2,822,400 Hz).
+// =============================================================================
+
+#include "pico/stdlib.h"
+#include "pico/multicore.h"
+#include "hardware/gpio.h"
+#include "hardware/pio.h"
+#include "hardware/dma.h"
+#include "hardware/timer.h"
+#include "hardware/irq.h"
+#include "hardware/clocks.h"
+#include "hardware/vreg.h"
+#include "hardware/i2c.h"
+
+#include "cd_types.h"
+#include "da_output.h"
+#include "disc_image.h"
+#include "sector_cache.h"
+#include "sd_card_api.h"
+#include "subcode.h"
+#include "selftest.h"
+#include "config.h"
+#include "logger.h"
+#include "rotary.h"
+#include "ui.h"
+#include "webserver.h"
+#include "commo_bridge.h"
+#include "gpio_map.h"
+#include "timer.h"
+#include "display.h"
+#include "fft.h"
+#include "effects.h"
+#include "vis_audio.h"
+
+#include "da_output.pio.h"
+#include "subcode_encoder.pio.h"
+
+#include <stdio.h>
+#include <string.h>
+
+// =============================================================================
+// System clock
+// =============================================================================
+// 135,475,200 Hz = 16,934,400 × 8.
+// This gives PIO clkdiv = 48 → BCLK = 1,411,200 Hz (1× CD speed, exact).
+// The RP2350 can reach this frequency without overclocking — it is below the
+// default 150 MHz so no voltage bump is needed.
+#define TARGET_SYS_CLK_KHZ  135475
+
+// =============================================================================
+// Global state (extern'd by commo_bridge.c and webserver.c)
+// =============================================================================
+disc_image_t   g_disc;   // Currently open disc image
+sector_cache_t g_cache;  // Read-ahead sector ring buffer
+
+// Image list (extern'd by ui.c and webserver.c)
+#define MAX_IMAGES  32
+char     s_image_paths[MAX_IMAGES][MAX_PATH_LEN];
+uint32_t s_image_count    = 0;
+static uint32_t s_selected_image = 0;
+
+// Persistent configuration
+static ode_config_t g_config;
+
+// Visualiser state
+static uint8_t  s_vis_spectrum[NUM_BARS];
+static uint8_t  s_vis_peaks[NUM_BARS];
+static int16_t  s_vis_waveform[FFT_SIZE];
+static int16_t  s_vis_samples[FFT_SIZE];
+static EffectCtx s_vis_ctx;
+static bool     s_vis_active = false;   // true when cover art is replaced by vis
+
+// Subcode PIO assignment
+#if BUILD_WITH_COMMO
+static PIO  s_sub_pio    = pio0;   // COMMO on PIO1 — subcode on PIO0 SM1
+static uint s_sm_subcode = 1;
+#else
+static PIO  s_sub_pio    = pio1;   // Subcode on PIO1 SM0 (PIO0 SM0 = DA output)
+static uint s_sm_subcode = 0;
+#endif
+
+// ---------------------------------------------------------------------------
+// load_disc_image — switch to a different disc image
+// ---------------------------------------------------------------------------
+static bool load_disc_image(uint32_t index) {
+    if (index == UINT32_MAX) {
+        printf("[MAIN] Ejecting disc\n");
+        LOG_INFO_MSG("MAIN", "disc ejected");
+        da_stop();
+        disc_close(&g_disc);
+        sector_cache_flush(&g_cache);
+        display_clear();
+        ui_on_disc_loaded(UINT32_MAX);
+        webserver_notify_state_change();
+        return true;
+    }
+
+    if (index >= s_image_count) {
+        printf("[MAIN] load_disc_image: index %lu out of range\n",
+               (unsigned long)index);
+        return false;
+    }
+
+    printf("[MAIN] Loading: %s\n", s_image_paths[index]);
+    LOG_INFO_MSG("MAIN", "loading %lu: %s",
+                 (unsigned long)(index + 1), s_image_paths[index]);
+
+    da_stop();
+    disc_close(&g_disc);
+
+    if (!disc_open(&g_disc, s_image_paths[index])) {
+        printf("[MAIN] ERROR: Failed to open %s\n", s_image_paths[index]);
+        LOG_ERROR_MSG("Failed to open image %lu", (unsigned long)index);
+        ui_on_disc_error();
+        return false;
+    }
+
+    sector_cache_init(&g_cache, &g_disc);
+    s_selected_image = index;
+
+    g_config.last_image_index = (uint8_t)(index & 0xFF);
+    config_save(&g_config);
+
+    display_show_cover(s_image_paths[index]);
+    ui_on_disc_loaded(index);
+    webserver_set_loaded_index(index);
+    webserver_notify_state_change();
+
+    printf("[MAIN] Disc loaded: %d-%d tracks, %lu sectors\n",
+           g_disc.first_track, g_disc.last_track,
+           (unsigned long)g_disc.total_sectors);
+    LOG_INFO_MSG("MAIN", "disc loaded: tracks=%d-%d sectors=%lu",
+                 g_disc.first_track, g_disc.last_track,
+                 (unsigned long)g_disc.total_sectors);
+    return true;
+}
+
+// =============================================================================
+// Core 1 — sector prefetch loop
+// =============================================================================
+static void core1_main(void) {
+    printf("[CORE1] Sector prefetch loop started\n");
+    while (true) {
+        sector_cache_prefetch_tick(&g_cache);
+        tight_loop_contents();
+    }
+}
+
+// =============================================================================
+// Periodic timer callback (1 ms, Core 0)
+// =============================================================================
+static bool periodic_update_cb(struct repeating_timer *t) {
+    (void)t;
+    logger_flush_if_due();
+    return true;
+}
+
+// =============================================================================
+// USB console command handler
+// =============================================================================
+static void handle_console(void) {
+    int c = getchar_timeout_us(0);
+    if (c == PICO_ERROR_TIMEOUT || c == '\r' || c == '\n') return;
+
+    if (c >= '1' && c <= '9') {
+        uint32_t idx = (uint32_t)(c - '1');
+        if (idx < s_image_count) {
+            load_disc_image(idx);
+        } else {
+            printf("[MAIN] No image %lu (only %lu found)\n",
+                   idx + 1, (unsigned long)s_image_count);
+        }
+    }
+    else if (c == 'l' || c == 'L') {
+        printf("\n[MAIN] Disc images on SD card:\n");
+        for (uint32_t i = 0; i < s_image_count; i++) {
+            printf("  %lu: %s%s\n", (unsigned long)(i + 1), s_image_paths[i],
+                   (i == s_selected_image) ? "  <- current" : "");
+        }
+    }
+    else if (c == 's' || c == 'S') {
+        printf("\n[STATUS]\n");
+        printf("  DA speed      : %s\n", da_is_double_speed() ? "2x" : "1x");
+        printf("  DA playing    : %s\n", da_is_playing() ? "yes" : "no");
+        printf("  Disc tracks   : %d-%d  (%lu sectors)\n",
+               g_disc.first_track, g_disc.last_track,
+               (unsigned long)g_disc.total_sectors);
+        printf("  COMMO active  : %s\n",
+               commo_bridge_is_active() ? "yes" : "no");
+    }
+    else if (c == 't' || c == 'T') {
+        printf("\n[TOC] Track listing:\n");
+        for (int i = g_disc.first_track; i <= g_disc.last_track; i++) {
+            const track_t *trk = &g_disc.tracks[i - 1];
+            msf_t msf = lba_to_msf(trk->start_lba);
+            printf("  Track %02d: %-8s  %02X:%02X:%02X  len=%lu sectors\n",
+                   trk->number,
+                   trk->type == TRACK_TYPE_AUDIO ? "AUDIO" :
+                   trk->type == TRACK_TYPE_XA    ? "DATA/XA" : "DATA",
+                   msf.minute, msf.second, msf.frame,
+                   (unsigned long)trk->length_sectors);
+        }
+    }
+    else if (c == 'x' || c == 'X') {
+        bool now_double = !da_is_double_speed();
+        da_set_double_speed(now_double);
+        printf("[MAIN] DA speed: %s\n", now_double ? "2x" : "1x");
+    }
+    else if (c == 'r' || c == 'R') {
+        printf("[MAIN] Reset: flushing cache...\n");
+        da_stop();
+        sector_cache_flush(&g_cache);
+        sector_cache_seek(&g_cache, 0);
+        printf("[MAIN] Reset complete\n");
+    }
+    else if (c == 'g' || c == 'G') {
+        bool now_enabled = !logger_is_enabled();
+        logger_set_enabled(now_enabled);
+        printf("[MAIN] Logging: %s\n", now_enabled ? "ENABLED" : "DISABLED");
+    }
+    else if (c == 'f' || c == 'F') {
+        uint32_t written = logger_flush();
+        printf("[MAIN] Log flushed: %lu bytes\n", (unsigned long)written);
+    }
+    else if (c == 'v' || c == 'V') {
+        s_vis_ctx.mode = (uint8_t)((s_vis_ctx.mode + 1) % NUM_EFFECTS);
+        const char *names[] = { "Spectrum", "Scope", "Raster", "Combo", "Spaceballs" };
+        printf("[VIS] Effect: %s\n", names[s_vis_ctx.mode]);
+    }
+    else if (c == 'h' || c == 'H' || c == '?') {
+        printf("\nCD32 ODE Console Commands:\n");
+        printf("  1-9  — switch disc image\n");
+        printf("  L    — list disc images\n");
+        printf("  S    — show status\n");
+        printf("  T    — show disc TOC\n");
+        printf("  X    — toggle DA speed (1x / 2x)\n");
+        printf("  R    — reset (flush cache, seek to 0)\n");
+        printf("  G    — toggle SD logging on/off\n");
+        printf("  F    — force flush log buffer now\n");
+        printf("  V    — cycle visualiser effect (during CD-DA playback)\n");
+        printf("  H/?  — this help\n\n");
+    }
+}
+
+// =============================================================================
+// main()
+// =============================================================================
+int main(void) {
+    // ---- Set system clock to 135,475,200 Hz ----
+    // Exact multiple of the Sony 16.9344 MHz master clock × 8.
+    // Required for PIO clkdiv = 48 → BCLK = 1,411,200 Hz (1× CD speed).
+    if (!set_sys_clock_khz(TARGET_SYS_CLK_KHZ, true)) {
+        // If the exact target isn't reachable, try the nearest available.
+        // Timing will be slightly off but the PLL will get as close as possible.
+    }
+
+    stdio_init_all();
+    sleep_ms(2000);   // Wait for USB CDC enumeration
+
+    printf("\n");
+    printf("==================================================\n");
+    printf("  CD32 Optical Drive Emulator\n");
+    printf("  Raspberry Pi Pico 2 (RP2350)\n");
+    printf("  sys_clk = %lu Hz (target %d kHz)\n",
+           (unsigned long)clock_get_hz(clk_sys), TARGET_SYS_CLK_KHZ);
+    printf("==================================================\n\n");
+
+    // ---- Persistent config ----
+    bool config_valid = config_init(&g_config);
+    if (!config_valid) {
+        printf("[MAIN] First boot — using defaults\n");
+    }
+
+    // ---- SD card ----
+    printf("[MAIN] Mounting SD card (4-bit SDIO)...\n");
+    if (!sd_card_init_and_mount()) {
+        printf("[MAIN] FATAL: SD card mount failed\n");
+        while (true) tight_loop_contents();
+    }
+
+    s_image_count = sd_scan_images(s_image_paths, MAX_IMAGES);
+    if (s_image_count == 0) {
+        printf("[MAIN] No disc images found on SD card\n");
+        while (true) tight_loop_contents();
+    }
+
+    // ---- Logger ----
+    logger_init();
+    if (logger_is_enabled()) {
+        logger_write(LOG_INFO, "BOOT", "%lu image(s) found",
+                     (unsigned long)s_image_count);
+    }
+
+    // ---- Open starting disc image ----
+    s_selected_image = g_config.last_image_index;
+    if (s_selected_image >= s_image_count) s_selected_image = 0;
+
+    printf("[MAIN] Opening: %s\n", s_image_paths[s_selected_image]);
+    if (!disc_open(&g_disc, s_image_paths[s_selected_image])) {
+        printf("[MAIN] FATAL: Cannot open disc image\n");
+        while (true) tight_loop_contents();
+    }
+    sector_cache_init(&g_cache, &g_disc);
+
+    // ---- FFT (visualiser) ----
+    fft_init();
+    s_vis_ctx.spectrum = s_vis_spectrum;
+    s_vis_ctx.peaks    = s_vis_peaks;
+    s_vis_ctx.waveform = s_vis_waveform;
+    s_vis_ctx.frame    = 0;
+    s_vis_ctx.mode     = 0;
+
+    // ---- DA output PIO (PIO0 SM0, GPIO 0/1/2) ----
+    // Starts clocking the I2S bit stream immediately at 1× speed.
+    // The PIO TX FIFO will stall (pull block) until DMA starts feeding it.
+    bool start_double_speed = (g_config.speed_mode == 2);
+    da_output_init(start_double_speed);
+
+    // ---- Subcode encoder PIO ----
+    uint sub_off = pio_add_program(s_sub_pio, &subcode_encoder_program);
+    // Subcode bit rate: 75 sectors/s × 98 subcode frames × 24 bits/frame = 176,400 bps
+    subcode_encoder_program_init(s_sub_pio, s_sm_subcode,
+                                 sub_off, SUB_DATA_PIN, 176400);
+    printf("[PIO] subcode_encoder on PIO%d SM%d offset=%d\n",
+           (s_sub_pio == pio0) ? 0 : 1, s_sm_subcode, sub_off);
+
+    // ---- M17SINE — slave clk_peri to Sony 16.9344 MHz on GPIO 9 (GPIN0) ----
+    // GPIO 9 carries the CD32 mainboard's 16.9344 MHz master reference (GPIN0).
+    // We slave clk_peri to it so that UART/SPI/I2C are referenced to the same
+    // crystal as Akiko — stable even if the Pico's own XOSC drifts slightly.
+    //
+    // GPIO_FUNC_GPCK routes the pin directly into the RP2350 clock subsystem —
+    // no PIO is involved and no debouncing is applied (nor should it be: M17SINE
+    // is a continuous analogue sine wave, not a switch signal).
+    //
+    // PCB NOTE: the sine from the CD32 connector must swing cleanly past the
+    // RP2350 GPIO input thresholds (~0.8 V / 2.0 V at 3.3 V supply).  A slow or
+    // low-amplitude sine that lingers near the threshold will cause multiple edge
+    // transitions per cycle and corrupt clk_peri.  The board design should include
+    // a series resistor (e.g. 33 Ω) and ideally a Schmitt-trigger buffer between
+    // the 26-pin connector and GPIO 9 to condition the signal before it enters
+    // the GPCK input.
+    //
+    // NOTE: the DA output PIO (clk_sys = 135,475,200 Hz = 16.9344 MHz × 8) is
+    // NOT phase-locked to M17SINE.  It free-runs from the Pico's XOSC at the
+    // same nominal rate.  For short reads this is fine.  For sustained audio
+    // playback there is a small accumulated phase error (~PPM of both crystals).
+    // A future improvement would trim the PIO clkdiv in a software loop that
+    // counts M17SINE edges via the frequency counter or GPIO interrupt, keeping
+    // the DA bit stream in phase with the real 16.9344 MHz reference.
+    gpio_init(M17SINE_PIN);
+    gpio_set_dir(M17SINE_PIN, GPIO_IN);
+    gpio_set_function(M17SINE_PIN, GPIO_FUNC_GPCK);
+    clock_configure(clk_peri, 0,
+                    CLOCKS_CLK_PERI_CTRL_AUXSRC_VALUE_CLKSRC_GPIN0,
+                    16934400, 16934400);
+    printf("[MAIN] clk_peri slaved to M17SINE on GPIO%d (16.9344 MHz)\n",
+           M17SINE_PIN);
+
+    // ---- Self-test prompt ----
+    printf("[MAIN] Press '#' within 3 seconds for self-test mode...\n");
+    absolute_time_t st_deadline = make_timeout_time_us(3000000);
+    while (absolute_time_diff_us(get_absolute_time(), st_deadline) > 0) {
+        int c = getchar_timeout_us(100000);
+        if (c == '#') {
+            selftest_run();
+            printf("[MAIN] Self-test complete.  Continuing boot...\n\n");
+            break;
+        }
+    }
+
+    // ---- I2C0 for MCP23017 (SDA=GPIO28, SCL=GPIO29 @ 400 kHz) ----
+    i2c_init(i2c0, 400 * 1000);
+    gpio_set_function(MCP23017_SDA_PIN, GPIO_FUNC_I2C);
+    gpio_set_function(MCP23017_SCL_PIN, GPIO_FUNC_I2C);
+    gpio_pull_up(MCP23017_SDA_PIN);
+    gpio_pull_up(MCP23017_SCL_PIN);
+    printf("[MAIN] I2C0 ready (GPIO%d/GPIO%d)\n",
+           MCP23017_SDA_PIN, MCP23017_SCL_PIN);
+
+    // ---- ST7789 240×240 display (SPI1) ----
+    display_init();
+
+    // ---- Rotary encoder (MCP23017) ----
+    rotary_init();
+
+    // ---- Disc selector UI ----
+    ui_init(s_image_count, s_selected_image);
+
+    // ---- DOOR / SCOR GPIOs + 8 ms software timer ----
+    gpio_init(PIN_DOOR);
+    gpio_set_dir(PIN_DOOR, GPIO_IN);
+    gpio_pull_up(PIN_DOOR);
+    gpio_init(PIN_SCOR);
+    gpio_set_dir(PIN_SCOR, GPIO_IN);
+    gpio_pull_up(PIN_SCOR);
+    timer_init();
+
+    // ---- COMMO bus bridge ----
+    commo_bridge_init();
+
+    // ---- HTTP web server (Pico 2 W) ----
+    webserver_init();
+    webserver_set_loaded_index(s_selected_image);
+    if (webserver_is_running()) {
+        logger_write(LOG_INFO, "WEB ", "http://%s/", webserver_get_ip());
+    }
+
+    // ---- Cover art for initial disc ----
+    display_show_cover(s_image_paths[s_selected_image]);
+
+    // ---- Launch Core 1 (sector prefetch) ----
+    multicore_launch_core1(core1_main);
+    printf("[MAIN] Core 1 started (sector prefetch)\n");
+
+    // ---- 1 ms repeating timer for logger flush ----
+    struct repeating_timer update_timer;
+    add_repeating_timer_us(-1000, periodic_update_cb, NULL, &update_timer);
+
+    printf("[MAIN] System ready — CD32 can now access the drive\n");
+    printf("[MAIN] DA: %s speed  |  BCLK: %lu Hz\n",
+           da_is_double_speed() ? "2x" : "1x",
+           (unsigned long)(TARGET_SYS_CLK_KHZ * 1000ul
+                           / (da_is_double_speed() ? 24u : 48u) / 2u));
+    printf("[MAIN] Type H for console help\n\n");
+
+    // ---- Core 0 main loop ----
+    while (true) {
+        handle_console();
+
+        if (ui_tick()) {
+            uint32_t sel = ui_get_selected_index();
+            load_disc_image(sel);
+            s_vis_active = false;
+        }
+
+        commo_bridge_poll();
+        webserver_poll();
+
+        if (webserver_has_load_request()) {
+            uint32_t web_index = webserver_get_load_index();
+            load_disc_image(web_index);
+            ui_init(s_image_count,
+                    web_index < s_image_count ? web_index : 0);
+            s_vis_active = false;
+        }
+
+        // ---- Visualiser tick ----
+        // Detect CD-DA playback and switch display from cover art to effects.
+        if (da_is_playing()) {
+            uint32_t cur_lba = da_get_current_lba();
+            const track_t *trk = disc_find_track(&g_disc, cur_lba);
+            bool is_audio = trk && (trk->type == TRACK_TYPE_AUDIO);
+            da_set_audio_mode(is_audio);
+
+            if (is_audio && vis_audio_get_samples(s_vis_samples)) {
+                fft_process(s_vis_samples, s_vis_spectrum, s_vis_peaks, s_vis_waveform);
+                effects_render(&s_vis_ctx);
+                s_vis_ctx.frame++;
+                s_vis_active = true;
+            }
+        } else if (s_vis_active) {
+            // Playback stopped — restore cover art
+            s_vis_active = false;
+            da_set_audio_mode(false);
+            display_show_cover(s_image_paths[s_selected_image]);
+        }
+
+        sleep_us(200);
+    }
+
+    return 0;
+}

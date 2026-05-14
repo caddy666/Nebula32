@@ -1,0 +1,11 @@
+Purpose:
+Ensure parser survives invalid packets.
+
+Why it matters:
+Hardware glitches or malformed frames must never
+crash the emulator.
+
+Pass Criteria:
+- No crashes
+- No buffer overruns
+- Deterministic failure handling

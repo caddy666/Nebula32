@@ -1,0 +1,22 @@
+Purpose:
+Detect late sector delivery during streaming/FMVs.
+
+Why it matters:
+FMV playback depends on sectors arriving every ~13.33ms.
+Even brief delays can cause audio/video desync or stutter.
+
+What to measure:
+- Sector cadence
+- Deadline misses
+- Jitter
+- Worst-case latency
+
+Pass Criteria:
+- Zero deadline misses during 30+ minutes playback
+- Jitter < 2ms
+- No burst delivery
+
+Failure Symptoms:
+- FMV stutter
+- Audio crackle
+- Random hangs
