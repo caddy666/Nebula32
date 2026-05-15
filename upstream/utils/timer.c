@@ -89,6 +89,7 @@ void timer_init(void)
  */
 void delay(void)
 {
+    if (!delay_byte) return;
     do {
         sleep_us(500);
     } while (--delay_byte);

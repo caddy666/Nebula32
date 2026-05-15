@@ -90,31 +90,32 @@ static uint32_t convert_time(const cd_time_t *t)
  * Integer square root (Newton's method, fixed-point)
  * ====================================================================== */
 
-static uint32_t isqrt(uint32_t x)
+static uint32_t isqrt(uint64_t x)
 {
     if (x == 0) return 0;
 
-    uint32_t res = 0;
-    uint32_t bit = 1u << 30;
+    uint64_t res = 0;
+    uint64_t bit = (uint64_t)1 << 62;
 
     while (bit > x)  bit >>= 2;
 
     while (bit) {
-        uint32_t tmp = res + bit;
+        uint64_t tmp = res + bit;
         res >>= 1;
         if (x >= tmp) { x -= tmp; res += bit; }
         bit >>= 2;
     }
-    return res;
+    return (uint32_t)res;
 }
 
 /* Track position estimate from absolute frame count (disc geometry). */
 static uint32_t tracks_calc(const cd_time_t *t)
 {
-    /* Constants derived from standard CD disc geometry. */
-    const uint32_t A = 0xBB3Du;
-    const uint32_t B = (0x671Fu >> 3u);
-    uint32_t T = convert_time(t);
+    /* Constants derived from standard CD disc geometry.
+     * A*T overflows uint32_t for T > 89 608 frames (~20 min); use uint64_t. */
+    const uint64_t A = 0xBB3Du;
+    const uint64_t B = (0x671Fu >> 3u);
+    uint64_t T = convert_time(t);
     return isqrt(A * T + B);
 }
 

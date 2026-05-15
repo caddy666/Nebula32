@@ -123,6 +123,10 @@ typedef union {
 /* Exported to shock.c as 'store' — must match the layout declared there */
 play_store_t store;
 
+/* ARM replacement for the 8051 param1-as-pointer trick: callers that need the
+ * subcode buffer address read this instead of reconstructing it from param1. */
+const void *play_subcode_result = NULL;
+
 /* shock.c reads this when shock_detector_on() is called */
 cd_time_t play_target_time;
 
@@ -498,7 +502,8 @@ static uint8_t monitor_subcodes(void)
     if (!play_phase1 && !play_phase0) {
         if ((play_status & 0x0Fu) == PAUSE_MODE) {
             if (req_subc_stored_subc()) {
-                player_interface.param1 = (uint8_t)(uintptr_t)&store.play_subcode;
+                play_subcode_result     = &store.play_subcode;
+                player_interface.param1 = 0x01u;   /* non-zero sentinel; pointer in play_subcode_result */
                 return PROCESS_READY;
             }
             player_error = ILLEGAL_PARAMETER;
@@ -539,8 +544,8 @@ static uint8_t monitor_subcodes(void)
             } else {
                 set_subcode_buffer();
                 if (req_subc_stored_subc()) {
-                    player_interface.param1 =
-                        (uint8_t)(uintptr_t)&store.play_subcode;
+                    play_subcode_result     = &store.play_subcode;
+                    player_interface.param1 = 0x01u;   /* sentinel; pointer in play_subcode_result */
                     return PROCESS_READY;
                 }
                 start_subcode_reading();
