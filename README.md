@@ -168,7 +168,7 @@ sudo apt install cmake gcc-arm-none-eabi build-essential
 cd cd32_ode
 mkdir build && cd build
 cmake .. -DPICO_PLATFORM=rp2350
-make -j4
+make -j8
 ```
 
 This produces `cd32_ode.uf2`.  Hold BOOTSEL on the Pico 2, connect USB, then drag the UF2 to the `RPI-RP2` drive.
@@ -432,7 +432,6 @@ Connect a serial terminal at 115200 baud to the Pico 2's USB port:
 - DuckStation CDROM.cpp — GPL-2.0, Connor McLaughlin — command protocol reference
 - fuseiso — GPL, Heikki Hannikainen — image format parsing reference
 - ECMA-130 (ISO/IEC 10149) — CD-ROM physical format specification
-- Phillipe Boulenguez, "Reverse Engineering the Amiga CD32 Boot Process"
 - no-OS-FatFS-SD-SDIO-SPI-RPi-Pico — MIT, Carl Kugler — SD card library
 
 ##
