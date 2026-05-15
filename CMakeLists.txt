@@ -284,5 +284,6 @@ target_compile_options(cd32_ode PRIVATE
     -Wextra
     -Wno-unused-parameter   # Several callbacks take unused context pointers
     -O2                     # Optimise for speed (important for Core 1 latency)
+    -fstack-usage           # Emit .su files — per-function stack depth for RP2350 SRAM auditing
 )
 

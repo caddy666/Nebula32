@@ -30,6 +30,7 @@
 #include "disc_image.h"
 #include "logger.h"      // SD card activity logging
 #include "pico/stdlib.h"
+#include "pico/assert.h"
 
 #include <string.h>
 #include <stdio.h>
@@ -38,6 +39,7 @@
 // sector_cache_init
 // ---------------------------------------------------------------------------
 void sector_cache_init(sector_cache_t *cache, disc_image_t *disc) {
+    hard_assert(cache != NULL, "sector_cache_init: cache is NULL");
     memset(cache, 0, sizeof(*cache));
     cache->disc           = disc;
     cache->next_fetch_lba = 0;
@@ -138,6 +140,7 @@ void sector_cache_release_before(sector_cache_t *cache, uint32_t current_lba) {
 // At 2× speed the sector period is 6.667 ms, so even a 0.5 ms read
 // comfortably keeps up.  With 8 slots we have ~53 ms of buffer time.
 void sector_cache_prefetch_tick(sector_cache_t *cache) {
+    hard_assert(cache != NULL, "sector_cache_prefetch_tick: cache is NULL");
     // ---- Find a free slot ----
     int free_slot = -1;
     for (int i = 0; i < SECTOR_BUFFER_COUNT; i++) {

@@ -30,6 +30,7 @@
 #include "hardware/clocks.h"
 #include <string.h>
 
+#include "pico/assert.h"
 #include "da_output.pio.h"
 
 // ---------------------------------------------------------------------------
@@ -145,6 +146,8 @@ void da_output_init(bool double_speed) {
 
     s_dma_ch  = dma_claim_unused_channel(true);
     s_dma_ch2 = dma_claim_unused_channel(true);
+    hard_assert(s_dma_ch  >= 0, "DA DMA ch0 unavailable");
+    hard_assert(s_dma_ch2 >= 0, "DA DMA ch1 unavailable");
 
     pio_sm_set_enabled(DA_PIO, DA_SM, true);
 

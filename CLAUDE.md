@@ -100,7 +100,7 @@ Data transitions on the **falling** BCLK edge; Akiko samples on the **rising** e
 | `upstream/utils/timer.c` | ✅ Correct | 8 ms software timer; delay() zero-entry guard |
 | `upstream/pio/commo.pio` | ✅ Correct | COMMO PIO |
 | `src/disc_image.c` | ✅ Correct | ISO/BIN/NRG/MDF parsers; CUE PREGAP+INDEX00 fix; NRG lead-out skip fix |
-| `src/sector_cache.c` | ✅ Correct | SD prefetch ring buffer + flush_gen race fix |
+| `src/sector_cache.c` | ✅ Correct | SD prefetch ring buffer + flush_gen race fix; hard_assert null-cache guard in prefetch_tick |
 | `src/subcode.c` | ✅ Correct | Q-channel generation |
 | `pio/subcode_encoder.pio` | ✅ Correct | SUB signal output on GPIO 5-8 |
 | `src/sd_card.c` | ✅ Correct | SDIO mount/scan |
@@ -111,7 +111,7 @@ Data transitions on the **falling** BCLK edge; Akiko samples on the **rising** e
 | `src/display.cpp` | ✅ Correct | ST7789 240×240 cover art + scanline API |
 | `src/ui.c` | ✅ Correct | UI event handler |
 | `src/webserver.c` | ✅ Correct | WiFi web interface |
-| `src/da_output.c` | ✅ Correct | DA DMA engine — 24-bit I2S expand, DRQ flag, FIFO drain on stop, M17SINE clkdiv trim |
+| `src/da_output.c` | ✅ Correct | DA DMA engine — 24-bit I2S expand, DRQ flag, FIFO drain on stop, M17SINE clkdiv trim; hard_assert on DMA ch claims |
 | `src/rotary_mcp.cpp` | ✅ Correct | MCP23017 encoder + logger toggle button (GPB0) |
 | `src/commo_bridge.c` | ✅ Correct | PLAY_TRACK_OPC BCD decode, TRAY_IN seek, audio mode set, DRQ packet |
 | `src/upstream_player_shim.c` | ✅ Correct | Linkage shim — provides player_interface globals and no-op player() for upstream cmd_hndl.c |
@@ -146,7 +146,8 @@ Real hardware SMs (CXD2500BQ/DSIC2/Q-channel) are only loaded when
 
 **Location:** `tests/host/`  
 **Run:** `make && ./cd32_tests -v`  
-**Result:** 355 tests, 0 failures
+**Result:** 355 tests, 0 failures  
+**Sanitizer:** `-fsanitize=undefined -fno-sanitize-recover=all` active on all C and C++ objects and the link step
 
 | Group | Tests | What it covers |
 |-------|-------|----------------|

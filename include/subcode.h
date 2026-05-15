@@ -48,6 +48,10 @@
 #define QCHANNEL_SIZE   12   // Bytes per Q-channel block
 #define SUBCODE_FRAMES  98   // Frames per sector (96 data + 2 sync)
 
+// PIO word packing (3 × 32-bit words) and CRC offset [10..11] depend on these.
+CD32_SASSERT(QCHANNEL_SIZE  == 12, "Q-channel is 12 bytes (Red Book 22.3.4)");
+CD32_SASSERT(SUBCODE_FRAMES == 98, "98 subcode frames per sector (96 data + 2 sync)");
+
 // Q-channel ADR values
 #define Q_ADR_POSITION  0x01   // Current position mode
 #define Q_ADR_MCN       0x02   // Media Catalog Number mode

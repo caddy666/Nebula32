@@ -21,6 +21,10 @@
 #define SECTOR_BUFFER_COUNT  8      // Ring buffer depth
 #define SECTOR_RAW_SIZE      2352   // Maximum raw sector bytes
 
+// Ping-pong DMA needs at least 2 slots; raw sector size is a Red Book constant.
+CD32_SASSERT(SECTOR_BUFFER_COUNT >= 2,   "ring buffer needs >=2 slots for ping-pong DMA");
+CD32_SASSERT(SECTOR_RAW_SIZE     == 2352,"raw sector must be 2352 bytes (Red Book)");
+
 // One slot in the ring buffer
 typedef struct {
     uint32_t  lba;                        // Which sector is stored here

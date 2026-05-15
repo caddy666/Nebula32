@@ -5,6 +5,14 @@
 #include <stdint.h>
 #include <stdbool.h>
 
+// CD32_SASSERT: compile-time assertion compatible with C11 and C++11+.
+// C11 has _Static_assert as a keyword; C++ has static_assert as a keyword.
+#ifdef __cplusplus
+#  define CD32_SASSERT(cond, msg) static_assert((cond), msg)
+#else
+#  define CD32_SASSERT(cond, msg) _Static_assert((cond), msg)
+#endif
+
 // ---------------------------------------------------------------------------
 // MSF (Minute:Second:Frame) address — BCD encoded, as used on Red Book CDs
 // ---------------------------------------------------------------------------
@@ -14,10 +22,17 @@ typedef struct {
     uint8_t frame;
 } msf_t;
 
+// msf_t is embedded verbatim in the Q-channel stream; must be exactly 3 bytes.
+CD32_SASSERT(sizeof(msf_t) == 3, "msf_t layout changed - Q-channel packing will break");
+
 // 75 sectors per second (Red Book)
 #define SECTORS_PER_SECOND  75
 #define SECTOR_RAW_BYTES    2352
 #define SECTOR_DATA_BYTES   2048
+
+// Red Book sector geometry is fixed by the standard.
+CD32_SASSERT(SECTOR_RAW_BYTES  == 2352, "SECTOR_RAW_BYTES must be 2352 (Red Book)");
+CD32_SASSERT(SECTOR_DATA_BYTES == 2048, "SECTOR_DATA_BYTES must be 2048 (Mode 1)");
 
 // ---------------------------------------------------------------------------
 // LBA ↔ MSF conversion (150-sector lead-in offset per Red Book)
