@@ -15,7 +15,7 @@
 //
 // JPEG LOOKUP:
 //   Given disc path  "/Superfrog.iso"
-//   Looks for cover  "0:/images/Superfrog.jpg"
+//   Looks for cover  "0:/covers/Superfrog.jpg"
 //   Also tries spaces→hyphens variant.
 
 #include <stdbool.h>
@@ -28,7 +28,7 @@ extern "C" {
 void display_init(void);
 
 // Decode and show cover art for the given disc image path.
-// Searches the SD card's /images/ directory for a matching JPEG.
+// Searches the SD card's /covers/ directory for a matching JPEG.
 // Falls back to a plain title card if no JPEG is found.
 void display_show_cover(const char *disc_image_path);
 

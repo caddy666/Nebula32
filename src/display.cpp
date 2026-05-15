@@ -288,8 +288,8 @@ static bool find_cover_jpeg(const char *disc_path, char *out, size_t out_len) {
     memcpy(name, base, name_len);
     name[name_len] = '\0';
 
-    // Try exact match: 0:/images/<name>.jpg
-    snprintf(out, out_len, "0:/images/%s.jpg", name);
+    // Try exact match: 0:/covers/<name>.jpg
+    snprintf(out, out_len, "0:/covers/%s.jpg", name);
     FILINFO fi;
     if (f_stat(out, &fi) == FR_OK) return true;
 
@@ -297,7 +297,7 @@ static bool find_cover_jpeg(const char *disc_path, char *out, size_t out_len) {
     char sanitised[128];
     sanitise_name(sanitised, name, sizeof(sanitised));
     if (strcmp(sanitised, name) != 0) {
-        snprintf(out, out_len, "0:/images/%s.jpg", sanitised);
+        snprintf(out, out_len, "0:/covers/%s.jpg", sanitised);
         if (f_stat(out, &fi) == FR_OK) return true;
     }
 
@@ -335,7 +335,7 @@ extern "C" void display_init(void) {
     LOG_INFO_MSG("DISP", "ST7789 ready");
 }
 
-#define DEFAULT_COVER_PATH  "0:/images/cd32-default.jpg"
+#define DEFAULT_COVER_PATH  "0:/covers/cd32-default.jpg"
 
 // Decode and render a JPEG at the given FatFS path. Returns true on success.
 static bool show_jpeg(const char *jpeg_path) {
