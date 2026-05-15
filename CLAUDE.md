@@ -91,12 +91,13 @@ Data transitions on the **falling** BCLK edge; Akiko samples on the **rising** e
 
 | File | Status | Notes |
 |------|--------|-------|
-| `upstream/core/commo.c` | ✅ Correct | COMMO command/status protocol |
+| `upstream/core/commo.c` | ✅ Correct | COMMO command/status protocol; last_command cleared on CMD_ERROR |
+| `upstream/core/play.c` | ✅ Correct | Play state machine; pointer truncation fixed; jump_time() overshoot guard |
 | `upstream/core/dispatcher.c` | ✅ Correct | Packet routing |
 | `upstream/core/cmd_hndl.c` | ✅ Correct | Opcode dispatch |
 | `upstream/core/sts_q_id.c` | ✅ Correct | Status/Q-channel buffer |
-| `upstream/utils/maths.c` | ✅ Correct | BCD/time arithmetic |
-| `upstream/utils/timer.c` | ✅ Correct | 8 ms software timer |
+| `upstream/utils/maths.c` | ✅ Correct | BCD/time arithmetic; tracks_calc() widened to uint64_t |
+| `upstream/utils/timer.c` | ✅ Correct | 8 ms software timer; delay() zero-entry guard |
 | `upstream/pio/commo.pio` | ✅ Correct | COMMO PIO |
 | `src/disc_image.c` | ✅ Correct | ISO/BIN/NRG/MDF parsers; CUE PREGAP+INDEX00 fix; NRG lead-out skip fix |
 | `src/sector_cache.c` | ✅ Correct | SD prefetch ring buffer + flush_gen race fix |
@@ -108,7 +109,6 @@ Data transitions on the **falling** BCLK edge; Akiko samples on the **rising** e
 | `src/logger.c` | ✅ Correct | SD activity log |
 | `src/config.c` | ✅ Correct | Flash-backed settings |
 | `src/display.cpp` | ✅ Correct | ST7789 240×240 cover art + scanline API |
-| `src/rotary_mcp.cpp` | ✅ Correct | MCP23017 encoder |
 | `src/ui.c` | ✅ Correct | UI event handler |
 | `src/webserver.c` | ✅ Correct | WiFi web interface |
 | `src/da_output.c` | ✅ Correct | DA DMA engine — 24-bit I2S expand, DRQ flag, FIFO drain on stop, M17SINE clkdiv trim |
@@ -176,7 +176,7 @@ Real hardware SMs (CXD2500BQ/DSIC2/Q-channel) are only loaded when
 | `Config` | 17 | struct size, defaults field values, CRC validity after defaults, CRC excludes crc32 field, magic/version/CRC guard, flag bit orthogonality |
 | `DaExpand` | 10 | I2S word packing: zero sector, L/R separation, max/min int16_t, lower-half always zero, pair-N addressing, last pair, clkdiv 32/16 |
 | `DaSpeed` | 16 | DA playback state machine: init 1×/2×, start/pause/resume/stop transitions, da_set_double_speed idempotency, clkdiv write capture, speed change while playing |
-| `CommoProtocol` | 13 | COMMO state machine: single-byte opcode, opcode+param, bad checksum, same-command detection, zero opcode ERR_SEND countdown, free-buffer clear, max-param opcode, A→B→A sequence, known bug (last_command not cleared on CMD_ERROR), TX data+checksum byte capture, BUSY/READY states |
+| `CommoProtocol` | 13 | COMMO state machine: single-byte opcode, opcode+param, bad checksum, same-command detection, zero opcode ERR_SEND countdown, free-buffer clear, max-param opcode, A→B→A sequence, CMD_ERROR clears last_command (fixed), TX data+checksum byte capture, BUSY/READY states |
 | `EffectsColor` | 18 | rgb() RGB565 bswap packing, hsv() grey/red/black/distinct hues, copper_color() darkest/brightest/monotone, sample_to_y() centre/top/bottom/bounds |
 | `CoverDir` | 6 | display.cpp and webserver.c agree on cover-art directory; FatFS volume prefix; trailing slash; default path starts in covers dir |
 | `SectorLayout` | 5 | disc_synthesise_sector() sync pattern, MSF header bytes, mode byte 0x01, data payload copy |
@@ -263,6 +263,11 @@ All four captures share the same 10 test names (W0–W9) and assertion threshold
 | MEDIUM-7 | `commo_bridge.c` | `da_set_audio_mode()` called in `PLAY_TRACK_OPC` and `PAUSE_OFF_OPC` |
 | HIGH-3 | `da_output.c` / `commo_bridge.c` | DRQ flag set by DMA ISR; `commo_bridge_poll()` sends `DRIVE_STATUS_DRQ` packet |
 | HIGH-4 | `da_output.pio` / `da_output.c` | 24-bit I2S frames (clkdiv=32), `expand_to_i2s24()` for DMA buffers |
+| UPSTREAM-1 | `upstream/core/commo.c` | `last_command = 0` on CMD_ERROR so retry is treated as NEW_COMMAND |
+| UPSTREAM-2 | `upstream/utils/maths.c` | `isqrt()` + `tracks_calc()` widened to uint64_t; A×T overflowed uint32_t for discs > ~20 min |
+| UPSTREAM-3 | `upstream/utils/timer.c` | `delay()` guard for `delay_byte == 0` on entry; do-while wrapped to 255 and blocked 127.5 ms |
+| UPSTREAM-4 | `upstream/core/play.c` | Pointer truncation: `param1 = (uint8_t)(uintptr_t)&store` → side-channel `play_subcode_result` pointer |
+| UPSTREAM-5 | `upstream/core/play.c` | `jump_time()` overshoot: `compare_time` guard before `subtract_time`; underflow wrapped `delta.frm` to 75−N |
 
 ---
 
