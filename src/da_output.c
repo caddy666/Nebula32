@@ -65,7 +65,7 @@ static uint8_t        s_raw[SECTOR_RAW_SIZE]; // scratch for sector_cache_get
 static uint32_t       s_buf_lba[2];             // LBA currently loaded in each buffer
 static sector_cache_t *s_cache      = NULL;
 static uint32_t        s_next_lba   = 0;
-static bool            s_audio_mode = false; // true = CD-DA; enables vis_audio snoop
+static volatile bool   s_audio_mode = false; // true = CD-DA; enables vis_audio snoop
 static volatile bool   s_drq_pending = false; // set by ISR; cleared by da_drq_pending()
 static uint32_t        s_clkdiv_fixed = 32u * 256u; // 16.8 fixed-point: nominal 32×256 at 1×
 

@@ -222,6 +222,12 @@ bool disc_parse_bin(disc_image_t *disc, const char *cue_path) {
             char mode_str[32] = {0};
             sscanf(p + 6, "%hhu %31s", &tnum, mode_str);
 
+            if (tnum < 1 || tnum > MAX_TRACKS) {
+                printf("[CUE] invalid track number %u — skipping\n", tnum);
+                current_track = 0;
+                continue;
+            }
+
             current_track = tnum;
             disc->last_track = tnum;
             if (disc->first_track == 0) disc->first_track = tnum;

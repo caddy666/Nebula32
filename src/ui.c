@@ -95,14 +95,11 @@ bool ui_tick(void) {
             break;
 
         case ROTARY_CCW:
-            // Scroll backward (modular arithmetic handles wrap)
-            if ((uint32_t)steps <= s_cursor) {
-                s_cursor -= (uint32_t)steps;
-            } else {
-                // Wrap to end of list
-                s_cursor = s_image_count_local
-                           - ((uint32_t)steps - s_cursor) % s_image_count_local;
-            }
+            // Scroll backward with wrap — unified modular form avoids the OOB
+            // case where (steps - cursor) % count == 0 would yield count itself.
+            s_cursor = (s_cursor + s_image_count_local
+                        - (uint32_t)steps % s_image_count_local)
+                       % s_image_count_local;
             start_number_blink();
             ui_print_selection();
             break;

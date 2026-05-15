@@ -179,13 +179,15 @@ void sector_cache_prefetch_tick(sector_cache_t *cache) {
         // this slot holds a stale LBA that would be delivered at the wrong position.
         if (cache->flush_gen == my_gen) {
             slot->valid = true;    // NOW Core 0 can see this sector
+            cache->next_fetch_lba++;
         }
+        /* If gen mismatched, Core 0 already set next_fetch_lba to the new seek
+         * position — do not advance it or the first sector of the seek is skipped. */
     } else {
         slot->error = true;
         LOG_ERROR_MSG("cache prefetch SD read fail at LBA=%lu",
                       (unsigned long)cache->next_fetch_lba);
         printf("[CACHE] Read error at LBA %u\n", (unsigned)cache->next_fetch_lba);
+        cache->next_fetch_lba++;   /* skip bad sector regardless of seek */
     }
-
-    cache->next_fetch_lba++;
 }
