@@ -11,7 +11,7 @@
 ; and pushes it into this PIO's TX FIFO so that the subcode is serialised out
 ; on a GPIO pin at exactly the right timing relative to sectors.
 ;
-; The CD32 BIOS reads Q-channel data via the CXD2545Q's register interface
+; The CD32 Kickstart reads Q-channel data via the CXD2545Q's register interface
 ; (not via the raw subcode pin), so this PIO program is mainly for future
 ; expansion (external subcode connectors, CD audio sync) and to keep timing
 ; accurate.

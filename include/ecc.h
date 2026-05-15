@@ -6,7 +6,7 @@
 // Provides correct EDC (Error Detection Code) and ECC (P/Q parity) for
 // Mode 1 sectors synthesised from 2048-byte ISO images.
 //
-// The CD32 BIOS does not normally verify EDC/ECC — the CXD2545Q chip
+// The CD32 Kickstart does not normally verify EDC/ECC — the CXD2545Q chip
 // handles error correction transparently.  However, software that reads raw
 // sectors via READS (0x1B) may check these fields.
 //

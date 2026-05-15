@@ -666,7 +666,7 @@ const track_t *disc_find_track(const disc_image_t *disc, uint32_t lba) {
 // ---------------------------------------------------------------------------
 // TOC response builder
 // ---------------------------------------------------------------------------
-// The CD32 BIOS reads the TOC as a series of bytes in the format returned
+// The CD32 Kickstart reads the TOC as a series of bytes in the format returned
 // by READTOC / GETTD commands.  Each entry is: [track_no, min, sec] (BCD).
 
 uint32_t disc_build_toc_response(const disc_image_t *disc,

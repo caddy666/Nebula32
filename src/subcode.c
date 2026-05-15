@@ -3,7 +3,7 @@
 // =============================================================================
 //
 // Generates the Q-channel subcode bytes that the CXD2545Q would normally
-// recover from the physical disc.  The CD32 BIOS reads these to:
+// recover from the physical disc.  The CD32 Kickstart reads these to:
 //
 //   1. Determine current playback position (for time display in audio mode)
 //   2. Verify disc identity (first track type must be data for CD32)
@@ -113,7 +113,7 @@ void subcode_build_q_position(uint8_t track_no, uint8_t index,
 // ---------------------------------------------------------------------------
 // The MCN (also called the UPC/EAN barcode) is a 13-digit number encoded in
 // a 72-bit BCD field.  We transmit this approximately every 100 sectors as
-// required by the Red Book specification.  The CD32 BIOS does not depend on
+// required by the Red Book specification.  The CD32 Kickstart does not depend on
 // the MCN for normal operation, but some software uses it for disc verification.
 
 void subcode_build_q_mcn(const char *mcn, uint8_t *buf) {

@@ -249,7 +249,7 @@ void da_start_play(sector_cache_t *cache, uint32_t start_lba) {
 //   Option A (stop):    abort both channels, s_playing=false.
 //                       commo_bridge polls da_is_playing() and sends STOP status.
 //   Option B (silence): fill the completed buffer with zeros, keep streaming.
-//                       BIOS times out and sends STOP command itself.
+//                       Kickstart times out and sends STOP command itself.
 //   Option C (loop):    rewind s_next_lba to start_lba and continue seamlessly.
 //
 // Currently implements Option A.  Change the else-branch below to switch.

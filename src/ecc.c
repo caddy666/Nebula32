@@ -11,7 +11,7 @@
 //   Bytes 2076–2351 : ECC (Error Correction Code) — P parity + Q parity
 //
 // Without correct EDC/ECC the sector looks valid to our emulator, and the
-// CD32 BIOS normally doesn't verify them (the CXD2545Q chip handles error
+// CD32 Kickstart normally doesn't verify them (the CXD2545Q chip handles error
 // correction transparently).  However, some software reads raw sectors via
 // READS or checks the EDC to detect read errors.  This module provides
 // correct computation.
