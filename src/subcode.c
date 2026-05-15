@@ -162,34 +162,73 @@ void subcode_build_q_mcn(const char *mcn, uint8_t *buf) {
 // ISRC is a 12-character code identifying a specific recording.
 // Format: CC-OOO-YY-NNNNN  (2 country + 3 owner + 2 year + 5 serial = 12)
 
+// ECMA-130 Table 16: 6-bit character codes for ISRC.
+// Digits '0'-'9' → 0x00-0x09; letters 'A'-'Z' → 0x11-0x2A.
+static uint8_t isrc_encode_char(char c)
+{
+    if (c >= '0' && c <= '9') return (uint8_t)(c - '0');
+    if (c >= 'A' && c <= 'Z') return (uint8_t)(c - 'A' + 17u);
+    return 0;
+}
+
 void subcode_build_q_isrc(uint8_t track_no, bool is_data,
-                           const char *isrc, uint8_t *buf) {
+                           const char *isrc, uint8_t *buf)
+{
+    (void)track_no;   /* not used in ISRC frames — byte 9 carries ISRC tail bits */
+
     uint8_t ctrl = is_data ? Q_CTRL_DATA : Q_CTRL_AUDIO;
     buf[0] = (ctrl << 4) | Q_ADR_ISRC;
 
-    // Bytes 1–8: 12-character ISRC packed as 6-bit characters (ISO 8859-1 table)
-    // For our purposes we zero-fill if no ISRC is provided.
-    memset(buf + 1, 0, 8);
+    /* Bytes 1-9: 12 chars × 6 bits = 72 bits, MSB-first — ECMA-130 Table 17 */
+    memset(buf + 1, 0, 9);
 
     if (isrc != NULL) {
-        // Simplified: pack first 12 chars as raw bytes, upper 6 bits used
         for (int i = 0; i < 12 && isrc[i] != '\0'; i++) {
-            uint8_t c = (uint8_t)isrc[i] & 0x3F;  // 6-bit encoding
-            int byte_idx = 1 + (i * 6) / 8;
-            int bit_shift = 2 - ((i * 6) % 8);    // MSB-first packing
-            if (byte_idx < 9) {
-                if (bit_shift >= 0) {
-                    buf[byte_idx] |= c << bit_shift;
-                } else {
-                    buf[byte_idx]   |= c >> (-bit_shift);
-                    buf[byte_idx+1] |= c << (8 + bit_shift);
-                }
+            uint8_t val     = isrc_encode_char(isrc[i]);
+            int     bit_off = i * 6;
+            int     byte_off = bit_off / 8;
+            int     shift    = 2 - (bit_off % 8);
+
+            if (shift >= 0) {
+                buf[1 + byte_off] |= (uint8_t)(val << shift);
+            } else {
+                buf[1 + byte_off    ] |= (uint8_t)(val >> (-shift));
+                buf[1 + byte_off + 1] |= (uint8_t)(val << (8 + shift));
             }
         }
     }
 
-    // Byte 9: A-TIME frame
-    buf[9] = ((track_no / 10) << 4) | (track_no % 10);
-
     subcode_append_crc(buf);
 }
+
+/* Original implementation kept for reference — three bugs noted:
+ *   1. `(uint8_t)isrc[i] & 0x3F` — wrong encoding (ECMA-130 Table 16 is not
+ *      the bottom 6 bits of ASCII; digits are 0x00-0x09, letters are 0x11-0x2A).
+ *   2. `if (byte_idx < 9)` — drops character 11 (byte_off=8 = buf[9] is valid).
+ *   3. `buf[9] = BCD track number` — overwrites the ISRC tail bits; Mode 3
+ *      byte 9 carries ISRC data, not track number.
+ *
+ * void subcode_build_q_isrc_ORIG(uint8_t track_no, bool is_data,
+ *                                const char *isrc, uint8_t *buf) {
+ *     uint8_t ctrl = is_data ? Q_CTRL_DATA : Q_CTRL_AUDIO;
+ *     buf[0] = (ctrl << 4) | Q_ADR_ISRC;
+ *     memset(buf + 1, 0, 8);
+ *     if (isrc != NULL) {
+ *         for (int i = 0; i < 12 && isrc[i] != '\0'; i++) {
+ *             uint8_t c = (uint8_t)isrc[i] & 0x3F;
+ *             int byte_idx = 1 + (i * 6) / 8;
+ *             int bit_shift = 2 - ((i * 6) % 8);
+ *             if (byte_idx < 9) {
+ *                 if (bit_shift >= 0) {
+ *                     buf[byte_idx] |= c << bit_shift;
+ *                 } else {
+ *                     buf[byte_idx]   |= c >> (-bit_shift);
+ *                     buf[byte_idx+1] |= c << (8 + bit_shift);
+ *                 }
+ *             }
+ *         }
+ *     }
+ *     buf[9] = ((track_no / 10) << 4) | (track_no % 10);
+ *     subcode_append_crc(buf);
+ * }
+ */

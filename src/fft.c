@@ -79,7 +79,7 @@ void fft_process(const int16_t *samples,
     for (int stage = 0; stage < 8; stage++) {
         int half    = 1 << stage;
         int step    = half * 2;
-        int tw_step = FFT_SIZE / step;
+        int tw_step = FFT_SIZE >> (stage + 1);
 
         for (int group = 0; group < FFT_SIZE; group += step) {
             for (int k = 0; k < half; k++) {

@@ -130,7 +130,6 @@ static void _push_subcode(uint32_t lba) {
     bool is_data = (trk->type != TRACK_TYPE_AUDIO);
     uint8_t qbuf[QCHANNEL_SIZE];
     subcode_build_q_position(trk->number, 1, is_data, trk->start_lba, lba, qbuf);
-    subcode_append_crc(qbuf);
     subcode_push_to_pio(SUBCODE_PIO, SUBCODE_SM, qbuf);
 }
 

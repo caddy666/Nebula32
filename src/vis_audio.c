@@ -32,7 +32,7 @@ void vis_audio_push_sector(const uint8_t *buf) {
 
         if (s_acc_pos >= FFT_SIZE) {
             /* Slot complete — commit to ring if not full */
-            int next_wr = (s_wr + 1) % VIS_AUDIO_RING;
+            int next_wr = (s_wr + 1) & (VIS_AUDIO_RING - 1);
             if (next_wr != s_rd) {  /* ring not full */
                 memcpy(s_ring[s_wr], s_acc, FFT_SIZE * sizeof(int16_t));
                 s_wr = next_wr;
@@ -45,6 +45,6 @@ void vis_audio_push_sector(const uint8_t *buf) {
 bool vis_audio_get_samples(int16_t *out) {
     if (s_rd == s_wr) return false;  /* no new frame */
     memcpy(out, s_ring[s_rd], FFT_SIZE * sizeof(int16_t));
-    s_rd = (s_rd + 1) % VIS_AUDIO_RING;
+    s_rd = (s_rd + 1) & (VIS_AUDIO_RING - 1);
     return true;
 }

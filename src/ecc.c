@@ -69,19 +69,33 @@ static inline uint8_t gf_mul(uint8_t a, uint8_t b) {
 // The EDC polynomial is x^32 + x^31 + x^16 + x^15 + x^4 + x^3 + x^2 + x + 1
 // (ECMA-130 Annex B), which in reversed bit order is 0xD8018001.
 // The EDC is computed over bytes 0–2063 of the raw sector (sync + header + data).
+//
+// Table-driven: each entry is the result of running one byte value through
+// 8 bit-iterations.  The update step then becomes one table lookup per byte:
+//   edc = table[(edc ^ byte) & 0xFF] ^ (edc >> 8)
+// Reduces per-sector work from 16 512 bit-loop iterations to 2 064 table lookups.
 
-static uint32_t edc_compute(const uint8_t *data, size_t len) {
-    uint32_t edc = 0;
-    for (size_t i = 0; i < len; i++) {
-        edc ^= data[i];
-        for (int b = 0; b < 8; b++) {
-            if (edc & 1) {
-                edc = (edc >> 1) ^ 0xD8018001U;
-            } else {
-                edc >>= 1;
-            }
-        }
+static uint32_t edc_table[256];
+static bool     edc_table_ready = false;
+
+static void edc_table_init(void)
+{
+    if (edc_table_ready) return;
+    for (int i = 0; i < 256; i++) {
+        uint32_t v = (uint32_t)i;
+        for (int b = 0; b < 8; b++)
+            v = (v & 1) ? (v >> 1) ^ 0xD8018001U : (v >> 1);
+        edc_table[i] = v;
     }
+    edc_table_ready = true;
+}
+
+static uint32_t edc_compute(const uint8_t *data, size_t len)
+{
+    edc_table_init();
+    uint32_t edc = 0;
+    for (size_t i = 0; i < len; i++)
+        edc = edc_table[(edc ^ data[i]) & 0xFF] ^ (edc >> 8);
     return edc;
 }
 
@@ -205,7 +219,6 @@ bool ecc_verify_edc(const uint8_t *sector) {
 // Convenience wrapper: writes EDC then generates P/Q parity in one call.
 // Call this after disc_synthesise_sector() fills sync, MSF, mode, and data.
 void ecc_sector_complete(uint8_t *sector_2352) {
-    gf_init();
     ecc_write_edc(sector_2352);
-    ecc_generate(sector_2352);
+    ecc_generate(sector_2352);  /* gf_init() is called inside ecc_generate */
 }
