@@ -31,16 +31,16 @@ uint16_t subcode_crc16(const uint8_t *data, uint32_t len) {
 
     for (uint32_t i = 0; i < len; i++) {
         // XOR the next data byte into the high byte of the CRC register
-        crc ^= (uint16_t)data[i] << 8;
+        crc ^= (uint16_t)((unsigned)data[i] << 8u);
 
         // Process each bit
         for (int b = 0; b < 8; b++) {
-            if (crc & 0x8000) {
+            if (crc & 0x8000u) {
                 // MSB set: shift left and XOR with polynomial
-                crc = (crc << 1) ^ 0x1021;
+                crc = (uint16_t)(((unsigned)crc << 1u) ^ 0x1021u);
             } else {
                 // MSB clear: just shift left
-                crc = (crc << 1);
+                crc = (uint16_t)(crc << 1u);
             }
         }
     }
@@ -65,7 +65,7 @@ void subcode_build_q_position(uint8_t track_no, uint8_t index,
     // CTRL nibble (bits 7:4): data or audio track flags
     // ADR  nibble (bits 3:0): 0x1 = position mode
     uint8_t ctrl = is_data ? Q_CTRL_DATA : Q_CTRL_AUDIO;
-    buf[0] = (ctrl << 4) | Q_ADR_POSITION;
+    buf[0] = (uint8_t)((ctrl << 4u) | Q_ADR_POSITION);
 
     // ---- Track number (BCD) ----
     // Lead-in area uses track 0x00; programme area uses 0x01-0x63 (BCD 1-99).
@@ -141,7 +141,7 @@ void subcode_build_q_mcn(const char *mcn, uint8_t *buf) {
             uint8_t d = (mcn[digit] >= '0' && mcn[digit] <= '9')
                         ? (uint8_t)(mcn[digit] - '0') : 0;
             if (digit % 2 == 0) {
-                packed[digit / 2] = (d << 4);      // High nibble
+                packed[digit / 2] = (uint8_t)(d << 4u);  // High nibble
             } else {
                 packed[digit / 2] |= (d & 0x0F);   // Low nibble
             }
@@ -167,7 +167,7 @@ void subcode_build_q_mcn(const char *mcn, uint8_t *buf) {
 static uint8_t isrc_encode_char(char c)
 {
     if (c >= '0' && c <= '9') return (uint8_t)(c - '0');
-    if (c >= 'A' && c <= 'Z') return (uint8_t)(c - 'A' + 17u);
+    if (c >= 'A' && c <= 'Z') return (uint8_t)((unsigned)(c - 'A') + 17u);
     return 0;
 }
 
@@ -177,7 +177,7 @@ void subcode_build_q_isrc(uint8_t track_no, bool is_data,
     (void)track_no;   /* not used in ISRC frames — byte 9 carries ISRC tail bits */
 
     uint8_t ctrl = is_data ? Q_CTRL_DATA : Q_CTRL_AUDIO;
-    buf[0] = (ctrl << 4) | Q_ADR_ISRC;
+    buf[0] = (uint8_t)((ctrl << 4u) | Q_ADR_ISRC);
 
     /* Bytes 1-9: 12 chars × 6 bits = 72 bits, MSB-first — ECMA-130 Table 17 */
     memset(buf + 1, 0, 9);

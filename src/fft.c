@@ -20,21 +20,21 @@ static uint8_t bin_map[NUM_BARS + 1];
 void fft_init(void) {
     /* Twiddle factors */
     for (int k = 0; k < FFT_SIZE / 2; k++) {
-        float angle = 2.0f * (float)M_PI * k / FFT_SIZE;
+        float angle = 2.0f * (float)M_PI * (float)k / (float)FFT_SIZE;
         tw_cos[k] = (int16_t)(cosf(angle) * 32767.0f);
         tw_sin[k] = (int16_t)(sinf(angle) * 32767.0f);
     }
 
     /* Hann window */
     for (int n = 0; n < FFT_SIZE; n++) {
-        float w = 0.5f * (1.0f - cosf(2.0f * (float)M_PI * n / (FFT_SIZE - 1)));
+        float w = 0.5f * (1.0f - cosf(2.0f * (float)M_PI * (float)n / (float)(FFT_SIZE - 1)));
         hann[n] = (int16_t)(w * 32767.0f);
     }
 
     /* Bit-reversal table for N=256 (8-bit reversal) */
     for (int i = 0; i < FFT_SIZE; i++) {
         uint8_t x = (uint8_t)i, rev = 0;
-        for (int j = 0; j < 8; j++) { rev = (rev << 1) | (x & 1); x >>= 1; }
+        for (int j = 0; j < 8; j++) { rev = (uint8_t)(((unsigned)rev << 1u) | (x & 1u)); x >>= 1; }
         bitrev[i] = rev;
     }
 
@@ -42,7 +42,7 @@ void fft_init(void) {
     float log_lo = logf(1.0f);
     float log_hi = logf((float)FFT_BINS);
     for (int b = 0; b <= NUM_BARS; b++) {
-        float f = expf(log_lo + (log_hi - log_lo) * b / NUM_BARS);
+        float f = expf(log_lo + (log_hi - log_lo) * (float)b / (float)NUM_BARS);
         uint8_t bin = (uint8_t)(f + 0.5f);
         if (bin < 1) bin = 1;
         if (bin >= FFT_BINS) bin = FFT_BINS - 1;

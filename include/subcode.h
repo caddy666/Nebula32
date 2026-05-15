@@ -100,8 +100,8 @@ uint16_t subcode_crc16(const uint8_t *data, uint32_t len);
 // Convenience: compute CRC and write it into buf[10..11]
 static inline void subcode_append_crc(uint8_t *buf) {
     uint16_t crc = subcode_crc16(buf, 10);
-    buf[10] = (crc >> 8) & 0xFF;
-    buf[11] =  crc       & 0xFF;
+    buf[10] = (uint8_t)((crc >> 8u) & 0xFFu);
+    buf[11] = (uint8_t)(crc & 0xFFu);
 }
 
 // ---------------------------------------------------------------------------

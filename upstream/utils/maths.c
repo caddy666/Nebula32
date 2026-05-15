@@ -7,6 +7,7 @@
 
 #include <stdint.h>
 #include "defs.h"
+#include "maths.h"
 
 /* =========================================================================
  * BCD helpers
@@ -14,13 +15,13 @@
 
 uint8_t bcd_to_hex(uint8_t bcd)
 {
-    return ((bcd >> 4) * 10u) + (bcd & 0x0Fu);
+    return (uint8_t)(((uint32_t)bcd >> 4u) * 10u + ((uint32_t)bcd & 0x0Fu));
 }
 
 uint8_t hex_to_bcd(uint8_t hex)
 {
     uint8_t tens = hex / 10u;
-    return (uint8_t)((tens << 4) | (hex - tens * 10u));
+    return (uint8_t)((uint32_t)(tens << 4u) | ((uint32_t)hex - (uint32_t)tens * 10u));
 }
 
 void bcd_to_hex_time(const cd_time_t *src, cd_time_t *dst)
