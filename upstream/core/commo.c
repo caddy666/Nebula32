@@ -160,7 +160,8 @@ static void commo_step(commo_ctx_t *c)
                 if (c->rx_status == COMMO_NEW_COMMAND)
                     c->last_command = c->rx_buffer[0];
             } else {
-                c->rx_status = COMMO_CMD_ERROR;
+                c->rx_status  = COMMO_CMD_ERROR;
+                c->last_command = 0;  // invalidate so retry is treated as NEW_COMMAND
             }
             c->report_cmd = 1;
             c->checksum   = 0;

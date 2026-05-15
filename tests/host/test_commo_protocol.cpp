@@ -154,8 +154,8 @@ static void commo_step(commo_ctx_t *c)
                 if (c->rx_status == COMMO_NEW_COMMAND)
                     c->last_command = c->rx_buffer[0];
             } else {
-                // BUG: last_command not cleared here — see SameOpcodeAfterCmdError test
-                c->rx_status = COMMO_CMD_ERROR;
+                c->rx_status    = COMMO_CMD_ERROR;
+                c->last_command = 0;  // invalidate so retry is treated as NEW_COMMAND
             }
             c->report_cmd = 1;
             c->checksum   = 0;
@@ -386,12 +386,9 @@ TEST(CommoProtocol, ABA_ThirdIsNewCommand)
     BYTES_EQUAL(COMMO_NEW_COMMAND, NEW_CMD_RECEIVED());
 }
 
-// BUG: commo.c does not clear last_command on CMD_ERROR.
-// After a bad checksum, resending the same opcode should return NEW_COMMAND
-// because the previous reception was invalid.  Instead, last_command still
-// matches rx_buffer[0] and the SM returns SAME_COMMAND.
-// Fix: add `c->last_command = 0;` in the CMD_ERROR branch of RXD_CHECKSUM.
-TEST(CommoProtocol, SameOpcodeAfterCmdError_BugReturnsSame)
+// After a checksum failure the retry of the same opcode must return NEW_COMMAND
+// because the failed reception was invalid — last_command is cleared on CMD_ERROR.
+TEST(CommoProtocol, SameOpcodeAfterCmdError_IsNewCommand)
 {
     uint8_t good[2] = { 0x03, 0 };
     good[1] = checksum_of(good, 1);
@@ -406,8 +403,7 @@ TEST(CommoProtocol, SameOpcodeAfterCmdError_BugReturnsSame)
     FREE_CMD_BUFFER();
 
     drive_packet(good, 2);
-    // BUG: returns SAME_COMMAND; should be NEW_COMMAND after an error.
-    BYTES_EQUAL(COMMO_SAME_COMMAND, NEW_CMD_RECEIVED());
+    BYTES_EQUAL(COMMO_NEW_COMMAND, NEW_CMD_RECEIVED());
 }
 
 /* -------------------------------------------------------------------------
