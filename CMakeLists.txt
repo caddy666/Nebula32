@@ -211,13 +211,6 @@ add_executable(cd32_ode
     # ---- Upstream player shim: satisfies player_interface linkage for upstream cmd_hndl.c ----
     src/upstream_player_shim.c
 
-    # ---- Upstream: PIO hardware abstraction ----
-    # NOTE: We do NOT include upstream/hal/pio_hw.c in the build.
-    # That file's pio_hw_init() loads ALL 8 PIO SMs (including PIO0 SM0/SM1
-    # which are already claimed by our parallel bus).  Instead, commo_bridge.c
-    # directly calls commo_program_init() to set up only PIO1 SM0/SM1.
-    # The extern variables g_offset_commo_rx/tx declared in pio_hw.h are
-    # defined by commo_bridge.c below.
 )
 
 # ---- PIO programs (assembled at build time by pioasm) ----

@@ -159,7 +159,7 @@ TEST(DoorTray, ReadyStateStatusHasDiscOnly)
 // ---------------------------------------------------------------------------
 // Test 5 — TRAY_OUT from PLAYING stops the drive and clears DISC.
 //
-// If the user opens the cover while a game is running Kickstart sends
+// If the user opens the cover while a game is running akiko sends
 // TRAY_OUT_OPC.  The drive must stop immediately (IDLE) regardless of its
 // current playback state, and the status byte must be 0x00.
 // ---------------------------------------------------------------------------
@@ -227,7 +227,7 @@ TEST(DoorTray, MotorActiveAfterTrayIn)
 //
 // An error state must set DRIVE_STATUS_ERROR and must NOT set DRIVE_STATUS_BUSY.
 // Akiko distinguishes a hardware fault (ERROR) from a transient seek/spinup
-// (BUSY); conflating the two would cause Kickstart to retry indefinitely.
+// (BUSY); conflating the two would cause akiko to retry indefinitely.
 // ---------------------------------------------------------------------------
 TEST(DoorTray, ErrorStateHasErrorBitNotBusy)
 {

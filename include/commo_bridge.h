@@ -5,7 +5,7 @@
 //
 // The CD32's Amiga chipset communicates with the CD drive controller over a
 // proprietary 3-wire serial bus called "COMMO" (DATA, CLK, DIR).  This is
-// distinct from the 8-bit parallel CXD2545Q bus that our ODE emulates.
+// distinct from the CXD2545Q bus that our ODE emulates.
 //
 // HARDWARE TOPOLOGY:
 //
@@ -14,10 +14,10 @@
 //   │                                                                 │
 //   │  ┌──────────────────┐     COMMO 3-wire      ┌───────────────┐  │
 //   │  │  Amiga chipset   │ ←──────────────────→  │  Drive MCU   │  │
-//   │  │  (AGA chip)      │                        │  (8051 orig) │  │
+//   │  │  (AGA akiko chip)│    <command data>     │  (8051 orig) │  │
 //   │  └──────────────────┘                        └───────┬───────┘  │
-//   │                                                      │           │
-//   │                             8-bit parallel bus       │           │
+//   │                 ^                                     │           │
+//   │    CD DA/data   V                                    │  command datsa         │
 //   │  ┌──────────────────────────────────────────────┐   │           │
 //   │  │              CXD2545Q CD DSP                 │ ──┘           │
 //   │  │  (servo, EFM decode, sector error correct)  │               │
@@ -38,19 +38,7 @@
 //   GPIO 16: COMMO_DATA (bidirectional)
 //   GPIO 17: COMMO_DIR  (output: 0=receive, 1=transmit)
 //
-// NOTE: These GPIO assignments match our rotary encoder pins (15/16/17).
-// When building with both COMMO bus AND rotary encoder, you must choose:
-//   Option A: Use COMMO bus (required for real CD32 hardware connection)
-//             Rotary encoder moves to GPIO 29/30/31 — but RP2350 only has 30!
-//             So: move rotary to 26/27/28 and I2S audio to... conflicts.
-//   Option B: COMMO bus only (GPIO 15-17), no rotary encoder.
-//             This is the recommended mode for a real CD32 installation.
-//   Option C: Rotary encoder only (GPIO 15-17), no COMMO bus.
-//             Use for standalone ODE development without a real CD32.
-//
-// BUILD_WITH_COMMO in CMakeLists.txt selects whether the upstream COMMO 3-wire
-// bus is active.  The rotary encoder now uses the MCP23017 I2C expander
-// (GPIO 26/27 = I2C1, GPA0-2 = CLK/DT/SW) and coexists with COMMO.
+
 // =============================================================================
 
 

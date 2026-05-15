@@ -249,7 +249,7 @@ void disc_synthesise_sector(uint8_t *buf, uint32_t lba, const uint8_t *data2048)
 // Find which track contains 'lba'.  Returns NULL if not found.
 const track_t *disc_find_track(const disc_image_t *disc, uint32_t lba);
 
-// Build a TOC response buffer as the CD32 Kickstart expects it (GETTD / READTOC).
+// Build a TOC response buffer as the CD32 akiko expects it (GETTD / READTOC).
 // 'buf' receives the encoded TOC; returns number of bytes written.
 uint32_t disc_build_toc_response(const disc_image_t *disc, uint8_t *buf,
                                  uint32_t buf_size);

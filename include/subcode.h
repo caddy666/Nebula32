@@ -8,7 +8,7 @@
 // P, Q, R, S, T, U, V, W.  Each channel contributes 1 bit per frame giving
 // 96 bits (12 bytes) per channel per sector.
 //
-// The Q-channel is the only one the CD32 Kickstart cares about.  It carries:
+// The Q-channel is the only one the CD32 akiko cares about.  It carries:
 //   Mode 1 (ADR=1): current track, index, relative time, absolute time
 //   Mode 2 (ADR=2): Media Catalog Number (MCN / UPC-EAN barcode)
 //   Mode 3 (ADR=3): ISRC code for the current track

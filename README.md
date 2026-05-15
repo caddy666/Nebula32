@@ -401,7 +401,7 @@ Connect a serial terminal at 115200 baud to the Pico 2's USB port:
 
 ## Troubleshooting
 
-**Pico not detected by CD32 Kickstart**
+**Pico not detected by CD32 akiko**
 - Scope IF_CLK (GPIO 15) and IF_DATA (GPIO 16) with a logic analyser — you should see COMMO packets after power-on
 - Verify GPIO 17 (IF_DIR) toggles direction correctly when the Pico sends responses
 - Enable logging and check `cd32_cd.log` for COMMO entries — if none appear, the COMMO bus is not reaching the Pico
@@ -420,7 +420,7 @@ Connect a serial terminal at 115200 baud to the Pico 2's USB port:
 **Audio tracks silent**
 - Audio goes through the DA I2S bus (GPIO 0/1/2) to the LC78835M DAC (U31) on the CD32 mainboard — no external DAC is needed
 - Scope DA_BCLK (GPIO 1) — should toggle at ~2.12 MHz during audio playback
-- Check COMMO log for PLAY_TRACK_OPC — if absent, Kickstart is not sending play commands
+- Check COMMO log for PLAY_TRACK_OPC — if absent, akiko is not sending play commands
 - Verify DA_LRCLK (GPIO 2) toggles at 44.1 kHz; if it doesn't, the DA PIO has stalled
 
 ---

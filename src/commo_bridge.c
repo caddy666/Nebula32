@@ -424,7 +424,7 @@ static uint8_t _handle_opc(uint8_t opc, uint8_t p1, uint8_t p2, uint8_t p3) {
             return _build_status();
 
         case START_UP_OPC:
-            // Kickstart sends START_UP repeatedly until it receives a READY
+            // akiko sends START_UP repeatedly until it receives a READY
             // response — it is a poll, not a one-shot command.  We report the
             // current state (SPINUP→BUSY, READY→OK) without forcing a transition;
             // _maybe_advance_state() in the poll loop handles the timing.
