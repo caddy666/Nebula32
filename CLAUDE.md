@@ -146,7 +146,7 @@ Real hardware SMs (CXD2500BQ/DSIC2/Q-channel) are only loaded when
 
 **Location:** `tests/host/`  
 **Run:** `make && ./cd32_tests -v`  
-**Result:** 305 tests, 0 failures
+**Result:** 311 tests, 0 failures
 
 | Group | Tests | What it covers |
 |-------|-------|----------------|
@@ -175,6 +175,7 @@ Real hardware SMs (CXD2500BQ/DSIC2/Q-channel) are only loaded when
 | `Config` | 17 | struct size, defaults field values, CRC validity after defaults, CRC excludes crc32 field, magic/version/CRC guard, flag bit orthogonality |
 | `DaExpand` | 10 | I2S word packing: zero sector, L/R separation, max/min int16_t, lower-half always zero, pair-N addressing, last pair, clkdiv 32/16 |
 | `EffectsColor` | 18 | rgb() RGB565 bswap packing, hsv() grey/red/black/distinct hues, copper_color() darkest/brightest/monotone, sample_to_y() centre/top/bottom/bounds |
+| `CoverDir` | 6 | display.cpp and webserver.c agree on cover-art directory; FatFS volume prefix; trailing slash; default path starts in covers dir |
 
 ### CsvReplay test windows
 

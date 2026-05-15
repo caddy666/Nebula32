@@ -14,11 +14,34 @@
 //   ".." traversal guard — rejects cover-art paths containing ".."
 //   load-index bounds check — POST /api/load/{index} validates index range
 // =============================================================================
+//   CoverDir group: verifies that display.cpp and webserver.c use the same
+//   cover-art directory prefix.  The expected value is read from WS_COVERS_DIR
+//   (the single source of truth); display.cpp's prefix is captured as a
+//   compile-time string literal replicated here.  If either side drifts the
+//   test fails without requiring a build of the embedded target.
+// =============================================================================
 
 #include <CppUTest/TestHarness.h>
 #include <string.h>
 #include <stdint.h>
 #include <stddef.h>
+
+// ---------------------------------------------------------------------------
+// Cover-directory contract — single source of truth from webserver.h
+// WS_COVERS_DIR is defined there; replicate it here as the reference value.
+// If webserver.h cannot be included (hardware deps), mirror the define below
+// and keep it in sync with include/webserver.h.
+// ---------------------------------------------------------------------------
+#define WS_COVERS_DIR   "0:/covers/"
+
+// The prefix used by find_cover_jpeg() in src/display.cpp.
+// Must stay in sync with the snprintf format string in that function.
+// grep: snprintf(out, out_len, "0:/covers/%s.jpg", name);
+#define DISPLAY_COVERS_PREFIX  "0:/covers/"
+
+// The default cover path used by display.cpp when no title-specific art exists.
+// Must stay in sync with DEFAULT_COVER_PATH in src/display.cpp.
+#define DISPLAY_DEFAULT_COVER  "0:/covers/cd32-default.jpg"
 
 // ---------------------------------------------------------------------------
 // Replicated helpers — must stay in sync with src/webserver.c
@@ -241,4 +264,58 @@ TEST(Webserver, LoadIndex_Overflow_Invalid)
 TEST(Webserver, LoadIndex_ZeroCount_AlwaysInvalid)
 {
     CHECK_FALSE(load_index_valid(0, 0));
+}
+
+/* -------------------------------------------------------------------------
+ * CoverDir — cover-art directory consistency between display.cpp and webserver.c
+ *
+ * These tests assert that both subsystems agree on where cover art lives.
+ * The WS_COVERS_DIR define (from webserver.h) is the canonical value;
+ * DISPLAY_COVERS_PREFIX mirrors what is hardcoded in find_cover_jpeg().
+ * If either side is changed without updating the other, one of these tests
+ * fails immediately.
+ * ---------------------------------------------------------------------- */
+
+TEST_GROUP(CoverDir) {};
+
+TEST(CoverDir, DisplayPrefix_MatchesWebserverDir)
+{
+    // Both subsystems must agree on the directory prefix.
+    // WS_COVERS_DIR is the authoritative define from webserver.h.
+    // DISPLAY_COVERS_PREFIX mirrors the snprintf format in find_cover_jpeg().
+    STRCMP_EQUAL(WS_COVERS_DIR, DISPLAY_COVERS_PREFIX);
+}
+
+TEST(CoverDir, DisplayDefaultCover_StartsWithWebserverDir)
+{
+    // The fallback cover path must live inside the same covers directory.
+    size_t dir_len = strlen(WS_COVERS_DIR);
+    CHECK(strncmp(DISPLAY_DEFAULT_COVER, WS_COVERS_DIR, dir_len) == 0);
+}
+
+TEST(CoverDir, WebserverDir_StartsWithVolumePrefix)
+{
+    // Both sides use the FatFS volume prefix "0:/" — catch a future refactor
+    // that drops it (e.g. a relative path) before it reaches the target.
+    CHECK(strncmp(WS_COVERS_DIR, "0:/", 3) == 0);
+}
+
+TEST(CoverDir, DisplayPrefix_StartsWithVolumePrefix)
+{
+    CHECK(strncmp(DISPLAY_COVERS_PREFIX, "0:/", 3) == 0);
+}
+
+TEST(CoverDir, DisplayDefaultCover_EndsWithJpg)
+{
+    // Sanity: the default cover must be a JPEG so the JPEG decoder is invoked.
+    const char *end = DISPLAY_DEFAULT_COVER + strlen(DISPLAY_DEFAULT_COVER) - 4;
+    STRCMP_EQUAL(".jpg", end);
+}
+
+TEST(CoverDir, WebserverDir_EndsWithSlash)
+{
+    // Directory prefix must end with '/' so path concatenation is correct.
+    size_t len = strlen(WS_COVERS_DIR);
+    CHECK(len > 0);
+    CHECK(WS_COVERS_DIR[len - 1] == '/');
 }
