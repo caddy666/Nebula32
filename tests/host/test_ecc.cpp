@@ -1,3 +1,18 @@
+// =============================================================================
+// test_ecc.cpp — CD-ROM Mode 1 EDC/ECC computation tests
+//
+// Intent: verify that src/ecc.c correctly computes and validates the Error
+// Detection Code (EDC) appended to every Mode 1 raw sector (2352 bytes).
+//
+// Key invariants under test:
+//   - Round-trip: ecc_write_edc() followed by ecc_verify_edc() must pass for
+//     any valid Mode 1 sector payload.
+//   - Single-bit corruption anywhere in bytes 0-2063 must cause verify to fail.
+//   - Sectors built with the standard 12-byte sync header + MSF header +
+//     mode byte are accepted; the EDC covers bytes 0-2063 (header + user data).
+//   - ecc_verify_edc() returns false for a zeroed (unwritten) sector.
+// =============================================================================
+
 #include <CppUTest/TestHarness.h>
 #include <string.h>
 extern "C" {

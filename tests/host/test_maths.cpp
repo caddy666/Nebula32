@@ -1,3 +1,19 @@
+// =============================================================================
+// test_maths.cpp — CD time arithmetic (BCD, add, subtract, compare, tracks)
+//
+// Intent: verify upstream/utils/maths.c, which provides the BCD-encoded
+// cd_time_t arithmetic used throughout the COMMO protocol layer.  These
+// functions run on both Pico hardware and the host; the host build allows
+// exhaustive edge-case coverage without flashing firmware.
+//
+// Key invariants under test:
+//   - bcd_to_hex() / hex_to_bcd(): exact inverse for values 0x00-0x99.
+//   - add_time() / sub_time(): correct BCD carry/borrow across the
+//     frame (0-74), second (0-59), and minute fields.
+//   - compare_time(): returns SMALLER / EQUAL / BIGGER with correct ordering.
+//   - calc_tracks(): derives track count and lead-out position from a TOC.
+// =============================================================================
+
 #include <CppUTest/TestHarness.h>
 #include <stdint.h>
 extern "C" {

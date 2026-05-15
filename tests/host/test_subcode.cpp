@@ -1,3 +1,21 @@
+// =============================================================================
+// test_subcode.cpp — Q-channel subcode generation tests
+//
+// Intent: verify that subcode_build_q_position/mcn/isrc produce byte-exact
+// output matching the Red Book (ECMA-130) Q-channel specification.
+//
+// Key invariants under test:
+//   - CRC-16/CCITT (init=0x0000, poly=0x1021) computed over bytes 0-9 and
+//     stored bitwise-inverted in bytes 10-11.
+//   - Relative time (bytes 3-5): BCD frames elapsed since track INDEX 01,
+//     with NO lead-in offset.  Pregap (index 0) counts down toward 00:00:00.
+//   - Absolute time (bytes 7-9): BCD MSF from disc start, INCLUDING the
+//     150-frame (2-second) lead-in offset added by lba_to_msf().
+//   - Track and index fields (bytes 1-2) encoded as BCD.
+//   - CTRL/ADR byte 0: data track = 0x41, audio track = 0x01.
+//   - Reserved byte 6 always zero in position mode.
+// =============================================================================
+
 #include <CppUTest/TestHarness.h>
 #include <string.h>
 #include <stdint.h>
@@ -195,4 +213,68 @@ TEST(Subcode, McnNullProducesZeroMcn)
     for (int i = 1; i <= 7; i++) {
         BYTES_EQUAL(0x00, buf[i]);
     }
+}
+
+/* -------------------------------------------------------------------------
+ * Relative time fields (bytes 3-5) — BUG-1 regression tests
+ *
+ * Before the fix, lba_to_msf() was used to encode relative time, which
+ * incorrectly added the 150-frame (2-second) lead-in offset.
+ * These tests lock in the correct behaviour: direct BCD from the LBA delta,
+ * no lead-in offset applied.
+ * ---------------------------------------------------------------------- */
+
+/* At the track start point (disc_lba == track_start_lba), elapsed frames = 0.
+   Relative time must be 00:00:00, not 00:02:00 as lba_to_msf would give. */
+TEST(Subcode, RelTimeAtTrackStart_IsZero)
+{
+    uint8_t buf[QCHANNEL_SIZE];
+    subcode_build_q_position(1, 1, false, 150, 150, buf);
+    BYTES_EQUAL(0x00, buf[3]);  /* relative minute */
+    BYTES_EQUAL(0x00, buf[4]);  /* relative second */
+    BYTES_EQUAL(0x00, buf[5]);  /* relative frame  */
+}
+
+/* 75 frames past the track start = 1 second elapsed → 00:01:00 */
+TEST(Subcode, RelTimeAfter75Frames_IsOneSecond)
+{
+    uint8_t buf[QCHANNEL_SIZE];
+    subcode_build_q_position(1, 1, false, 0, 75, buf);
+    BYTES_EQUAL(0x00, buf[3]);  /* 0 minutes */
+    BYTES_EQUAL(0x01, buf[4]);  /* 1 second  */
+    BYTES_EQUAL(0x00, buf[5]);  /* 0 frames  */
+}
+
+/* 3600 frames = 48 seconds = 00:48:00 (BCD 0x48 in byte 4) */
+TEST(Subcode, RelTimeAfter3600Frames_Is48Seconds)
+{
+    uint8_t buf[QCHANNEL_SIZE];
+    subcode_build_q_position(2, 1, false, 0, 3600, buf);
+    BYTES_EQUAL(0x00, buf[3]);  /* 0 minutes */
+    BYTES_EQUAL(0x48, buf[4]);  /* 48 seconds BCD */
+    BYTES_EQUAL(0x00, buf[5]);  /* 0 frames  */
+}
+
+/* Pregap (index==0, disc_lba < track_start_lba): relative time counts
+   DOWN from track_start - disc_lba toward 00:00:00.
+   Here track_start=300, disc_lba=225 → rel_lba=75 → 00:01:00 */
+TEST(Subcode, RelTimePregapCountdown)
+{
+    uint8_t buf[QCHANNEL_SIZE];
+    subcode_build_q_position(2, 0, false, 300, 225, buf);
+    BYTES_EQUAL(0x00, buf[3]);
+    BYTES_EQUAL(0x01, buf[4]);
+    BYTES_EQUAL(0x00, buf[5]);
+}
+
+/* Absolute time (bytes 7-9) must still use lba_to_msf() with the 150-frame
+   lead-in offset — the BUG-1 fix must NOT have broken this.
+   LBA 150 → lba_to_msf adds 150 → total 300 frames → 00:04:00 */
+TEST(Subcode, AbsTimeUnaffectedByRelTimeFix)
+{
+    uint8_t buf[QCHANNEL_SIZE];
+    subcode_build_q_position(1, 1, false, 150, 150, buf);
+    BYTES_EQUAL(0x00, buf[7]);  /* absolute minute */
+    BYTES_EQUAL(0x04, buf[8]);  /* absolute second — 300/75 = 4 */
+    BYTES_EQUAL(0x00, buf[9]);  /* absolute frame  */
 }

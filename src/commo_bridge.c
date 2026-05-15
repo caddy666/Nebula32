@@ -58,7 +58,7 @@
 #include <string.h>
 #include <stdio.h>
 
-// External upstream globals (defined in player_stub.c)
+// External upstream globals (defined in upstream_player_shim.c)
 extern interface_field_t player_interface;
 
 // External ODE globals (defined in main.c)
@@ -262,8 +262,6 @@ static void _send_toc_packets(void) {
     #undef TO_BCD
 }
 
-// ---------------------------------------------------------------------------
-// commo_bridge_init
 // ---------------------------------------------------------------------------
 // commo_bridge_init
 // ---------------------------------------------------------------------------

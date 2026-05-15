@@ -1,3 +1,19 @@
+// =============================================================================
+// test_fft.cpp — 256-point Q15 radix-2 FFT and spectrum analyser tests
+//
+// Intent: verify that src/fft.c produces numerically correct output and that
+// the peak-hold/decay pipeline behaves as specified.  All tests run on the
+// host without audio hardware; sample buffers are synthesised directly.
+//
+// Key invariants under test:
+//   - fft_init() is safe to call multiple times (idempotent).
+//   - Zero input: all NUM_BARS spectrum bins must be 0x00 after fft_run().
+//   - Non-zero input: at least one spectrum bin must be non-zero.
+//   - Spectrum values are bounded to [0, 255] (uint8_t range).
+//   - Peak values are >= the corresponding spectrum bin on the same frame.
+//   - Peaks decay toward zero across successive frames with no new input.
+// =============================================================================
+
 #include <CppUTest/TestHarness.h>
 #include <string.h>
 #include <stdint.h>

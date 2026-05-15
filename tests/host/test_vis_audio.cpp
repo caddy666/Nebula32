@@ -1,3 +1,21 @@
+// =============================================================================
+// test_vis_audio.cpp — DA DMA audio snoop ring buffer tests
+//
+// Intent: verify the SPSC ring buffer and left-channel extraction logic in
+// src/vis_audio.c, which snoops the DA DMA stream to feed the FFT visualiser.
+// Tests use the public vis_audio_push() / vis_audio_pop() API and inspect
+// internal state via vis_audio_available(); no real DMA or hardware is needed.
+//
+// Key invariants under test:
+//   - Ring buffer starts empty: vis_audio_available() == 0.
+//   - push() followed by pop() returns the same sample value (FIFO order).
+//   - Left-channel extraction: only every other 32-bit word (left sample of
+//     each stereo pair) is retained; right-channel words are discarded.
+//   - Buffer does not overflow: pushing more samples than FFT_SIZE drops the
+//     oldest entries rather than writing past the buffer end.
+//   - Multiple push/pop cycles are stable (no state corruption between calls).
+// =============================================================================
+
 #include <CppUTest/TestHarness.h>
 #include <string.h>
 #include <stdint.h>

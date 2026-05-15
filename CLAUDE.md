@@ -98,7 +98,7 @@ Data transitions on the **falling** BCLK edge; Akiko samples on the **rising** e
 | `upstream/utils/maths.c` | ✅ Correct | BCD/time arithmetic |
 | `upstream/utils/timer.c` | ✅ Correct | 8 ms software timer |
 | `upstream/pio/commo.pio` | ✅ Correct | COMMO PIO |
-| `src/disc_image.c` | ✅ Correct | ISO/BIN/NRG/MDF parsers |
+| `src/disc_image.c` | ✅ Correct | ISO/BIN/NRG/MDF parsers; CUE PREGAP+INDEX00 fix; NRG lead-out skip fix |
 | `src/sector_cache.c` | ✅ Correct | SD prefetch ring buffer + flush_gen race fix |
 | `src/subcode.c` | ✅ Correct | Q-channel generation |
 | `pio/subcode_encoder.pio` | ✅ Correct | SUB signal output on GPIO 5-8 |
@@ -111,9 +111,10 @@ Data transitions on the **falling** BCLK edge; Akiko samples on the **rising** e
 | `src/rotary_mcp.cpp` | ✅ Correct | MCP23017 encoder |
 | `src/ui.c` | ✅ Correct | UI event handler |
 | `src/webserver.c` | ✅ Correct | WiFi web interface |
-| `src/da_output.c` | ✅ Correct | DA DMA engine — 24-bit I2S expand, DRQ flag, FIFO drain on stop |
+| `src/da_output.c` | ✅ Correct | DA DMA engine — 24-bit I2S expand, DRQ flag, FIFO drain on stop, M17SINE clkdiv trim |
+| `src/rotary_mcp.cpp` | ✅ Correct | MCP23017 encoder + logger toggle button (GPB0) |
 | `src/commo_bridge.c` | ✅ Correct | PLAY_TRACK_OPC BCD decode, TRAY_IN seek, audio mode set, DRQ packet |
-| `src/player_stub.c` | ✅ Correct | Upstream player interface stubs |
+| `src/upstream_player_shim.c` | ✅ Correct | Linkage shim — provides player_interface globals and no-op player() for upstream cmd_hndl.c |
 | `src/fft.c` | ✅ Correct | 256-point Q15 radix-2 FFT with Hann window |
 | `src/effects.c` | ✅ Correct | 5 demoscene visualiser effects (SPECTRUM/SCOPE/RASTER/COMBO/SPACEBALLS) |
 | `src/vis_audio.c` | ✅ Correct | DA DMA snoop — SPSC ring, left-channel extraction |
@@ -145,7 +146,7 @@ Real hardware SMs (CXD2500BQ/DSIC2/Q-channel) are only loaded when
 
 **Location:** `tests/host/`  
 **Run:** `make && ./cd32_tests -v`  
-**Result:** 149 tests, 0 failures
+**Result:** 305 tests, 0 failures
 
 | Group | Tests | What it covers |
 |-------|-------|----------------|
@@ -163,6 +164,17 @@ Real hardware SMs (CXD2500BQ/DSIC2/Q-channel) are only loaded when
 | `DoorTray` | 10 | Disc insert/eject state machine, ACTIVE pin, status bits |
 | `OpcResponses` | 1 | All 32 COMMO opcodes → correct status byte + drive state (table-driven) |
 | `MotorSledFake` | 10 | Motor active states, BCD MSF→LBA, seek LBA, virtual sled positioning |
+| `DiscFindTrack` | 8 | disc_find_track boundaries, single/multi-track, track type |
+| `TocResponse` | 6 | disc_build_toc_response BCD encoding, lead-out 0xAA, truncation |
+| `ConfigCrc` | 5 | CRC-32 known values, determinism, single-bit sensitivity |
+| `CueMsfArith` | 6 | CUE decimal→BCD→LBA conversion, PREGAP file-offset arithmetic |
+| `NrgTrackCalc` | 6 | NRG track length, lead-out/lead-in skip conditions |
+| `IsoLayout` | 6 | ISO parser output structure, disc_find_track, TOC lead-out |
+| `Webserver` | 19 | basename_no_ext, state_name, config key=val parser, ".." traversal guard, load-index bounds |
+| `Logger` | 22 | parse_bool truthy/falsy set, trim all whitespace variants, cmd_name known/unknown, ring buffer append/wrap/overflow, status byte flag decode |
+| `Config` | 17 | struct size, defaults field values, CRC validity after defaults, CRC excludes crc32 field, magic/version/CRC guard, flag bit orthogonality |
+| `DaExpand` | 10 | I2S word packing: zero sector, L/R separation, max/min int16_t, lower-half always zero, pair-N addressing, last pair, clkdiv 32/16 |
+| `EffectsColor` | 18 | rgb() RGB565 bswap packing, hsv() grey/red/black/distinct hues, copper_color() darkest/brightest/monotone, sample_to_y() centre/top/bottom/bounds |
 
 ### CsvReplay test windows
 
@@ -250,15 +262,4 @@ All four captures share the same 10 test names (W0–W9) and assertion threshold
 
 ## Remaining work
 
-### Future — M17SINE phase-lock
-GPIO 9 carries the 16.9344 MHz master clock.  Currently unused for DA timing;
-long audio playback will accumulate crystal drift (±20–50 ppm → audible click).
-Fix: nudge `pio_sm_set_clkdiv()` from a M17SINE edge counter, or route GPIN0
-directly as PIO clock source (verify RP2350 §4.6 support).
-
-### Future — add logger trigger button
-Add a physical button (or USB command) that starts/stops/flushes the SD log immediately.
-
-### Future — README.md audit
-Check README.md for outdated or incorrect claims introduced before the parallel-bus
-removal and replace with accurate descriptions.
+_All items complete._

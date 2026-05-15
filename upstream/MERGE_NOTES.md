@@ -81,7 +81,7 @@ The merge brings these benefits:
 | `include/timer.h` | `commo_bridge.c` + `upstream_types.h` — timer_init() |
 | `include/sts_q_id.h` | `commo_bridge.c` — Get/Store_update_status |
 | `include/cmd_hndl.h` | `commo_bridge.c` — command_handler, Dispatcher |
-| `include/player.h` | `player_stub.c` + `commo_bridge.c` — player_interface decl |
+| `include/player.h` | `upstream_player_shim.c` + `commo_bridge.c` — player_interface decl |
 | `pio/commo.pio` | CMakeLists.txt — pioasm generates `commo.pio.h` |
 | `pio/cxd2500_tx.pio` | CMakeLists.txt — generated but unused (future use) |
 | `pio/dsic2.pio` | CMakeLists.txt — generated but unused (future use) |
@@ -91,7 +91,7 @@ The merge brings these benefits:
 
 | File | Reason |
 |------|--------|
-| `core/player.c` | cd32_ode has its own cxd2545q.c command pipeline. `src/player_stub.c` provides the `player_interface` / `player_error` / `process_id` / `function_id` globals required by `cmd_hndl.c` for linkage |
+| `core/player.c` | cd32_ode has its own cxd2545q.c command pipeline. `src/upstream_player_shim.c` provides the `player_interface` / `player_error` / `process_id` / `function_id` globals required by `cmd_hndl.c` for linkage |
 | `core/service.c` | Service mode (laser/focus/motor tests) requires real hardware |
 | `core/play.c` | cd32_ode's sector cache replaces physical play sequences |
 | `drivers/servo.c` | Real DSIC2 servo — not applicable without real hardware |

@@ -81,6 +81,7 @@ typedef enum {
     ROTARY_CCW        = 2,  // Turned counter-clockwise (one detent)
     ROTARY_PRESS      = 3,  // Button pressed (falling edge, debounced)
     ROTARY_LONG_PRESS = 4,  // Button held for > ROTARY_LONG_PRESS_MS
+    ROTARY_LOG_PRESS  = 5,  // Logger toggle button (MCP23017 GPB0) pressed
 } rotary_event_t;
 
 // Long press threshold in milliseconds

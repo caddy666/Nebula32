@@ -29,8 +29,9 @@
 //          → Akiko (U5) + LC78835M DAC (U31)
 //
 // CLOCK:
-//   sys_clk = 135,475,200 Hz gives exact PIO clkdiv = 48 for 1× BCLK
-//   (1,411,200 Hz) and clkdiv = 24 for 2× BCLK (2,822,400 Hz).
+//   sys_clk = 135,475,200 Hz gives exact PIO clkdiv = 32 for 1× BCLK
+//   (2,117,550 Hz) and clkdiv = 16 for 2× BCLK (4,234,200 Hz).
+//   [Original Commodore ref: clkdiv=48 → 1,411,200 Hz; clkdiv=24 → 2,822,400 Hz]
 // =============================================================================
 
 #include "pico/stdlib.h"
@@ -74,7 +75,7 @@
 // System clock
 // =============================================================================
 // 135,475,200 Hz = 16,934,400 × 8.
-// This gives PIO clkdiv = 48 → BCLK = 1,411,200 Hz (1× CD speed, exact).
+// This gives PIO clkdiv = 32 → SM at 4.234 MHz → BCLK = 2.117 MHz (1× CD).
 // The RP2350 can reach this frequency without overclocking — it is below the
 // default 150 MHz so no voltage bump is needed.
 #define TARGET_SYS_CLK_KHZ  135475
@@ -179,6 +180,21 @@ static void core1_main(void) {
 }
 
 // =============================================================================
+// M17SINE phase-lock: measure reference clock and trim DA PIO clkdiv
+// =============================================================================
+// The RP2350 hardware frequency counter measures GPIN0 (M17SINE on GPIO 9)
+// using clk_ref as the reference.  Measurement takes ~1 ms (blocking).
+// Called every 2 s from the main loop during audio playback.
+static uint32_t s_m17sine_hz = 0;   // Last measured value (0 = not yet measured)
+
+static void m17sine_nudge_tick(void) {
+    uint32_t khz = frequency_count_khz(CLOCKS_FC0_SRC_VALUE_CLKSRC_GPIN0);
+    if (khz == 0) return;   // M17SINE not present (bench test without CD32)
+    s_m17sine_hz = khz * 1000u;
+    da_nudge_clkdiv_to_m17sine(s_m17sine_hz);
+}
+
+// =============================================================================
 // Periodic timer callback (1 ms, Core 0)
 // =============================================================================
 static bool periodic_update_cb(struct repeating_timer *t) {
@@ -259,6 +275,20 @@ static void handle_console(void) {
         const char *names[] = { "Spectrum", "Scope", "Raster", "Combo", "Spaceballs" };
         printf("[VIS] Effect: %s\n", names[s_vis_ctx.mode]);
     }
+    else if (c == 'm' || c == 'M') {
+        uint32_t khz = frequency_count_khz(CLOCKS_FC0_SRC_VALUE_CLKSRC_GPIN0);
+        s_m17sine_hz = khz * 1000u;
+        uint32_t fixed = da_get_clkdiv_fixed();
+        int32_t ppm = 0;
+        if (s_m17sine_hz > 0) {
+            uint32_t nominal_hz = 16934400u;
+            ppm = (int32_t)(((int64_t)s_m17sine_hz - nominal_hz) * 1000000 / nominal_hz);
+        }
+        printf("[M17] M17SINE=%lu Hz  clkdiv=%u.%u/256  drift=%ld ppm\n",
+               (unsigned long)s_m17sine_hz,
+               (unsigned)(fixed >> 8), (unsigned)(fixed & 0xFF),
+               (long)ppm);
+    }
     else if (c == 'h' || c == 'H' || c == '?') {
         printf("\nCD32 ODE Console Commands:\n");
         printf("  1-9  — switch disc image\n");
@@ -269,6 +299,7 @@ static void handle_console(void) {
         printf("  R    — reset (flush cache, seek to 0)\n");
         printf("  G    — toggle SD logging on/off\n");
         printf("  F    — force flush log buffer now\n");
+        printf("  M    — measure M17SINE frequency and show clkdiv drift\n");
         printf("  V    — cycle visualiser effect (during CD-DA playback)\n");
         printf("  H/?  — this help\n\n");
     }
@@ -452,13 +483,22 @@ int main(void) {
     printf("[MAIN] System ready — CD32 can now access the drive\n");
     printf("[MAIN] DA: %s speed  |  BCLK: %lu Hz\n",
            da_is_double_speed() ? "2x" : "1x",
+           /* orig Commodore ref: / (da_is_double_speed() ? 24u : 48u) */
            (unsigned long)(TARGET_SYS_CLK_KHZ * 1000ul
-                           / (da_is_double_speed() ? 24u : 48u) / 2u));
+                           / (da_is_double_speed() ? 16u : 32u) / 2u));
     printf("[MAIN] Type H for console help\n\n");
 
     // ---- Core 0 main loop ----
+    absolute_time_t s_nudge_next = make_timeout_time_us(2000000);
+
     while (true) {
         handle_console();
+
+        // M17SINE phase-lock: trim DA clkdiv every 2 s during audio playback
+        if (da_is_playing() && absolute_time_diff_us(get_absolute_time(), s_nudge_next) <= 0) {
+            m17sine_nudge_tick();
+            s_nudge_next = make_timeout_time_us(2000000);
+        }
 
         if (ui_tick()) {
             uint32_t sel = ui_get_selected_index();

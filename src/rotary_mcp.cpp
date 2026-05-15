@@ -44,6 +44,7 @@ extern "C" {
 #define MCP_PIN_CLK  0   // GPA0 = encoder CLK (A)
 #define MCP_PIN_DT   1   // GPA1 = encoder DT  (B)
 #define MCP_PIN_SW   2   // GPA2 = push-button  (active low)
+#define MCP_PIN_LOG  8   // GPB0 = logger toggle button (active low)
 
 // ---------------------------------------------------------------------------
 // Event ring buffer
@@ -85,11 +86,16 @@ static volatile int32_t  s_half_steps  = 0;
 static absolute_time_t   s_last_turn_time;
 
 // ---------------------------------------------------------------------------
-// Button state
+// Button state — encoder push-button
 // ---------------------------------------------------------------------------
 static bool            s_btn_pressed    = false;
 static absolute_time_t s_btn_press_time;
 static bool            s_btn_last_level = true;   // idle = high (active-low btn)
+
+// Logger toggle button (GPB0) state
+static bool            s_log_pressed    = false;
+static absolute_time_t s_log_press_time;
+static bool            s_log_last_level = true;   // idle = high (active-low btn)
 
 // ---------------------------------------------------------------------------
 // MCP23017 instance and deferred-read flag
@@ -113,7 +119,7 @@ extern "C" void rotary_init(void) {
 
     s_mcp->setup(false, false);      // no interrupt mirroring needed (polled)
     s_mcp->set_io_direction(0xFFFF); // all pins input
-    s_mcp->set_pullup(0x0007);       // pull-ups on GPA0/1/2
+    s_mcp->set_pullup(0x0107);       // pull-ups on GPA0/1/2 + GPB0 (logger button)
 
     // Prime decoder from current levels
     s_mcp->update_and_get_input_values();
@@ -184,6 +190,23 @@ extern "C" rotary_event_t rotary_poll(int *steps_out) {
                         } else if (held_ms >= ROTARY_BTN_DEBOUNCE_MS) {
                             eq_push(ROTARY_PRESS, 1);
                         }
+                    }
+                }
+            }
+
+            // ---- Logger toggle button (GPB0) ----
+            bool log_sw = s_mcp->get_last_input_pin_value(MCP_PIN_LOG);
+            if (log_sw != s_log_last_level) {
+                absolute_time_t now4 = get_absolute_time();
+                s_log_last_level = log_sw;
+                if (!log_sw) {
+                    s_log_pressed    = true;
+                    s_log_press_time = now4;
+                } else if (s_log_pressed) {
+                    int64_t held_ms = absolute_time_diff_us(s_log_press_time, now4) / 1000;
+                    s_log_pressed   = false;
+                    if (held_ms >= ROTARY_BTN_DEBOUNCE_MS) {
+                        eq_push(ROTARY_LOG_PRESS, 1);
                     }
                 }
             }

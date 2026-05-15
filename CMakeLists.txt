@@ -208,8 +208,8 @@ add_executable(cd32_ode
     upstream/utils/maths.c
     upstream/utils/timer.c
 
-    # ---- Player stub: satisfies player_interface linkage for upstream cmd_hndl.c ----
-    src/player_stub.c
+    # ---- Upstream player shim: satisfies player_interface linkage for upstream cmd_hndl.c ----
+    src/upstream_player_shim.c
 
     # ---- Upstream: PIO hardware abstraction ----
     # NOTE: We do NOT include upstream/hal/pio_hw.c in the build.

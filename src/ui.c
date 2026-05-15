@@ -131,6 +131,14 @@ bool ui_tick(void) {
             s_cursor     = UINT32_MAX;  // Sentinel for "eject"
             break;
 
+        case ROTARY_LOG_PRESS: {
+            bool now_log = !logger_is_enabled();
+            logger_set_enabled(now_log);
+            if (!now_log) logger_flush();
+            printf("[UI] Logger button: %s\n", now_log ? "ENABLED" : "DISABLED (flushed)");
+            break;
+        }
+
         default:
             break;
         }

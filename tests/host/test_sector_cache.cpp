@@ -1,3 +1,25 @@
+// =============================================================================
+// test_sector_cache.cpp — Lock-free sector prefetch ring buffer tests
+//
+// Intent: verify the sector_cache_t ring buffer (src/sector_cache.c) that
+// mediates between Core 1 SD prefetch and Core 0 DA playback.  All tests
+// inject slots directly (bypassing SD I/O) to stay deterministic on the host.
+//
+// Key invariants under test:
+//   - After init: all SECTOR_BUFFER_COUNT slots are invalid, next_fetch_lba=0.
+//   - sector_cache_ready() returns true only for slots that are valid and LBA-
+//     matching; false on empty cache or LBA miss.
+//   - sector_cache_get() copies the injected payload into buf_out and reports
+//     the correct byte count; returns false on miss.
+//   - sector_cache_flush() immediately invalidates all slots regardless of
+//     fill state; next_fetch_lba is unaffected by flush alone.
+//   - sector_cache_seek() flushes and resets next_fetch_lba to the target LBA.
+//   - sector_cache_release_before() frees all slots with LBA < current_lba,
+//     leaving slots at or above the cursor intact.
+//   - flush_gen counter increments on each flush, preventing a Core 1 prefetch
+//     that started before the flush from committing a stale slot.
+// =============================================================================
+
 #include <CppUTest/TestHarness.h>
 #include <string.h>
 #include <stdint.h>

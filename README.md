@@ -105,6 +105,7 @@ Pico 2 GPIO 29 (SCL) ──→ MCP23017 SCL
 MCP23017 GPA0 ←── Encoder CLK
 MCP23017 GPA1 ←── Encoder DT
 MCP23017 GPA2 ←── Encoder SW
+MCP23017 GPB0 ←── Logger button (momentary, to GND)
 ```
 
 **Controls:**
@@ -112,6 +113,7 @@ MCP23017 GPA2 ←── Encoder SW
 - **Fast spin** — jumps 5 entries per click for long lists
 - **Short press** — load the highlighted disc
 - **Long press** — eject current disc
+- **Logger button** (GPB0) — toggle SD card logging on/off; flushed immediately when turning off
 
 ---
 
@@ -238,7 +240,7 @@ cd32_ode/
 │   ├── main.c              Entry point, PIO setup, Core 1 launch, console
 │   ├── da_output.c         DA I2S PIO + DMA ping-pong (GPIO 0/1/2)
 │   ├── commo_bridge.c      COMMO bus driver + opcode dispatch
-│   ├── player_stub.c       Satisfies upstream player.h linkage
+│   ├── upstream_player_shim.c  Satisfies upstream player.h linkage
 │   ├── disc_image.c        ISO/BIN/NRG/MDF parsers
 │   ├── sector_cache.c      Read-ahead ring buffer prefetch (Core 1)
 │   ├── subcode.c           Q-channel P/Q/ISRC/MCN generation
@@ -248,6 +250,9 @@ cd32_ode/
 │   ├── selftest.c          Hardware self-test suite
 │   ├── sd_card.c           SDIO mount and image scan
 │   ├── hw_config.c         no-OS-FatFS hardware configuration
+│   ├── fft.c               256-point Q15 radix-2 FFT with Hann window
+│   ├── effects.c           Demoscene visualiser effects (spectrum/scope/raster/combo/spaceballs)
+│   ├── vis_audio.c         DA DMA audio snoop — SPSC ring, left-channel extraction
 │   ├── display.cpp         ST7789 cover art display
 │   ├── rotary_mcp.cpp      MCP23017 rotary encoder driver
 │   ├── ui.c                Disc selector UI event handler
@@ -400,7 +405,7 @@ Connect a serial terminal at 115200 baud to the Pico 2's USB port:
 - Scope IF_CLK (GPIO 15) and IF_DATA (GPIO 16) with a logic analyser — you should see COMMO packets after power-on
 - Verify GPIO 17 (IF_DIR) toggles direction correctly when the Pico sends responses
 - Enable logging and check `cd32_cd.log` for COMMO entries — if none appear, the COMMO bus is not reaching the Pico
-- Confirm M17SINE (GPIO 9) shows the 16.9344 MHz clock — the Pico uses it to lock `clk_peri`
+- Confirm M17SINE (GPIO 9) shows the 16.9344 MHz clock — the firmware receives it as a reference but does not currently phase-lock to it; the DA PIO runs from the Pico's own 135.475 MHz crystal
 
 **SD card mount fails**
 - Check pull-up resistors on CMD and DAT0–3 (10 kΩ to 3.3 V)

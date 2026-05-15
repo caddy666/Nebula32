@@ -51,7 +51,7 @@ void da_set_audio_mode(bool is_audio);
 
 // Change the DA output clock rate at runtime.
 // Safe to call while the SM is running (adjusts PIO clkdiv only).
-// double_speed: false = 1× (BCLK 1.4112 MHz), true = 2× (BCLK 2.8224 MHz).
+// double_speed: false = 1× (BCLK 2.117 MHz), true = 2× (BCLK 4.234 MHz).
 void da_set_double_speed(bool double_speed);
 
 // Returns the current speed setting.
@@ -82,6 +82,20 @@ bool da_is_playing(void);
 // Returns the approximate LBA currently being streamed (next sector to fetch).
 // Valid during play and pause; 0 when stopped.
 uint32_t da_get_current_lba(void);
+
+// ---------------------------------------------------------------------------
+// M17SINE phase-lock (clkdiv trim)
+// ---------------------------------------------------------------------------
+
+// Adjust the DA PIO clkdiv so BCLK tracks the measured M17SINE frequency.
+// Call periodically from the Core 0 main loop during audio playback.
+// m17sine_hz: measured M17SINE frequency in Hz (from frequency_count_khz × 1000).
+// Does nothing if m17sine_hz is outside the plausible 16.8–17.1 MHz range.
+void da_nudge_clkdiv_to_m17sine(uint32_t m17sine_hz);
+
+// Returns the current effective clkdiv as a fixed-point 16.8 value (int×256 + frac).
+// Useful for console diagnostics.
+uint32_t da_get_clkdiv_fixed(void);
 
 // ---------------------------------------------------------------------------
 // DRQ signalling

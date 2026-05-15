@@ -1,3 +1,19 @@
+// =============================================================================
+// test_lba_msf.cpp — LBA ↔ MSF conversion and BCD encoding tests
+//
+// Intent: verify the lba_to_msf() / msf_to_lba() functions in cd_types.h
+// and that all callers get the Red Book lead-in offset right.
+//
+// Key invariants under test:
+//   - lba_to_msf() adds the 150-frame (2-second) lead-in offset before
+//     converting: LBA 0 → 00:02:00, LBA 75 → 00:03:00, LBA 150 → 00:04:00.
+//   - msf_to_lba() is the exact inverse: subtracts 150 frames before returning.
+//   - Round-trip: msf_to_lba(lba_to_msf(n)) == n for all valid LBAs.
+//   - BCD encoding: minute/second/frame fields are stored as packed BCD
+//     (high nibble = tens digit, low nibble = units digit).
+//   - LBA 0 produces BCD 0x00, 0x02, 0x00 — not 0x00, 0x00, 0x00.
+// =============================================================================
+
 #include <CppUTest/TestHarness.h>
 extern "C" {
 #include "cd_types.h"

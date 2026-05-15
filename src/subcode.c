@@ -77,25 +77,23 @@ void subcode_build_q_position(uint8_t track_no, uint8_t index,
     buf[2] = ((index / 10) << 4) | (index % 10);
 
     // ---- Relative time (MM:SS:FF since track start) ----
-    // If in pregap (index == 0), relative time counts DOWN towards 00:00:00.
+    // Relative time counts from 00:00:00 at the INDEX 01 point — it must NOT
+    // include the 150-sector lead-in offset that lba_to_msf() adds for absolute
+    // time.  Compute BCD directly from the frame count.
     uint32_t rel_lba;
     if (index == 0 && disc_lba < track_start_lba) {
-        // Count down: pregap duration - frames elapsed
-        rel_lba = track_start_lba - disc_lba;
+        rel_lba = track_start_lba - disc_lba;  // pregap: count down to 00:00:00
     } else {
-        // Count up: frames elapsed since track index 1 start
         rel_lba = (disc_lba >= track_start_lba) ? (disc_lba - track_start_lba) : 0;
     }
-    // NOTE: lba_to_msf() adds the 150-sector lead-in offset, so relative time
-    // at track start (rel_lba=0) encodes as 00:02:00, not 00:00:00 as the Red
-    // Book specifies.  The Akiko deserialiser on real CD32 hardware tolerates
-    // this, but a strict Q-channel parser would disagree.  If relative-time
-    // accuracy becomes a compatibility issue, subtract 150 from rel_lba before
-    // calling lba_to_msf() and clamp to zero.
-    msf_t rel = lba_to_msf(rel_lba);
-    buf[3] = rel.minute;
-    buf[4] = rel.second;
-    buf[5] = rel.frame;
+    {
+        uint32_t rf = rel_lba % 75u;
+        uint32_t rs = (rel_lba / 75u) % 60u;
+        uint32_t rm = (rel_lba / 75u) / 60u;
+        buf[3] = (uint8_t)(((rm / 10u) << 4) | (rm % 10u));
+        buf[4] = (uint8_t)(((rs / 10u) << 4) | (rs % 10u));
+        buf[5] = (uint8_t)(((rf / 10u) << 4) | (rf % 10u));
+    }
 
     // ---- Reserved (byte 6 = 0x00 in Mode 1) ----
     buf[6] = 0x00;

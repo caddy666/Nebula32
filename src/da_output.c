@@ -67,6 +67,7 @@ static sector_cache_t *s_cache      = NULL;
 static uint32_t        s_next_lba   = 0;
 static bool            s_audio_mode = false; // true = CD-DA; enables vis_audio snoop
 static volatile bool   s_drq_pending = false; // set by ISR; cleared by da_drq_pending()
+static uint32_t        s_clkdiv_fixed = 32u * 256u; // 16.8 fixed-point: nominal 32×256 at 1×
 
 // ---------------------------------------------------------------------------
 // Forward declaration
@@ -270,8 +271,8 @@ static void __isr _dma_irq_handler(void) {
     // for that sector NOW so the subcode PIO has data from the first bit-clock.
     _push_subcode(s_buf_lba[done_buf ^ 1]);
 
-    uint32_t bytes;
-    if (sector_cache_get(s_cache, s_next_lba, s_raw, &bytes)) {
+    uint32_t bytes_unused;
+    if (sector_cache_get(s_cache, s_next_lba, s_raw, &bytes_unused)) {
         if (s_audio_mode) {
             vis_audio_push_sector(s_raw);  // visualiser needs raw PCM bytes
         }
@@ -377,6 +378,43 @@ void da_resume(void) {
 
 void da_set_audio_mode(bool is_audio) {
     s_audio_mode = is_audio;
+}
+
+// ---------------------------------------------------------------------------
+// da_nudge_clkdiv_to_m17sine — trim BCLK to match the CD32 reference clock
+// ---------------------------------------------------------------------------
+// Target clkdiv: sys_clk × speed_factor / m17sine_hz
+//   1× speed:  speed_factor = 4  (BCLK = M17SINE/8, clkdiv=32 nominal)
+//   2× speed:  speed_factor = 2  (BCLK = M17SINE/4, clkdiv=16 nominal)
+//
+// The 16.8 fixed-point representation of clkdiv is computed by multiplying
+// the rational result by 256, then splitting: int_part = result>>8, frac = result&0xFF.
+//
+// Clamp to ±0.5% of the nominal clkdiv to avoid runaway on a bad reading.
+void da_nudge_clkdiv_to_m17sine(uint32_t m17sine_hz) {
+    // Reject implausible readings (should be ~16.9344 MHz ± a few hundred ppm)
+    if (m17sine_hz < 16800000u || m17sine_hz > 17100000u) return;
+
+    uint32_t sys_hz    = clock_get_hz(clk_sys);
+    uint32_t factor    = s_double_speed ? 2u : 4u;
+
+    // Compute clkdiv × 256 with 64-bit intermediate to avoid overflow
+    uint64_t div_256   = ((uint64_t)sys_hz * factor * 256u) / m17sine_hz;
+
+    // Nominal clkdiv×256 for sanity-clamp (32×256=8192 at 1×, 16×256=4096 at 2×)
+    uint32_t nom_256   = (uint32_t)_clkdiv(s_double_speed) * 256u;
+    uint32_t half_pct  = nom_256 / 200u;  // 0.5% of nominal
+    if (div_256 < nom_256 - half_pct || div_256 > nom_256 + half_pct) return;
+
+    uint16_t div_int   = (uint16_t)(div_256 >> 8);
+    uint8_t  div_frac  = (uint8_t)(div_256 & 0xFF);
+
+    pio_sm_set_clkdiv_int_frac(DA_PIO, DA_SM, div_int, div_frac);
+    s_clkdiv_fixed = (uint32_t)div_256;
+}
+
+uint32_t da_get_clkdiv_fixed(void) {
+    return s_clkdiv_fixed;
 }
 
 bool da_is_playing(void) {

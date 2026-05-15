@@ -71,21 +71,20 @@ void sector_cache_seek(sector_cache_t *cache, uint32_t lba) {
     cache->next_fetch_lba = lba;
 }
 
+// ---------------------------------------------------------------------------
 // sector_cache_ready  (Core 0, lightweight presence check)
 // ---------------------------------------------------------------------------
 // Returns true if the cache holds a valid entry for `lba`, WITHOUT copying
-// any data.  Used to check whether a sector is ready before starting DMA.
+// any data.  Used by the test suite to verify prefetch state.
 bool sector_cache_ready(sector_cache_t *cache, uint32_t lba) {
     for (int i = 0; i < SECTOR_BUFFER_COUNT; i++) {
         volatile sector_slot_t *slot = &cache->slots[i];
-        if (slot->valid && slot->lba == lba) {
+        if (slot->valid && slot->lba == lba)
             return true;
-        }
     }
     return false;
 }
 
-// ---------------------------------------------------------------------------
 // ---------------------------------------------------------------------------
 // Attempt to find sector 'lba' in the cache.
 // On hit: copies up to SECTOR_RAW_SIZE bytes into buf_out, sets *bytes_out.

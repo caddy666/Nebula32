@@ -207,6 +207,10 @@ bool disc_parse_bin(disc_image_t *disc, const char *cue_path) {
     // Parse the CUE sheet
     char line[256];
     uint8_t current_track = 0;
+    // Running total of PREGAP sectors declared so far (not stored in BIN file).
+    // INDEX 01 LBAs include virtual pregap, so we subtract this from file offsets.
+    uint32_t accumulated_pregap = 0;
+
     while (f_gets(line, sizeof(line), &cue_file)) {
         // Trim leading whitespace
         char *p = line;
@@ -250,6 +254,25 @@ bool disc_parse_bin(disc_image_t *disc, const char *cue_path) {
                 trk->data_offset  = 16;
             }
 
+        } else if (strncmp(p, "PREGAP ", 7) == 0 && current_track > 0) {
+            // "PREGAP MM:SS:FF" — virtual silence NOT stored in BIN file.
+            // Accumulate so INDEX 01 file offsets are adjusted correctly.
+            uint8_t mm, ss, ff;
+            sscanf(p + 7, "%hhu:%hhu:%hhu", &mm, &ss, &ff);
+            accumulated_pregap += (uint32_t)mm * 60u * 75u
+                                + (uint32_t)ss * 75u
+                                + ff;
+
+        } else if (strncmp(p, "INDEX 00 ", 9) == 0 && current_track > 0) {
+            // "INDEX 00 MM:SS:FF" — pregap start (silence IS in BIN file).
+            uint8_t mm, ss, ff;
+            sscanf(p + 9, "%hhu:%hhu:%hhu", &mm, &ss, &ff);
+            msf_t msf;
+            msf.minute = ((mm / 10) << 4) | (mm % 10);
+            msf.second = ((ss / 10) << 4) | (ss % 10);
+            msf.frame  = ((ff / 10) << 4) | (ff % 10);
+            disc->tracks[current_track - 1].pregap_lba = msf_to_lba(msf);
+
         } else if (strncmp(p, "INDEX 01 ", 9) == 0 && current_track > 0) {
             // "INDEX 01 MM:SS:FF" — track start in disc time
             uint8_t mm, ss, ff;
@@ -262,10 +285,10 @@ bool disc_parse_bin(disc_image_t *disc, const char *cue_path) {
 
             uint32_t lba = msf_to_lba(msf);
             track_t *trk = &disc->tracks[current_track - 1];
-            trk->start_lba   = lba;
-            trk->pregap_lba  = lba;
-            // File byte offset = LBA × sector_size
-            trk->file_offset = lba * trk->sector_size;
+            trk->start_lba  = lba;
+            if (trk->pregap_lba == 0) trk->pregap_lba = lba;
+            // Subtract accumulated virtual pregap: those sectors aren't in the file.
+            trk->file_offset = (lba - accumulated_pregap) * trk->sector_size;
         }
     }
 
@@ -388,11 +411,17 @@ bool disc_parse_nrg(disc_image_t *disc) {
                 if (is_v2) {
                     file_off = be64(*(uint64_t*)(entry + 28));
                 } else {
-                    file_off = be32(*(uint32_t*)(entry + 28));
+                    // v1 (DAOI): 30-byte entries have no file-offset field.
+                    // Data is laid out sequentially from byte 0 of the image.
+                    file_off = (uint64_t)idx0_lba * raw_sector_size;
                 }
 
-                // Skip lead-out entries (track_mode 0x00 with idx1=end=0)
+                // Skip lead-in (idx1=0, end=0) and lead-out (idx1==end, zero-length)
                 if (idx1_lba == 0 && end_lba == 0) {
+                    bytes_left -= entry_size;
+                    continue;
+                }
+                if (end_lba <= idx1_lba) {
                     bytes_left -= entry_size;
                     continue;
                 }

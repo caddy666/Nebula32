@@ -1,3 +1,23 @@
+// =============================================================================
+// test_priority.cpp — Mixed priority tests: cadence, stall simulation, Q-channel
+//
+// Intent: cover cross-cutting concerns that don't fit cleanly into a single
+// source-file test group.  Each section is labelled with its focus area.
+//
+//   01 — SectorCadence: validates the 13.333 ms (2× speed) sector delivery
+//        deadline.  Uses synthetic delivery timestamps; no real sleeps.
+//
+//   02 — StallSim: exercises the SD-card stall probability model used to
+//        estimate worst-case cache drain rates under high seek activity.
+//
+//   03 — SdStallSim: similar stall counting with different seed/scale params.
+//
+//   04 — QSubchannel: verifies relative-MSF (bytes 3-5) and absolute-MSF
+//        (bytes 7-9) produced by subcode_build_q_position().  Relative time
+//        must be a direct frame-count BCD with no lead-in offset (BUG-1);
+//        absolute time must include the 150-frame lead-in via lba_to_msf().
+// =============================================================================
+
 #include <CppUTest/TestHarness.h>
 #include <stdint.h>
 #include <string.h>
@@ -218,15 +238,14 @@ TEST(SdStallSim, StallCountScalesWithSectors)
 TEST_GROUP(QSubchannel) {};
 
 /* 75 sectors into a track starting at LBA 0.
- * rel_lba=75 → lba_to_msf(75): total=225 → 00:03:00 (BCD).
- * lba_to_msf adds the 150-sector disc offset to rel_lba, matching the
- * implementation in subcode.c. */
+ * rel_lba = disc_lba - track_start = 75 - 0 = 75 frames = 1 second → 00:01:00.
+ * Direct BCD from frame count; no lead-in offset applied (BUG-1 fix). */
 TEST(QSubchannel, RelMsf_75SectorsIn_Is000300)
 {
     uint8_t buf[QCHANNEL_SIZE];
     subcode_build_q_position(1, 1, false, 0, 75, buf);
     BYTES_EQUAL(0x00, buf[3]);   /* relative minute */
-    BYTES_EQUAL(0x03, buf[4]);   /* relative second  */
+    BYTES_EQUAL(0x01, buf[4]);   /* relative second  */
     BYTES_EQUAL(0x00, buf[5]);   /* relative frame   */
 }
 
@@ -241,13 +260,14 @@ TEST(QSubchannel, AbsMsf_DiscLba225_Is000500)
 }
 
 /* Pregap (index 0): disc_lba 75 sectors before track start → rel counts down.
- * rel_lba = track_start - disc_lba = 150 - 75 = 75 → lba_to_msf(75) = 00:03:00 (BCD). */
+ * rel_lba = track_start - disc_lba = 150 - 75 = 75 frames = 1 second → 00:01:00.
+ * Direct BCD from frame count; no lead-in offset applied (BUG-1 fix). */
 TEST(QSubchannel, Pregap_RelCountsDown_Is000300)
 {
     uint8_t buf[QCHANNEL_SIZE];
     subcode_build_q_position(1, 0, false, 150, 75, buf);
     BYTES_EQUAL(0x00, buf[3]);
-    BYTES_EQUAL(0x03, buf[4]);
+    BYTES_EQUAL(0x01, buf[4]);
     BYTES_EQUAL(0x00, buf[5]);
 }
 

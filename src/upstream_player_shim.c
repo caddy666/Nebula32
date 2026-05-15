@@ -1,5 +1,5 @@
 // =============================================================================
-// player_stub.c — player_interface stub for upstream cmd_hndl.c linkage
+// upstream_player_shim.c — linkage shim satisfying upstream player.h symbols
 // =============================================================================
 //
 // The upstream cmd_hndl.c writes commands into player_interface, which is
