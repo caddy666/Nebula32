@@ -42,38 +42,22 @@ pico_sdk_init()
 # =============================================================================
 # BUILD_WITH_COMMO: Enable the COMMO 3-wire serial bus driver.
 #   Required for real CD32 hardware connection (GPIO 15/16/17).
-#   When ON: rotary encoder is disabled (GPIO conflict on 15-17).
 #   When OFF: COMMO bridge compiles but does nothing (safe default).
 option(BUILD_WITH_COMMO   "Enable upstream COMMO 3-wire bus (real CD32 hardware)" OFF)
 
-# BUILD_WITH_ROTARY: Enable the rotary encoder disc selector.
-#   Uses GPIO 15/16/17 — conflicts with COMMO bus.
-#   Cannot be ON at the same time as BUILD_WITH_COMMO.
+# BUILD_WITH_ROTARY: Enable the MCP23017-based rotary encoder disc selector.
+#   Runs over I2C1 (GPIO 26/27) — no conflict with COMMO bus (GPIO 15-17).
 option(BUILD_WITH_ROTARY  "Enable rotary encoder (development/standalone)"        ON)
 
 # BUILD_WITH_UPSTREAM_SERVO: Include the real hardware servo/play modules.
 #   Only useful when BUILD_WITH_COMMO=ON and a real CXD2500BQ is wired up.
 option(BUILD_WITH_UPSTREAM_SERVO "Include DSIC2/servo modules (real hardware)" OFF)
 
-if(BUILD_WITH_COMMO AND BUILD_WITH_ROTARY)
-    message(WARNING "BUILD_WITH_COMMO and BUILD_WITH_ROTARY both ON: "
-                    "GPIO 15-17 conflict. Rotary encoder disabled.")
-    set(BUILD_WITH_ROTARY OFF)
-endif()
-
 # =============================================================================
 # Compile-time pin / buffer configuration
 # =============================================================================
 add_compile_definitions(
-    # ---- CXD2545Q parallel data bus ----
-    CXD_DATA_BASE_PIN=0     # D0–D7 on GPIO 0–7
-    CXD_WR_PIN=8            # /WR strobe from 68EC020
-    CXD_RD_PIN=9            # /RD strobe from 68EC020
-    CXD_CS_PIN=10           # /CS chip select from 68EC020
-    CXD_A0_PIN=11           # Address bit 0
-    CXD_A1_PIN=12           # Address bit 1
-    CXD_IRQ_PIN=13          # /IRQ output to 68EC020 (active low)
-    CXD_RESET_PIN=14        # /RESET input from 68EC020 (active low)
+    CXD_RESET_PIN=14        # RESET from CD32 26-pin connector pin 7
 
     # ---- Subcode serial output (optional — for external subcode connector) ----
     CXD_SUBCODE_PIN=24      # Serialised subcode output (GPIO24, optional)
@@ -214,8 +198,6 @@ add_executable(cd32_ode
 
 # ---- PIO programs (assembled at build time by pioasm) ----
 pico_generate_pio_header(cd32_ode
-    ${CMAKE_CURRENT_SOURCE_DIR}/pio/parallel_bus.pio)
-pico_generate_pio_header(cd32_ode
     ${CMAKE_CURRENT_SOURCE_DIR}/pio/subcode_encoder.pio)
 pico_generate_pio_header(cd32_ode
     ${CMAKE_CURRENT_SOURCE_DIR}/pio/i2s_audio.pio)
@@ -243,7 +225,7 @@ target_include_directories(cd32_ode PRIVATE
 target_link_libraries(cd32_ode
     pico_stdlib
     pico_multicore          # Dual-core launch (Core 1 bus handler)
-    hardware_pio            # PIO for parallel bus and subcode encoder
+    hardware_pio            # PIO for DA output, subcode encoder, and COMMO bus
     hardware_dma            # DMA for sector transfers and I2S audio
     hardware_pwm            # (Available for future use)
     hardware_irq            # Fast IRQ for DMA completion (audio ping-pong)

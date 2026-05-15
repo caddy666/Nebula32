@@ -4,7 +4,7 @@
 //
 // Run this BEFORE connecting the Pico 2 to the CD32 motherboard to verify:
 //
-//   1. GPIO data bus pins pull up and down freely (no shorts to VCC/GND)
+//   1. GPIO DA/SUB serial output pins pull up and down freely (no shorts to VCC/GND)
 //   2. SD card mounts and a disc image can be opened and read
 //
 // Pure-logic tests (MSF/LBA conversion, subcode CRC, EDC/ECC, sector
@@ -56,8 +56,12 @@ static int s_fail = 0;
 static void test_gpio(void) {
     TEST_SECTION("GPIO Configuration");
 
-    // Verify data bus pins (0-7) are configurable as inputs (no short to VCC/GND)
-    for (int pin = 0; pin <= 7; pin++) {
+    // Verify DA/SUB serial output pins (0-8) are configurable as inputs (no short to VCC/GND)
+    static const char *const pin_names[] = {
+        "DA_DATA", "DA_BCLK", "DA_LRCLK", "DA_C2PO", "DA_EMPH",
+        "SUB_DATA", "SUB_CLK", "SUB_WFCLK", "SUB_SCOR"
+    };
+    for (int pin = 0; pin <= 8; pin++) {
         gpio_init(pin);
         gpio_set_dir(pin, GPIO_IN);
         // A shorted pin would read back a fixed level regardless of pull direction
@@ -69,8 +73,9 @@ static void test_gpio(void) {
         bool read_low = gpio_get(pin);
         gpio_disable_pulls(pin);
 
-        char label[32];
-        snprintf(label, sizeof(label), "D%d can be pulled high and low", pin);
+        char label[48];
+        snprintf(label, sizeof(label), "GPIO%d (%s) can be pulled high and low",
+                 pin, pin_names[pin]);
         TEST_ASSERT(read_high && !read_low, label);
     }
 

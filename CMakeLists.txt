@@ -32,13 +32,11 @@ pico_sdk_init()
 # =============================================================================
 # BUILD_WITH_COMMO: Enable the COMMO 3-wire serial bus driver.
 #   Required for real CD32 hardware connection (GPIO 15/16/17).
-#   When ON: rotary encoder is disabled (GPIO conflict on 15-17).
 #   When OFF: COMMO bridge compiles but does nothing (safe default).
 option(BUILD_WITH_COMMO   "Enable upstream COMMO 3-wire bus (real CD32 hardware)" OFF)
 
-# BUILD_WITH_ROTARY: Enable the rotary encoder disc selector.
-#   Uses GPIO 15/16/17 — conflicts with COMMO bus.
-#   Cannot be ON at the same time as BUILD_WITH_COMMO.
+# BUILD_WITH_ROTARY: Enable the MCP23017-based rotary encoder disc selector.
+#   Runs over I2C1 (GPIO 26/27) — no conflict with COMMO bus (GPIO 15-17).
 option(BUILD_WITH_ROTARY  "Enable rotary encoder (development/standalone)"        ON)
 
 # BUILD_WITH_UPSTREAM_SERVO: Include the real hardware servo/play modules.

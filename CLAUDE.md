@@ -146,7 +146,7 @@ Real hardware SMs (CXD2500BQ/DSIC2/Q-channel) are only loaded when
 
 **Location:** `tests/host/`  
 **Run:** `make && ./cd32_tests -v`  
-**Result:** 323 tests, 0 failures
+**Result:** 355 tests, 0 failures
 
 | Group | Tests | What it covers |
 |-------|-------|----------------|
@@ -170,10 +170,13 @@ Real hardware SMs (CXD2500BQ/DSIC2/Q-channel) are only loaded when
 | `CueMsfArith` | 6 | CUE decimal→BCD→LBA conversion, PREGAP file-offset arithmetic |
 | `NrgTrackCalc` | 6 | NRG track length, lead-out/lead-in skip conditions |
 | `IsoLayout` | 6 | ISO parser output structure, disc_find_track, TOC lead-out |
+| `LbaFileOffset` | 3 | LBA→byte-offset formula: ISO (×2048), raw BIN (×2352), multi-track non-zero start_lba |
 | `Webserver` | 19 | basename_no_ext, state_name, config key=val parser, ".." traversal guard, load-index bounds |
 | `Logger` | 22 | parse_bool truthy/falsy set, trim all whitespace variants, cmd_name known/unknown, ring buffer append/wrap/overflow, status byte flag decode |
 | `Config` | 17 | struct size, defaults field values, CRC validity after defaults, CRC excludes crc32 field, magic/version/CRC guard, flag bit orthogonality |
 | `DaExpand` | 10 | I2S word packing: zero sector, L/R separation, max/min int16_t, lower-half always zero, pair-N addressing, last pair, clkdiv 32/16 |
+| `DaSpeed` | 16 | DA playback state machine: init 1×/2×, start/pause/resume/stop transitions, da_set_double_speed idempotency, clkdiv write capture, speed change while playing |
+| `CommoProtocol` | 13 | COMMO state machine: single-byte opcode, opcode+param, bad checksum, same-command detection, zero opcode ERR_SEND countdown, free-buffer clear, max-param opcode, A→B→A sequence, known bug (last_command not cleared on CMD_ERROR), TX data+checksum byte capture, BUSY/READY states |
 | `EffectsColor` | 18 | rgb() RGB565 bswap packing, hsv() grey/red/black/distinct hues, copper_color() darkest/brightest/monotone, sample_to_y() centre/top/bottom/bounds |
 | `CoverDir` | 6 | display.cpp and webserver.c agree on cover-art directory; FatFS volume prefix; trailing slash; default path starts in covers dir |
 | `SectorLayout` | 5 | disc_synthesise_sector() sync pattern, MSF header bytes, mode byte 0x01, data payload copy |

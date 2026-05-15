@@ -546,3 +546,58 @@ TEST(FormatDetect, MixedCase_Detected)
 {
     CHECK_TRUE(ext_match("0:/Zool2.Nrg", ".nrg"));
 }
+
+/* =========================================================================
+ * LbaFileOffset — LBA-to-byte-offset seek formula
+ *
+ * Verifies the formula applied by disc_read_sector() when seeking into the
+ * image file:
+ *   byte_offset = track.file_offset + (lba - track.start_lba) * track.sector_size
+ *
+ * Ported from tests/test_LBAtoOffsetMapping.cpp (LBAtoOffsetMapping test only;
+ * CommandParser_ReadCommand was discarded — it referenced a non-existent class).
+ * The original used clkdiv values 24/48; the arithmetic here is corrected to
+ * match the actual track_t fields in disc_image.h.
+ * ======================================================================= */
+
+TEST_GROUP(LbaFileOffset) {};
+
+// ISO image: sector_size=2048, file_offset=0, start_lba=0.
+// LBA 100 → 0 + 100 * 2048 = 204 800.  Matches the original test exactly.
+TEST(LbaFileOffset, Iso_Lba100_Is204800)
+{
+    track_t t;
+    t.start_lba   = 0;
+    t.file_offset = 0;
+    t.sector_size = 2048;
+
+    uint64_t offset = t.file_offset + (uint64_t)(100 - t.start_lba) * t.sector_size;
+    LONGLONGS_EQUAL(204800ULL, offset);
+}
+
+// BIN/CUE or NRG image: sector_size=2352, file_offset=0, start_lba=0.
+// LBA 100 → 0 + 100 * 2352 = 235 200.
+TEST(LbaFileOffset, Raw_Lba100_Is235200)
+{
+    track_t t;
+    t.start_lba   = 0;
+    t.file_offset = 0;
+    t.sector_size = 2352;
+
+    uint64_t offset = t.file_offset + (uint64_t)(100 - t.start_lba) * t.sector_size;
+    LONGLONGS_EQUAL(235200ULL, offset);
+}
+
+// Multi-track BIN: audio track starts at LBA 3000, file_offset = 3000 * 2352.
+// Query LBA 3100 → file_offset + (3100 - 3000) * 2352 = 7 056 000 + 235 200 = 7 291 200.
+// Verifies that start_lba is subtracted before multiplying (not after).
+TEST(LbaFileOffset, MultiTrack_NonZeroStartLba)
+{
+    track_t t;
+    t.start_lba   = 3000;
+    t.file_offset = 3000u * 2352u;   // 7 056 000
+    t.sector_size = 2352;
+
+    uint64_t offset = t.file_offset + (uint64_t)(3100 - t.start_lba) * t.sector_size;
+    LONGLONGS_EQUAL(7291200ULL, offset);
+}

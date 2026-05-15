@@ -55,7 +55,7 @@ void player_init(void)
     // Hardware initialisation (timer, GPIO, COMMO PIO) is handled entirely
     // by commo_bridge_init() in the ODE build, which calls timer_init() and
     // sets up the COMMO PIO directly without conflicting with our ODE's
-    // parallel bus SMs on PIO0 SM0/SM1.
+    // da_output on PIO0 SM0 and subcode_encoder on PIO0 SM1.
     // servo_init() and cd6_init() are NOT called in ODE mode.
     player_interface.p_status  = READY;
     player_interface.a_command = IDLE_OPC;

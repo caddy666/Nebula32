@@ -6,7 +6,7 @@
 // The CD32 reads sectors continuously during gameplay.  On real hardware the
 // laser reads ~1–2 sectors ahead so data is waiting by the time the CPU asks.
 // We replicate this with a ring buffer of pre-fetched sectors read from the
-// SD card on Core 1 while Core 0 services the parallel bus.
+// SD card on Core 1 while Core 0 services the COMMO bus and DA output.
 //
 // Buffer size: SECTOR_BUFFER_COUNT × 2352 bytes
 // At 8 sectors that is 18,816 bytes — fits comfortably in RP2350 SRAM.
