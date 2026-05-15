@@ -224,10 +224,16 @@ uint8_t jump_time(cd_time_t *pt)
             int nr = calc_tracks(&store.play_times.tmp_time, pt);
 
             if (nr == 0) {
-                /* On target — count remaining frames via SCOR */
-                cd_time_t delta;
-                subtract_time(pt, &store.play_times.tmp_time, &delta);
-                init_scor_counter(delta.frm);
+                /* On target — count remaining frames via SCOR.
+                 * Guard against overshoot: if current > pt, subtract_time()
+                 * would underflow and wrap delta.frm to 75-N instead of 0. */
+                uint8_t frm_count = 0;
+                if (compare_time(&store.play_times.tmp_time, pt) == SMALLER) {
+                    cd_time_t delta;
+                    subtract_time(pt, &store.play_times.tmp_time, &delta);
+                    frm_count = delta.frm;
+                }
+                init_scor_counter(frm_count);
                 jump_phase1 = 1;    /* → phase 3 */
             } else {
                 servo_jump(nr);
