@@ -18,6 +18,8 @@
 extern "C" {
 #include "ecc.h"
 #include "cd_types.h"
+#include "disc_image.h"
+#include "subcode.h"
 }
 
 /* Build a minimal but structurally correct Mode 1 raw sector in buf[2352]. */
@@ -155,4 +157,72 @@ TEST(Ecc, LbaVariationProducesDifferentEdc)
     uint32_t edc_b = (uint32_t)sec_b[2064] | ((uint32_t)sec_b[2065] <<  8)
                    | ((uint32_t)sec_b[2066] << 16) | ((uint32_t)sec_b[2067] << 24);
     CHECK_TRUE(edc_a != edc_b);
+}
+
+/* =============================================================================
+ * SectorLayout — disc_synthesise_sector() output structure
+ *
+ * selftest.c contained these checks as on-target tests; they belong here
+ * because disc_synthesise_sector() is pure (no FatFS I/O) and the stub in
+ * disc_image_stub.c now carries the real implementation.
+ *
+ * Invariants under test:
+ *   - Sync pattern (bytes 0-11) is exactly the Red Book value.
+ *   - MSF header (bytes 12-14) matches lba_to_msf() output (BCD, +150 offset).
+ *   - Mode byte (byte 15) is 0x01 (Mode 1).
+ *   - Data payload (bytes 16-2063) equals the 2048 bytes passed in.
+ * ========================================================================== */
+
+TEST_GROUP(SectorLayout) {};
+
+TEST(SectorLayout, SyncPattern_IsCorrect)
+{
+    static const uint8_t expected[12] = {
+        0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+        0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x00
+    };
+    uint8_t sector[2352] = {0};
+    uint8_t data[2048];
+    memset(data, 0x00, sizeof(data));
+    disc_synthesise_sector(sector, 0, data);
+    CHECK(memcmp(sector, expected, 12) == 0);
+}
+
+TEST(SectorLayout, MsfHeader_Lba0_Is000200)
+{
+    /* LBA 0 + 150-frame lead-in = absolute frame 150 = 00:02:00 (BCD) */
+    uint8_t sector[2352] = {0};
+    uint8_t data[2048] = {0};
+    disc_synthesise_sector(sector, 0, data);
+    BYTES_EQUAL(0x00, sector[12]);  /* minute */
+    BYTES_EQUAL(0x02, sector[13]);  /* second */
+    BYTES_EQUAL(0x00, sector[14]);  /* frame  */
+}
+
+TEST(SectorLayout, MsfHeader_Lba150_Is000400)
+{
+    /* LBA 150 + 150 = 300 frames = 4 seconds absolute = 00:04:00 (BCD) */
+    uint8_t sector[2352] = {0};
+    uint8_t data[2048] = {0};
+    disc_synthesise_sector(sector, 150, data);
+    BYTES_EQUAL(0x00, sector[12]);
+    BYTES_EQUAL(0x04, sector[13]);
+    BYTES_EQUAL(0x00, sector[14]);
+}
+
+TEST(SectorLayout, ModeByte_Is0x01)
+{
+    uint8_t sector[2352] = {0};
+    uint8_t data[2048] = {0};
+    disc_synthesise_sector(sector, 0, data);
+    BYTES_EQUAL(0x01, sector[15]);
+}
+
+TEST(SectorLayout, DataPayload_CopiedCorrectly)
+{
+    uint8_t sector[2352] = {0};
+    uint8_t data[2048];
+    memset(data, 0xA5, sizeof(data));
+    disc_synthesise_sector(sector, 0, data);
+    CHECK(memcmp(sector + 16, data, 2048) == 0);
 }

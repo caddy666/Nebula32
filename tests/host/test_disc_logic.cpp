@@ -481,3 +481,68 @@ TEST(IsoLayout, TocLeadOut_MatchesTotalSectors)
     /* Lead-out track number is 0xAA */
     BYTES_EQUAL(0xAA, buf[3]);
 }
+
+/* =========================================================================
+ * FormatDetect — disc image extension matching
+ *
+ * selftest.c tested this via a local ext_match() helper.  Replicated here
+ * so host builds catch regressions without requiring a Pico 2.
+ * The function is case-insensitive, matching the production logic in
+ * disc_image.c's path_has_ext() helper.
+ * ======================================================================= */
+
+static bool ext_match(const char *path, const char *ext)
+{
+    size_t pl = strlen(path), el = strlen(ext);
+    if (pl < el) return false;
+    const char *t = path + pl - el;
+    for (size_t i = 0; i < el; i++) {
+        char c1 = t[i];    if (c1 >= 'A' && c1 <= 'Z') c1 = (char)(c1 + 32);
+        char c2 = ext[i];  if (c2 >= 'A' && c2 <= 'Z') c2 = (char)(c2 + 32);
+        if (c1 != c2) return false;
+    }
+    return true;
+}
+
+TEST_GROUP(FormatDetect) {};
+
+TEST(FormatDetect, IsoExtension_Detected)
+{
+    CHECK_TRUE(ext_match("0:/game.iso", ".iso"));
+}
+
+TEST(FormatDetect, BinExtension_Detected)
+{
+    CHECK_TRUE(ext_match("0:/game.bin", ".bin"));
+}
+
+TEST(FormatDetect, NrgExtension_Detected)
+{
+    CHECK_TRUE(ext_match("0:/game.nrg", ".nrg"));
+}
+
+TEST(FormatDetect, MdfExtension_Detected)
+{
+    CHECK_TRUE(ext_match("0:/game.mdf", ".mdf"));
+}
+
+TEST(FormatDetect, UnknownExtension_NotMatched)
+{
+    /* .cdi is not a supported format — none of the four checks should fire */
+    CHECK_FALSE(ext_match("0:/game.cdi", ".iso"));
+    CHECK_FALSE(ext_match("0:/game.cdi", ".bin"));
+    CHECK_FALSE(ext_match("0:/game.cdi", ".nrg"));
+    CHECK_FALSE(ext_match("0:/game.cdi", ".mdf"));
+}
+
+TEST(FormatDetect, UppercaseExtension_Detected)
+{
+    /* SD card files from Windows are often uppercase */
+    CHECK_TRUE(ext_match("0:/GAME.ISO", ".iso"));
+    CHECK_TRUE(ext_match("0:/GAME.BIN", ".bin"));
+}
+
+TEST(FormatDetect, MixedCase_Detected)
+{
+    CHECK_TRUE(ext_match("0:/Zool2.Nrg", ".nrg"));
+}

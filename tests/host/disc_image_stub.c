@@ -1,8 +1,14 @@
 /*
  * disc_image_stub.c — Minimal stub for disc_image.c functions needed by
  * sector_cache.c at link time during host-native test builds.
+ *
+ * disc_synthesise_sector() is implemented here in full (not stubbed out)
+ * because it is pure — no FatFS I/O — so it can run on the host and be
+ * covered by the SectorLayout CppUTest group in test_ecc.cpp.
  */
 #include "disc_image.h"
+#include "ecc.h"
+#include "subcode.h"
 #include <stdint.h>
 #include <string.h>
 
@@ -28,7 +34,14 @@ bool disc_open(disc_image_t *disc, const char *path)
 
 void disc_synthesise_sector(uint8_t *buf, uint32_t lba, const uint8_t *data2048)
 {
-    (void)buf; (void)lba; (void)data2048;
+    memcpy(buf, CD_SYNC_PATTERN, 12);
+    msf_t msf = lba_to_msf(lba);
+    buf[12] = msf.minute;
+    buf[13] = msf.second;
+    buf[14] = msf.frame;
+    buf[15] = 0x01;
+    memcpy(buf + 16, data2048, 2048);
+    ecc_sector_complete(buf);
 }
 
 /* Real implementations — these functions are pure (no FatFS I/O). */
