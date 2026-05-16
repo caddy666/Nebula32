@@ -95,28 +95,29 @@ static bool is_image_file(const char *name) {
             strcasecmp(ext, ".mdf") == 0);
 }
 
-uint32_t sd_scan_images(char paths[][MAX_PATH_LEN], uint32_t max_count) {
+uint32_t sd_scan_images(char paths[][MAX_PATH_LEN], uint32_t max_count,
+                        const char *base_dir) {
     if (!s_mounted) return 0;
+    if (!base_dir || base_dir[0] == '\0') base_dir = "0:/";
 
     DIR     dir;
     FILINFO fno;
     uint32_t count = 0;
 
-    // Scan root directory "0:/"
-    FRESULT fr = f_opendir(&dir, "0:/");
+    FRESULT fr = f_opendir(&dir, base_dir);
     if (fr != FR_OK) {
-        printf("[SD] Cannot open root directory\n");
+        printf("[SD] Cannot open image directory: %s\n", base_dir);
         return 0;
     }
 
     while (count < max_count) {
         fr = f_readdir(&dir, &fno);
-        if (fr != FR_OK || fno.fname[0] == '\0') break;  // End of directory
+        if (fr != FR_OK || fno.fname[0] == '\0') break;
 
-        if (fno.fattrib & AM_DIR) continue;  // Skip subdirectories
+        if (fno.fattrib & AM_DIR) continue;
 
         if (is_image_file(fno.fname)) {
-            snprintf(paths[count], MAX_PATH_LEN, "0:/%s", fno.fname);
+            snprintf(paths[count], MAX_PATH_LEN, "%s%s", base_dir, fno.fname);
             printf("[SD] Found image: %s (%lu KB)\n",
                    fno.fname, (uint32_t)(fno.fsize / 1024));
             count++;

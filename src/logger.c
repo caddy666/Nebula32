@@ -48,6 +48,7 @@ static logger_config_t s_cfg = {
     .log_errors      = true,
     .log_irq         = false,
     .log_max_kb      = 4096,
+    .sdcard_base     = "0:/",
 };
 
 // Ring buffer for deferred SD card writes
@@ -112,6 +113,13 @@ static void parse_settings_file(void) {
                 "# Lines starting with # or ; are comments.\n"
                 "# Changes take effect on next boot.\n"
                 "#\n"
+                "# --- Disc image location ---\n"
+                "# Directory scanned for .iso/.bin/.nrg/.mdf disc images.\n"
+                "# Must start with the FatFS volume prefix (0:/) and end with /.\n"
+                "# Default is the SD card root. Change to a subdirectory to keep\n"
+                "# the root tidy, e.g. 0:/games/\n"
+                "sdcard_base     = 0:/\n"
+                "#\n"
                 "# --- Logging ---\n"
                 "logging_enabled = 1\n"
                 "log_commands    = 1\n"
@@ -150,7 +158,20 @@ static void parse_settings_file(void) {
         trim(val);
 
         // Parse each known key (case-insensitive key comparison)
-        if (strcasecmp(key, "logging_enabled") == 0) {
+        if (strcasecmp(key, "sdcard_base") == 0) {
+            size_t vlen = strlen(val);
+            if (vlen == 0) {
+                strncpy(s_cfg.sdcard_base, "0:/", sizeof(s_cfg.sdcard_base) - 1);
+            } else {
+                strncpy(s_cfg.sdcard_base, val, sizeof(s_cfg.sdcard_base) - 2);
+                s_cfg.sdcard_base[sizeof(s_cfg.sdcard_base) - 2] = '\0';
+                vlen = strlen(s_cfg.sdcard_base);
+                if (s_cfg.sdcard_base[vlen - 1] != '/') {
+                    s_cfg.sdcard_base[vlen]     = '/';
+                    s_cfg.sdcard_base[vlen + 1] = '\0';
+                }
+            }
+        } else if (strcasecmp(key, "logging_enabled") == 0) {
             s_cfg.logging_enabled = parse_bool(val);
         } else if (strcasecmp(key, "log_commands") == 0) {
             s_cfg.log_commands = parse_bool(val);

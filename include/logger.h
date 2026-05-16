@@ -25,8 +25,9 @@
 //   Lines starting with '#' or ';' are comments.  Keys are case-insensitive.
 //
 //   Supported keys:
+//     sdcard_base       = 0:/      # Directory scanned for disc images
 //     logging_enabled   = 1        # 1 = on, 0 = off
-//     log_commands      = 1        # Log every CXD command and response
+//     log_commands      = 1        # Log every COMMO command and response
 //     log_sectors       = 0        # Log every sector delivery (very verbose)
 //     log_seeks         = 1        # Log seek start/complete events
 //     log_state         = 1        # Log drive state transitions
@@ -36,6 +37,7 @@
 //
 //   Example cd32_ode.cfg:
 //     # CD32 ODE settings
+//     sdcard_base     = 0:/games/
 //     logging_enabled = 1
 //     log_commands    = 1
 //     log_sectors     = 0
@@ -97,6 +99,7 @@ typedef struct {
     bool     log_errors;        // All error conditions
     bool     log_irq;           // Every IRQ assertion (very verbose!)
     uint32_t log_max_kb;        // Max log file size KB (0 = unlimited)
+    char     sdcard_base[256];  // Base dir for disc image scan (default "0:/")
 } logger_config_t;
 
 // ---------------------------------------------------------------------------

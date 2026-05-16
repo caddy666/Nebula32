@@ -340,17 +340,22 @@ int main(void) {
         while (true) tight_loop_contents();
     }
 
-    s_image_count = sd_scan_images(s_image_paths, MAX_IMAGES);
+    // Logger init reads cd32_ode.cfg (including sdcard_base) before the image
+    // scan so that sd_scan_images() uses the configured directory.
+    logger_init();
+
+    s_image_count = sd_scan_images(s_image_paths, MAX_IMAGES,
+                                   logger_get_config()->sdcard_base);
     if (s_image_count == 0) {
-        printf("[MAIN] No disc images found on SD card\n");
+        printf("[MAIN] No disc images found in %s\n",
+               logger_get_config()->sdcard_base);
         while (true) tight_loop_contents();
     }
 
-    // ---- Logger ----
-    logger_init();
     if (logger_is_enabled()) {
-        logger_write(LOG_INFO, "BOOT", "%lu image(s) found",
-                     (unsigned long)s_image_count);
+        logger_write(LOG_INFO, "BOOT", "%lu image(s) found in %s",
+                     (unsigned long)s_image_count,
+                     logger_get_config()->sdcard_base);
     }
 
     // ---- Open starting disc image ----
