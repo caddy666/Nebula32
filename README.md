@@ -44,7 +44,8 @@ For BIN images, place the `.cue` file with the same base name in the same direct
 | Raspberry Pi Pico 2 | Non-W variant works without web interface |
 | MicroSD card | SDIO 4-bit wiring required (not SPI-only breakout boards) |
 | KY-040 rotary encoder | For hardware disc selection without a screen |
-| Logic level translator | Not normally required — CD32 drive connector signals are 3.3 V |
+| st7789 screen      | to see what you're doing, really |
+| Logic level translators | normally required — CD32 drive connector signals are 5 V |
 
 ---
 
