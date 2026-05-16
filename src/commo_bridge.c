@@ -44,8 +44,8 @@
 #include "cmd_hndl.h"     // command_handler(), Init_command_handler()
 #include "sts_q_id.h"     // Store_update_status(), Get_update_status()
 #include "player.h"       // player_interface extern, player_error, process_id
-#include "gpio_map.h"     // PIN_COMMO_CLK, PIN_COMMO_DATA, PIN_COMMO_DIR,
-                          // PIN_HF_DET, PIN_DOOR, PIN_SCOR
+#include "gpio_map.h"     // PIN_IF_CLK/DATA/DIR → PIN_COMMO_CLK/DATA/DIR aliases
+                          // PIN_ACTIVE, PIN_DOOR, PIN_SCOR
 #include "timer.h"        // timer_init()
 
 // Generated PIO header from upstream/pio/commo.pio (built by pioasm)
@@ -165,11 +165,11 @@ static uint8_t _build_status(void) {
     return s;
 }
 
-// ACTIVE (GPIO ACTIVE_PIN): high whenever the motor is spinning.
+// PIN_ACTIVE (conn 24, GPIO 10): high whenever the motor is spinning.
 // Low only in DRIVE_IDLE (tray open / motor stopped) and DRIVE_ERROR.
 static void _update_active_pin(void) {
     bool active = (s_drive_state != DRIVE_IDLE && s_drive_state != DRIVE_ERROR);
-    gpio_put(ACTIVE_PIN, active ? 1 : 0);
+    gpio_put(PIN_ACTIVE, active ? 1 : 0);
 }
 
 // ---------------------------------------------------------------------------
@@ -289,16 +289,14 @@ void commo_bridge_init(void) {
     return;
 #endif
 
-    // Step 1: Configure HF_DET sense input.
-    // PIN_DOOR (GPIO 11), PIN_SCOR (GPIO 12), and timer_init() are handled
-    // unconditionally in main.c.
-    gpio_init(PIN_HF_DET);  gpio_set_dir(PIN_HF_DET, GPIO_IN);  gpio_pull_up(PIN_HF_DET);
+    // PIN_DOOR (GPIO 11), PIN_SCOR/GPIO 12, and timer_init() are configured
+    // unconditionally in main.c before this function is called.
 
-    // ACTIVE signal: drive output to CD32 mainboard (connector pin 24).
+    // ACTIVE (conn 24, GPIO 10): drive-active output to CD32 mainboard.
     // Start low (drive idle — motor not yet spinning).
-    gpio_init(ACTIVE_PIN);
-    gpio_set_dir(ACTIVE_PIN, GPIO_OUT);
-    gpio_put(ACTIVE_PIN, 0);
+    gpio_init(PIN_ACTIVE);
+    gpio_set_dir(PIN_ACTIVE, GPIO_OUT);
+    gpio_put(PIN_ACTIVE, 0);
 
     // Step 3: Load COMMO PIO programs onto PIO1 SM0 (RX) and SM1 (TX) only.
     // This is extracted from pio_hw_init() — just the COMMO section.
