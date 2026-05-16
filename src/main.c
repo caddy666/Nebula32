@@ -42,7 +42,6 @@
 #include "hardware/timer.h"
 #include "hardware/irq.h"
 #include "hardware/clocks.h"
-#include "hardware/vreg.h"
 #include "hardware/i2c.h"
 
 #include "cd_types.h"
@@ -311,7 +310,7 @@ static void handle_console(void) {
 int main(void) {
     // ---- Set system clock to 135,475,200 Hz ----
     // Exact multiple of the Sony 16.9344 MHz master clock × 8.
-    // Required for PIO clkdiv = 48 → BCLK = 1,411,200 Hz (1× CD speed).
+    // Required for PIO clkdiv = 32 → BCLK = 2,117,112 Hz (1× CD speed).
     if (!set_sys_clock_khz(TARGET_SYS_CLK_KHZ, true)) {
         // If the exact target isn't reachable, try the nearest available.
         // Timing will be slightly off but the PLL will get as close as possible.
@@ -404,13 +403,10 @@ int main(void) {
     // the 26-pin connector and GPIO 9 to condition the signal before it enters
     // the GPCK input.
     //
-    // NOTE: the DA output PIO (clk_sys = 135,475,200 Hz = 16.9344 MHz × 8) is
-    // NOT phase-locked to M17SINE.  It free-runs from the Pico's XOSC at the
-    // same nominal rate.  For short reads this is fine.  For sustained audio
-    // playback there is a small accumulated phase error (~PPM of both crystals).
-    // A future improvement would trim the PIO clkdiv in a software loop that
-    // counts M17SINE edges via the frequency counter or GPIO interrupt, keeping
-    // the DA bit stream in phase with the real 16.9344 MHz reference.
+    // The DA PIO (clk_sys = 135,475,200 Hz = 16.9344 MHz × 8) is not
+    // hard-locked to M17SINE, but da_nudge_clkdiv_to_m17sine() trims the
+    // PIO clkdiv every 2 s during playback using the RP2350 frequency counter,
+    // keeping BCLK within ~0.5% of the true M17SINE reference.
     gpio_init(M17SINE_PIN);
     gpio_set_dir(M17SINE_PIN, GPIO_IN);
     gpio_set_function(M17SINE_PIN, GPIO_FUNC_GPCK);

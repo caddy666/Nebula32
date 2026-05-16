@@ -4,8 +4,8 @@
 // =============================================================================
 //
 // The CD32's Amiga chipset communicates with the CD drive controller over a
-// proprietary 3-wire serial bus called "COMMO" (DATA, CLK, DIR).  This is
-// distinct from the CXD2545Q bus that our ODE emulates.
+// proprietary 3-wire serial bus called "COMMO" (DATA, CLK, DIR).  The ODE's
+// Pico 2 replaces both the original 8051 MCU and the CXD2545Q CD DSP.
 //
 // HARDWARE TOPOLOGY:
 //
@@ -17,7 +17,7 @@
 //   │  │  (AGA akiko chip)│    <command data>     │  (8051 orig) │  │
 //   │  └──────────────────┘                        └───────┬───────┘  │
 //   │                 ^                                     │           │
-//   │    CD DA/data   V                                    │  command datsa         │
+//   │    CD DA/data   V                                    │  command data          │
 //   │  ┌──────────────────────────────────────────────┐   │           │
 //   │  │              CXD2545Q CD DSP                 │ ──┘           │
 //   │  │  (servo, EFM decode, sector error correct)  │               │
@@ -33,10 +33,10 @@
 //   HOST→DRIVE: command packets (opcode + 0-3 params + checksum)
 //   DRIVE→HOST: status packets (15 bytes), Q-channel packets, ID packets
 //
-// COMMO GPIO ASSIGNMENTS (from upstream gpio_map.h):
-//   GPIO 15: COMMO_CLK  (input when receiving, output when transmitting)
-//   GPIO 16: COMMO_DATA (bidirectional)
-//   GPIO 17: COMMO_DIR  (output: 0=receive, 1=transmit)
+// COMMO GPIO ASSIGNMENTS (see gpio_map.h PIN_IF_CLK/DATA/DIR):
+//   GPIO 15 (conn 20): IF_CLK  — idles high, active-low pulses
+//   GPIO 16 (conn 21): IF_DATA — bidirectional
+//   GPIO 17 (conn 25): IF_DIR  — output: 0=receive, 1=transmit
 //
 
 // =============================================================================
@@ -49,7 +49,7 @@
 // Build-time selection
 // ---------------------------------------------------------------------------
 // Set by CMakeLists.txt add_compile_definitions().
-// Rotary encoder now runs via MCP23017 on I2C1 — no GPIO conflict with COMMO.
+// Rotary encoder runs via MCP23017 on I2C0 (GPIO 28/29) — no GPIO conflict with COMMO.
 #ifndef BUILD_WITH_COMMO
 #define BUILD_WITH_COMMO   1
 #endif
@@ -61,8 +61,8 @@
 // ODE command pipeline.  Responses flow back via the COMMO status packets.
 
 // Initialise the COMMO bridge.
-// Calls COMMO_INIT() from the upstream firmware and registers this module
-// as the command receiver.  Must be called after pio_hw_init().
+// Loads COMMO PIO programs onto PIO1 SM0/SM1 and registers the upstream
+// command handler.  Must be called after clock and GPIO init in main.c.
 void commo_bridge_init(void);
 
 // Poll the COMMO bus for incoming commands.
@@ -74,7 +74,7 @@ bool commo_bridge_poll(void);
 
 // Send a drive status packet back to the CD32 host.
 // Called automatically by the bridge after command execution completes.
-// 'status_byte' is the CXD2545Q status byte from build_stat_byte().
+// 'status_byte' is the ODE-synthesized drive status byte (see _build_status()).
 void commo_bridge_send_status(uint8_t status_byte);
 
 // Send a Q-channel status packet to the host.

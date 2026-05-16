@@ -92,7 +92,6 @@ Data transitions on the **falling** BCLK edge; Akiko samples on the **rising** e
 | File | Status | Notes |
 |------|--------|-------|
 | `upstream/core/commo.c` | ✅ Correct | COMMO command/status protocol; last_command cleared on CMD_ERROR |
-| `upstream/core/play.c` | ✅ Correct | Play state machine; pointer truncation fixed; jump_time() overshoot guard |
 | `upstream/core/dispatcher.c` | ✅ Correct | Packet routing |
 | `upstream/core/cmd_hndl.c` | ✅ Correct | Opcode dispatch |
 | `upstream/core/sts_q_id.c` | ✅ Correct | Status/Q-channel buffer |
@@ -137,8 +136,8 @@ Data transitions on the **falling** BCLK edge; Akiko samples on the **rising** e
 | PIO1 | 0 | `commo.pio` | GPIO 15-17 | COMMO RX |
 | PIO1 | 1 | `commo.pio` | GPIO 15-17 | COMMO TX |
 
-Real hardware SMs (CXD2500BQ/DSIC2/Q-channel) are only loaded when
-`BUILD_WITH_UPSTREAM_SERVO=ON` — they live on PIO0 SM2/SM3.
+All four PIO programs are always loaded. The upstream servo PIO programs
+(cxd2500_tx.pio, dsic2.pio, qchannel_rx.pio) have been deleted.
 
 ---
 

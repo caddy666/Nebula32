@@ -69,9 +69,9 @@ extern sector_cache_t g_cache;
 // PIO program offset globals
 // ---------------------------------------------------------------------------
 // upstream/include/pio_hw.h declares all six offsets as extern.
-// upstream/hal/pio_hw.c would normally define them — but we deliberately
-// exclude pio_hw.c from the build (see CMakeLists.txt) because its
-// pio_hw_init() would claim PIO0 SM0–SM3 which the ODE already owns.
+// upstream/hal/pio_hw.c (deleted — contained real-hardware init for
+// CXD2500BQ/DSIC2/QCHAN) would have defined them, but its pio_hw_init()
+// would claim PIO0 SM0–SM3 which the ODE already owns.
 //
 // We provide the definitions here instead.  Only the COMMO pair are ever
 // non-zero; the CXD/DSIC/QCHAN offsets stay at zero (unused in ODE mode).
@@ -265,11 +265,14 @@ static void _send_toc_packets(void) {
 // ---------------------------------------------------------------------------
 // commo_bridge_init
 // ---------------------------------------------------------------------------
-// Initialises only the parts of the upstream hardware needed in ODE mode:
-//   1. The upstream 8 ms software timer (timer_init)
-//   2. GPIO sense inputs: HF_DET, DOOR, SCOR, LED (driver_gpio_init_only)
-//   3. The COMMO PIO state machines on PIO1 SM0/SM1 (commo_program_init)
-//   4. The upstream command-handler state machine (Init_command_handler)
+// Initialises the COMMO side of the ODE hardware:
+//   1. PIN_ACTIVE (GPIO 10, conn 24): drive-active output, cleared to 0 (idle)
+//   2. COMMO PIO programs loaded onto PIO1 SM0/SM1 (commo_program_init)
+//   3. PIO1 IRQ routed to the COMMO RX/TX interrupt handler
+//   4. Upstream command-handler pipeline (Init_command_handler)
+//
+// timer_init(), DOOR (GPIO 11), and SCOR (GPIO 12) are configured by
+// main.c before this is called.
 //
 // Critically, we do NOT call the full pio_hw_init() or driver_init() because
 // those would try to add programs to PIO0 SM0/SM1 (CXD2500BQ, DSIC2, QCHAN)
@@ -633,10 +636,9 @@ bool commo_bridge_is_active(void) {
 // PIO HARDWARE ABSTRACTION FUNCTIONS
 // =============================================================================
 // These functions are declared in upstream/include/pio_hw.h and would normally
-// be defined in upstream/hal/pio_hw.c.  We exclude pio_hw.c from the build
-// (see CMakeLists.txt) because its pio_hw_init() loads CXD2500BQ / DSIC2 /
-// QCHAN programs onto PIO0 SM0–SM3 — which are already owned by the ODE's
-// parallel-bus and subcode PIOs.
+// be defined in upstream/hal/pio_hw.c (deleted — contained real-hardware init
+// for CXD2500BQ/DSIC2/QCHAN programs on PIO0 SM0–SM3, which are already owned
+// by the ODE's da_output and subcode_encoder PIOs).
 //
 // upstream/core/commo.c calls pio_commo_rx_ready(), pio_commo_rx_get(),
 // pio_commo_tx_byte() and pio_commo_release() to service the COMMO bus.
@@ -745,11 +747,9 @@ void pio_commo_release(void) {
 // CXD / DSIC / QCHAN stubs — real-hardware functions, not used in ODE mode
 // ---------------------------------------------------------------------------
 // These exist only to satisfy linker references from upstream code that
-// might be pulled in accidentally.  upstream/drivers/driver.c, servo.c etc.
-// are NOT compiled in the ODE build (see CMakeLists.txt COMMO sources list:
-// only commo.c, dispatcher.c, cmd_hndl.c, sts_q_id.c, maths.c, timer.c are
-// included).  If you later add drivers/servo.c to the build you'll need to
-// replace these no-ops with real implementations.
+// might be pulled in accidentally.  upstream/drivers/ (driver.c, servo.c etc.)
+// have been deleted — only commo.c, dispatcher.c, cmd_hndl.c, sts_q_id.c,
+// maths.c, and timer.c are compiled in the ODE build.
 //
 // We log a warning the first time each is called so an incorrect build
 // configuration is obvious at runtime.

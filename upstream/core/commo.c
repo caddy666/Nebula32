@@ -4,7 +4,7 @@
  *
  * All GPIO bit-bang has been replaced with calls to pio_commo_rx_ready(),
  * pio_commo_rx_get(), pio_commo_tx_byte(), and pio_commo_release() from
- * pio_hw.c.  The state machine logic is unchanged.
+ * commo_bridge.c.  The state machine logic is unchanged.
  *
  * PIO state machines used:
  *   PIO1 SM0 — commo_rx.pio   (host-clocked receive)

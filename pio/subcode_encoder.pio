@@ -11,23 +11,21 @@
 ; and pushes it into this PIO's TX FIFO so that the subcode is serialised out
 ; on a GPIO pin at exactly the right timing relative to sectors.
 ;
-; Akiko reads Q-channel data via the CXD2545Q's register interface
-; (not via the raw subcode pin), so this PIO program is mainly for future
-; expansion (external subcode connectors, CD audio sync) and to keep timing
-; accurate.
+; Akiko reads the Q-channel directly from the SUB_DATA / SUB_CLK / SUB_WFCLK /
+; SUB_SCOR lines (connector pins 17/18/14/15 → GPIO 5/6/7/8).  This PIO
+; serialises the Q-channel onto SUB_DATA_PIN (GPIO 5) at the correct rate.
 ;
 ; Subcode bit rate:
 ;   Each sector = 98 frames × 3 EFM words/frame = 588 channel bits/sector
 ;   At 1x speed: 75 sectors/sec × 588 bits/sector = 44,100 channel bits/sec
 ;   Wait time between subcode bits ≈ 1 / 44100 ≈ 22.7 µs
-;   At 150 MHz PIO clock: 150e6 / 44100 ≈ 3401 cycles per bit
+;   At 135.475 MHz sys_clk: 135475200 / 44100 ≈ 3072 cycles per bit → clkdiv ≈ 96
 ; =============================================================================
 
 .program subcode_encoder
-.define SUBCODE_PIN 24   ; GPIO 24: serialised subcode output (optional)
 
-; Clock divider is set in C to achieve 44100 bits/second bit rate.
-; With clkdiv = 3401, each PIO cycle = 1 subcode bit period.
+; Clock divider is set in C: clkdiv = sys_clk / (target_bitrate × 32).
+; At 135.475 MHz and 44100 bps: clkdiv ≈ 96 (each 32-cycle loop = 1 bit period).
 
 .wrap_target
     pull block                  ; wait for word from TX FIFO

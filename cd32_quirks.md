@@ -30,7 +30,7 @@ is unusual in sending 24+24.
 
 ### SCOR Counter Pre-Decrement
 
-**File:** `upstream/drivers/driver.c`, `init_scor_counter()`
+**File:** `upstream/drivers/driver.c` (deleted), `init_scor_counter()`
 
 ```c
 void init_scor_counter(uint8_t count)
@@ -70,7 +70,7 @@ the difference is not observable.
 
 ### Player Wrapper Pattern
 
-**File:** `upstream/core/player.c`
+**File:** `upstream/core/player.c` (deleted)
 
 The upstream player uses static C functions that forward to external symbols
 of the same name:
@@ -130,7 +130,7 @@ data, EDC, zeroes, and P-parity regions.
 
 ### COMMO PIO: Both State Machines on PIO1
 
-**File:** `upstream/hal/pio_hw.c`, `upstream/include/pio_hw.h`
+**File:** `upstream/hal/pio_hw.c` (deleted), `upstream/include/pio_hw.h`
 
 ```c
 #define PIO_COMMO_RX  pio1   // COMMO receive  — PIO1 SM0

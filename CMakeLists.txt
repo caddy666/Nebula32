@@ -39,10 +39,6 @@ option(BUILD_WITH_COMMO   "Enable upstream COMMO 3-wire bus (real CD32 hardware)
 #   Runs over I2C1 (GPIO 26/27) — no conflict with COMMO bus (GPIO 15-17).
 option(BUILD_WITH_ROTARY  "Enable rotary encoder (development/standalone)"        ON)
 
-# BUILD_WITH_UPSTREAM_SERVO: Include the real hardware servo/play modules.
-#   Only useful when BUILD_WITH_COMMO=ON and a real CXD2500BQ is wired up.
-option(BUILD_WITH_UPSTREAM_SERVO "Include DSIC2/servo modules (real hardware)" OFF)
-
 # GPIO 0-17: cd32_pico hardware interface (gpio_map.h is authoritative).
 # GPIO 18-29: ODE peripherals (SDIO, display, MCP23017 rotary encoder).
 # COMMO (GPIO 15-17) is a self-contained module; rotary encoder is on the
@@ -104,7 +100,6 @@ add_compile_definitions(
     MAX_PATH_LEN=256
     MAX_IMAGES=32
     BUILD_WITH_COMMO=$<BOOL:${BUILD_WITH_COMMO}>
-    BUILD_WITH_UPSTREAM_SERVO=$<BOOL:${BUILD_WITH_UPSTREAM_SERVO}>
 
     # ---- Optional: enable EDC verification on Mode 1 sectors ----
     # (uses ~1 KB extra flash for the EDC computation loop)
@@ -217,15 +212,9 @@ pico_generate_pio_header(cd32_ode
 pico_generate_pio_header(cd32_ode
     ${CMAKE_CURRENT_SOURCE_DIR}/pio/subcode_encoder.pio)
 
-# ---- Upstream PIO programs (COMMO bus + CXD2500BQ + DSIC2 + Q-channel) ----
+# ---- Upstream PIO programs (COMMO bus) ----
 pico_generate_pio_header(cd32_ode
     ${CMAKE_CURRENT_SOURCE_DIR}/upstream/pio/commo.pio)
-pico_generate_pio_header(cd32_ode
-    ${CMAKE_CURRENT_SOURCE_DIR}/upstream/pio/cxd2500_tx.pio)
-pico_generate_pio_header(cd32_ode
-    ${CMAKE_CURRENT_SOURCE_DIR}/upstream/pio/dsic2.pio)
-pico_generate_pio_header(cd32_ode
-    ${CMAKE_CURRENT_SOURCE_DIR}/upstream/pio/qchannel_rx.pio)
 
 # ---- Include directories ----
 target_include_directories(cd32_ode PRIVATE
@@ -245,12 +234,10 @@ target_link_libraries(cd32_ode
     pico_multicore          # Dual-core launch (Core 1 bus handler)
     hardware_pio            # PIO for DA output and subcode encoder
     hardware_dma            # DMA for sector transfers and I2S audio
-    hardware_pwm            # (Available for future use)
     hardware_irq            # Fast IRQ for DMA completion (audio ping-pong)
     hardware_timer          # Repeating 1 ms timer for state machine
     hardware_gpio
     hardware_clocks         # set_sys_clock_khz()
-    hardware_vreg           # vreg_set_voltage() for 150 MHz
     hardware_flash          # flash_range_erase/program for config persistence
     hardware_sync           # save_and_disable_interrupts for flash writes
     hardware_i2c            # I2C0 for MCP23017 GPIO expander

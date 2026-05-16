@@ -11,16 +11,14 @@
 //   Any standard 20-detent incremental rotary encoder with common ground.
 //   Recommended: Alps EC11, Bourns PEC11, or cheap KY-040 module.
 //
-//   KY-040 module (most common, includes resistors):
-//     CLK  → GPIO 15  (Encoder A / CLK)
-//     DT   → GPIO 16  (Encoder B / DT)
-//     SW   → GPIO 17  (Push-button, active low)
-//     VCC  → 3V3
-//     GND  → GND
+//   Encoder connects to MCP23017 I2C GPIO expander (not directly to Pico GPIOs):
+//     Encoder CLK (A) → MCP23017 GPA0
+//     Encoder DT  (B) → MCP23017 GPA1
+//     Encoder SW  (push-button) → MCP23017 GPA2  (active low)
+//     MCP23017 INTA → Pico GPIO (open-drain, pulled up on Pico side)
 //
-//   Bare encoder (no module):
-//     Add 10 kΩ pull-up resistors to 3.3 V on CLK, DT, and SW pins.
-//     Add 100 nF capacitors from each pin to GND for hardware debounce.
+//   MCP23017 is on I2C0 (GPIO 28 = SDA, GPIO 29 = SCL) @ 400 kHz.
+//   GPIO 15/16/17 are reserved for the COMMO bus (IF_CLK/IF_DATA/IF_DIR).
 //
 // ALGORITHM:
 //   Uses a 2-bit Gray-code state machine to decode quadrature pulses.
@@ -35,9 +33,9 @@
 //            AB→B→0→A→AB (CCW)
 //
 // INTERRUPT HANDLING:
-//   Both CLK and DT are monitored via GPIO edge interrupts.
-//   The push-button SW uses a separate IRQ with software debounce.
-//   All IRQs are shared on RP2350 GPIO IRQ (single callback).
+//   A single GPIO IRQ on the MCP23017 INTA line fires whenever any GPA pin
+//   changes.  The ISR only sets a flag; actual I2C reads are deferred to
+//   rotary_poll() in the Core 0 main loop (no I2C transactions in IRQ context).
 //
 // THREAD SAFETY:
 //   The encoder state variables are written only in IRQ context and read
@@ -48,19 +46,6 @@
 
 #include <stdint.h>
 #include <stdbool.h>
-
-// ---------------------------------------------------------------------------
-// GPIO pin assignments (match CMakeLists.txt)
-// ---------------------------------------------------------------------------
-#ifndef ROTARY_CLK_PIN
-#define ROTARY_CLK_PIN  15
-#endif
-#ifndef ROTARY_DT_PIN
-#define ROTARY_DT_PIN   16
-#endif
-#ifndef ROTARY_SW_PIN
-#define ROTARY_SW_PIN   17
-#endif
 
 // Debounce timing
 // ---------------------------------------------------------------------------

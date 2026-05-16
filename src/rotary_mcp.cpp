@@ -12,8 +12,8 @@
 //   INTA → GPIO MCP23017_INT_PIN on Pico (open-drain, pull up on Pico side)
 //
 // I2C BUS:
-//   i2c1 must be initialised by main() before calling rotary_init().
-//   SDA = GPIO MCP23017_SDA_PIN, SCL = GPIO MCP23017_SCL_PIN @ 400 kHz.
+//   i2c0 must be initialised by main() before calling rotary_init().
+//   SDA = GPIO 28 (PIN_MCP23017_SDA), SCL = GPIO 29 (PIN_MCP23017_SCL) @ 400 kHz.
 //
 // INTERRUPT STRATEGY:
 //   The GPIO IRQ on MCP23017_INT_PIN only sets a flag (no I2C in IRQ context).

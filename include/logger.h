@@ -3,7 +3,7 @@
 // logger.h — SD Card Activity Logger
 // =============================================================================
 //
-// Logs every CXD2545Q command, sector delivery, seek, state transition,
+// Logs every COMMO command, sector delivery, seek, state transition,
 // IRQ event and error to a text file on the SD card: "cd32_cd.log"
 //
 // DESIGN GOALS:
@@ -90,7 +90,7 @@ typedef enum {
 // ---------------------------------------------------------------------------
 typedef struct {
     bool     logging_enabled;   // Master on/off switch
-    bool     log_commands;      // CXD command + response bytes
+    bool     log_commands;      // COMMO command + response bytes
     bool     log_sectors;       // Every sector delivery (verbose!)
     bool     log_seeks;         // Seek start / complete
     bool     log_state;         // Drive state machine transitions

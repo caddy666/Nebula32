@@ -43,7 +43,7 @@ The merge brings these benefits:
 
 1. **COMMO bus driver** — `core/commo.c` + `pio/commo.pio` gives cd32_ode the
    ability to communicate with the CD32's Amiga chipset over the original
-   3-wire bus, *in addition to* the parallel bus interface.
+   3-wire COMMO serial bus (IF_CLK / IF_DATA / IF_DIR, GPIO 15-17).
 
 2. **Authoritative command opcode table** — `include/defs.h` documents all
    TRAY_OUT through WRITE_DSIC2 opcodes from the real firmware.  These cross-
@@ -56,9 +56,9 @@ The merge brings these benefits:
 4. **Software timer system** — `utils/timer.c` provides the 8 ms cooperative
    timer used throughout the original firmware's sequencer.
 
-5. **Real hardware bring-up path** — The CXD2500BQ and DSIC2 PIO drivers
-   (`drivers/driver.c`, `pio/cxd2500_tx.pio`, `pio/dsic2.pio`) let cd32_ode
-   be adapted to control real hardware in the future.
+5. **Real hardware bring-up path** — The upstream project structure documents
+   the full CXD2500BQ + DSIC2 servo control pipeline as a reference for
+   adapting to real hardware in the future.
 
 ---
 
@@ -83,25 +83,6 @@ The merge brings these benefits:
 | `include/cmd_hndl.h` | `commo_bridge.c` — command_handler, Dispatcher |
 | `include/player.h` | `upstream_player_shim.c` + `commo_bridge.c` — player_interface decl |
 | `pio/commo.pio` | CMakeLists.txt — pioasm generates `commo.pio.h` |
-| `pio/cxd2500_tx.pio` | CMakeLists.txt — generated but unused (future use) |
-| `pio/dsic2.pio` | CMakeLists.txt — generated but unused (future use) |
-| `pio/qchannel_rx.pio` | CMakeLists.txt — generated but unused (future use) |
-
-## Files NOT used from upstream in the current merged build
-
-| File | Reason |
-|------|--------|
-| `core/player.c` | cd32_ode has its own cxd2545q.c command pipeline. `src/upstream_player_shim.c` provides the `player_interface` / `player_error` / `process_id` / `function_id` globals required by `cmd_hndl.c` for linkage |
-| `core/service.c` | Service mode (laser/focus/motor tests) requires real hardware |
-| `core/play.c` | cd32_ode's sector cache replaces physical play sequences |
-| `drivers/servo.c` | Real DSIC2 servo — not applicable without real hardware |
-| `drivers/strtstop.c` | Real motor start/stop — replaced by ODE state machine |
-| `drivers/shock.c` | Mechanical shock detection — not applicable |
-| `drivers/subcode.c` | Real subcode reading from CXD2500 — we generate synthetically |
-| `drivers/driver.c` | CXD2500BQ/DSIC2 GPIO init — only needed for real hardware |
-| `hal/pio_hw.c` | `pio_hw_init()` claims PIO0 SM0–SM3 which the ODE parallel bus already owns. `src/commo_bridge.c` provides custom implementations of the four `pio_commo_*` runtime functions and no-op stubs for the six unused ones, satisfying the externs declared in `pio_hw.h` |
-| `hal/pio_hw_ode.c`, `hal/pio_hw_ode_patch.c` | Earlier merge attempts; superseded by the integrated `commo_bridge.c` approach |
-| `main.c` (upstream) | Renamed to `main_upstream.c` for reference only |
 
 ---
 

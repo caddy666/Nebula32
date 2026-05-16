@@ -3,8 +3,8 @@
 // =============================================================================
 //
 // The upstream cmd_hndl.c writes commands into player_interface, which is
-// normally consumed by player.c in the cd32_pico project.  In our ODE build
-// we don't compile player.c, but we still need the symbol to link.
+// normally consumed by player.c in the cd32_pico project (deleted).  In our
+// ODE build player.c is absent, but we still need the symbol to link.
 //
 // This stub provides:
 //   1. The player_interface global (read by cmd_hndl.c, polled by commo_bridge.c)
@@ -15,9 +15,9 @@
 // finds a new command there, calls _handle_opc() to route it to the ODE
 // pipeline (da_output, sector_cache, etc.).
 //
-// IMPORTANT: This is only compiled when the upstream cmd_hndl.c is included
-// in the build (i.e., always in the merged build).  In the original cd32_pico
-// project, player.c provides these symbols.
+// IMPORTANT: Always compiled in the merged build (cmd_hndl.c is always
+// included).  In the original cd32_pico project, player.c provided these
+// symbols — that file has been deleted from this repo.
 // =============================================================================
 
 // Bare includes resolve via upstream/include in CMakeLists include_directories
@@ -47,9 +47,9 @@ byte function_id  = 0;
 // ---------------------------------------------------------------------------
 // In the full cd32_pico build, player_init() calls timer_init(), driver_init(),
 // reset_dsic2_cd6(), servo_init(), and cd6_init().  In our ODE build:
-//   - timer_init() IS called (needed by upstream timer.c's 8ms callbacks)
-//   - driver_init() IS called (configures GPIO sense pins via pio_hw_init)
-//   - servo/cd6/dsic2 init are skipped (no real hardware in ODE mode)
+//   - timer_init() is called by main.c before commo_bridge_init()
+//   - driver_init() is NOT called (it would init CXD2500BQ/DSIC2/pio_hw_init)
+//   - servo, cd6, and dsic2 init are all skipped (no real hardware in ODE mode)
 void player_init(void)
 {
     // Hardware initialisation (timer, GPIO, COMMO PIO) is handled entirely

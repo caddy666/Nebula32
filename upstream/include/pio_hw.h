@@ -2,23 +2,11 @@
  * @file  pio_hw.h
  * @brief PIO state machine handles and initialisation for all serial buses.
  *
- * PIO allocation — ODE build (BUILD_WITH_UPSTREAM_SERVO=OFF, default):
+ * PIO allocation (ODE build):
  *
  *  PIO0:
  *    SM0 — da_output.pio         GPIO 0-2   DA_DATA / DA_BCLK / DA_LRCLK
  *    SM1 — subcode_encoder.pio   GPIO 5-8   SUB_DATA / SUB_CLK / SUB_WFCLK / SUB_SCOR
- *
- *  PIO1:
- *    SM0 — commo.pio             GPIO 15-17 IF_CLK / IF_DATA / IF_DIR  (RX)
- *    SM1 — commo.pio             GPIO 15-17 (shared)                    (TX)
- *
- * PIO allocation — upstream servo build (BUILD_WITH_UPSTREAM_SERVO=ON):
- *
- *  PIO0:
- *    SM0 — cxd2500_tx.pio        GPIO 2-4   (CXD2500BQ UCL/UDAT/ULAT)
- *    SM1 — dsic2.pio TX          GPIO 5-7   (DSIC2 SICL/SIDA/SILD)
- *    SM2 — dsic2.pio RX          GPIO 5-7   (shared)
- *    SM3 — qchannel_rx.pio       GPIO 8-9   (Q-channel clock/data)
  *
  *  PIO1:
  *    SM0 — commo.pio             GPIO 15-17 IF_CLK / IF_DATA / IF_DIR  (RX)
