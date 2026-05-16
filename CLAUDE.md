@@ -99,7 +99,7 @@ Data transitions on the **falling** BCLK edge; Akiko samples on the **rising** e
 | `upstream/utils/timer.c` | ✅ Correct | 8 ms software timer; delay() zero-entry guard |
 | `upstream/pio/commo.pio` | ✅ Correct | COMMO PIO |
 | `src/disc_image.c` | ✅ Correct | ISO/BIN/NRG/MDF parsers; CUE PREGAP+INDEX00 fix; NRG lead-out skip fix; NRG chunk_size=0/DAOX-too-short guards; MDF sector_size=0 guard; CUE/MDF track-length underflow clamp; NRG uint64_t aligned memcpy |
-| `src/sector_cache.c` | ✅ Correct | SD prefetch ring buffer + flush_gen race fix; hard_assert null-cache guard in prefetch_tick |
+| `src/sector_cache.c` | ✅ Correct | SD prefetch ring buffer + flush_gen race fix; hard_assert null-cache guard in prefetch_tick; __atomic_acquire/release builtins replace volatile+__dmb() |
 | `src/subcode.c` | ✅ Correct | Q-channel generation |
 | `pio/subcode_encoder.pio` | ✅ Correct | SUB signal output on GPIO 5-8 |
 | `src/sd_card.c` | ✅ Correct | SDIO mount/scan |
@@ -145,8 +145,9 @@ All four PIO programs are always loaded. The upstream servo PIO programs
 
 **Location:** `tests/host/`  
 **Run:** `make && ./cd32_tests -v`  
-**Result:** 363 tests, 0 failures  
+**Result:** 367 tests, 0 failures  
 **Parser tests:** `make parser_tests && ./parser_tests -v` → 26 tests, 0 failures (separate binary; uses FatFS injectable sim)
+**Stress tests:** `make stress_sector_cache && ./stress_sector_cache` → 4 tests, 0 failures (TSan binary; concurrent producer/consumer)
 **Sanitizer:** `-fsanitize=undefined -fno-sanitize-recover=all` active on all C and C++ objects and the link step
 
 | Group | Tests | What it covers |
@@ -183,6 +184,16 @@ All four PIO programs are always loaded. The upstream servo PIO programs
 | `CoverDir` | 6 | display.cpp and webserver.c agree on cover-art directory; FatFS volume prefix; trailing slash; default path starts in covers dir |
 | `SectorLayout` | 5 | disc_synthesise_sector() sync pattern, MSF header bytes, mode byte 0x01, data payload copy |
 | `FormatDetect` | 7 | ext_match() case-insensitive extension detection for .iso/.bin/.nrg/.mdf; uppercase; unknown format rejected |
+| `AkikoDma` | 4 | Fake Akiko DMA engine (REPLICA pattern): ping-pong sector sequence, interrupt mid-transfer/restart at new LBA, cache-miss abort, next_lba tracking |
+
+**stress_sector_cache groups (TSan binary — `make stress_sector_cache`):**
+
+| Test | What it covers |
+|------|----------------|
+| `queue_empty_boundary` | sector_cache_get returns false on fresh cache |
+| `queue_full_boundary` | prefetch_tick returns early when all 8 slots are valid; no crash or overwrite |
+| `flush_gen_stale_guard` | seek flushes gen; post-seek prefetch lands at new LBA; stale sector evicted |
+| `concurrent_produce_consume` | producer+consumer pthreads: 500 sectors, integrity check, TSan reports no races |
 
 **parser_tests groups (separate binary):**
 

@@ -36,10 +36,10 @@ typedef struct {
 
 typedef struct {
     sector_slot_t  slots[SECTOR_BUFFER_COUNT];
-    volatile int   head;           // Next slot to fill (writer moves this)
-    volatile int   tail;           // Next slot to read (reader moves this)
-    volatile uint32_t next_fetch_lba; // LBA the prefetch thread will fetch next
-    volatile uint32_t flush_gen;   // Incremented on flush; Core 1 discards stale reads
+    int            head;           // reserved; implementation uses linear scan
+    int            tail;           // reserved; implementation uses linear scan
+    uint32_t       next_fetch_lba; // LBA the prefetch thread will fetch next
+    uint32_t       flush_gen;      // Incremented on flush; Core 1 discards stale reads
     disc_image_t  *disc;           // Pointer to the open disc image
     sector_mode_t  sector_mode;    // Current mode (controls sector size)
 } sector_cache_t;

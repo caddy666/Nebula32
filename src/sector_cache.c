@@ -21,9 +21,9 @@
 // explicit lock is needed for this one flag — the data is written before the
 // flag, and the flag is cleared before we overwrite the data.
 //
-// The 'volatile' qualifier on 'valid' and 'next_fetch_lba' ensures the
-// compiler generates real load/store instructions and does not cache them in
-// registers across the critical sections.
+// Synchronisation uses GCC __atomic_* builtins with ACQUIRE/RELEASE ordering.
+// This is recognised by both TSan (host) and generates LDAR/STLR on Cortex-M33
+// — stronger and more portable than the previous volatile + __dmb() approach.
 // =============================================================================
 
 #include "sector_cache.h"
@@ -55,11 +55,10 @@ void sector_cache_init(sector_cache_t *cache, disc_image_t *disc) {
 // position would be delivered to the wrong place in the disc.
 void sector_cache_flush(sector_cache_t *cache) {
     // Bump generation so any in-flight Core 1 read discards its result.
-    // The dmb() ensures Core 1 sees the incremented gen before we clear valid flags.
-    cache->flush_gen++;
-    __dmb();
+    // ACQ_REL ensures the increment is visible to Core 1 before we clear valid flags.
+    __atomic_fetch_add(&cache->flush_gen, 1u, __ATOMIC_ACQ_REL);
     for (int i = 0; i < SECTOR_BUFFER_COUNT; i++) {
-        cache->slots[i].valid = false;
+        __atomic_store_n(&cache->slots[i].valid, false, __ATOMIC_RELEASE);
     }
 }
 
@@ -70,7 +69,7 @@ void sector_cache_flush(sector_cache_t *cache) {
 // Called by commo_bridge.c when a SEEK_OPC or JUMP_TRACKS_OPC arrives.
 void sector_cache_seek(sector_cache_t *cache, uint32_t lba) {
     sector_cache_flush(cache);
-    cache->next_fetch_lba = lba;
+    __atomic_store_n(&cache->next_fetch_lba, lba, __ATOMIC_RELEASE);
 }
 
 // ---------------------------------------------------------------------------
@@ -80,8 +79,8 @@ void sector_cache_seek(sector_cache_t *cache, uint32_t lba) {
 // any data.  Used by the test suite to verify prefetch state.
 bool sector_cache_ready(sector_cache_t *cache, uint32_t lba) {
     for (int i = 0; i < SECTOR_BUFFER_COUNT; i++) {
-        volatile sector_slot_t *slot = &cache->slots[i];
-        if (slot->valid && slot->lba == lba)
+        sector_slot_t *slot = &cache->slots[i];
+        if (__atomic_load_n(&slot->valid, __ATOMIC_ACQUIRE) && slot->lba == lba)
             return true;
     }
     return false;
@@ -97,12 +96,13 @@ bool sector_cache_ready(sector_cache_t *cache, uint32_t lba) {
 bool sector_cache_get(sector_cache_t *cache, uint32_t lba,
                       uint8_t *buf_out, uint32_t *bytes_out) {
     for (int i = 0; i < SECTOR_BUFFER_COUNT; i++) {
-        // Read valid flag with volatile semantics first, then check LBA
-        volatile sector_slot_t *slot = &cache->slots[i];
-        if (slot->valid && slot->lba == lba) {
+        sector_slot_t *slot = &cache->slots[i];
+        // Acquire load: ensures slot->data and slot->valid_bytes are visible
+        // if the RELEASE store that set valid=true has already happened.
+        if (__atomic_load_n(&slot->valid, __ATOMIC_ACQUIRE) && slot->lba == lba) {
             uint32_t n = slot->valid_bytes;
             if (n > SECTOR_RAW_SIZE) n = SECTOR_RAW_SIZE;
-            memcpy(buf_out, (const void *)slot->data, n);
+            memcpy(buf_out, slot->data, n);
             *bytes_out = n;
             return true;
         }
@@ -123,9 +123,9 @@ bool sector_cache_get(sector_cache_t *cache, uint32_t lba,
 // Slots for sectors 197-200 (if present) are freed for reuse.
 void sector_cache_release_before(sector_cache_t *cache, uint32_t current_lba) {
     for (int i = 0; i < SECTOR_BUFFER_COUNT; i++) {
-        // A consumed sector's LBA is always < current read position
-        if (cache->slots[i].valid && cache->slots[i].lba < current_lba) {
-            cache->slots[i].valid = false;   // Free the slot
+        sector_slot_t *slot = &cache->slots[i];
+        if (__atomic_load_n(&slot->valid, __ATOMIC_ACQUIRE) && slot->lba < current_lba) {
+            __atomic_store_n(&slot->valid, false, __ATOMIC_RELEASE);
         }
     }
 }
@@ -141,10 +141,11 @@ void sector_cache_release_before(sector_cache_t *cache, uint32_t current_lba) {
 // comfortably keeps up.  With 8 slots we have ~53 ms of buffer time.
 void sector_cache_prefetch_tick(sector_cache_t *cache) {
     hard_assert(cache != NULL, "sector_cache_prefetch_tick: cache is NULL");
+
     // ---- Find a free slot ----
     int free_slot = -1;
     for (int i = 0; i < SECTOR_BUFFER_COUNT; i++) {
-        if (!cache->slots[i].valid) {
+        if (!__atomic_load_n(&cache->slots[i].valid, __ATOMIC_ACQUIRE)) {
             free_slot = i;
             break;
         }
@@ -153,44 +154,41 @@ void sector_cache_prefetch_tick(sector_cache_t *cache) {
 
     // ---- Check we haven't reached the end of the disc ----
     if (!cache->disc || !cache->disc->file_open) return;
-    if (cache->next_fetch_lba >= cache->disc->total_sectors) return;
+
+    // Snapshot next_fetch_lba atomically so all uses in this call are consistent.
+    uint32_t fetch_lba = __atomic_load_n(&cache->next_fetch_lba, __ATOMIC_ACQUIRE);
+    if (fetch_lba >= cache->disc->total_sectors) return;
 
     // ---- Claim the slot (mark invalid while writing) ----
     sector_slot_t *slot = &cache->slots[free_slot];
-    slot->valid = false;   // Prevent Core 0 from reading a half-filled slot
+    __atomic_store_n(&slot->valid, false, __ATOMIC_RELEASE);
     slot->error = false;
-    slot->lba   = cache->next_fetch_lba;
+    slot->lba   = fetch_lba;
 
     // Snapshot the generation counter before we start the SD read.
-    // If Core 0 calls sector_cache_flush() while we're reading, the counter
+    // If Core 0 calls sector_cache_flush() while we're reading, flush_gen
     // will increment and we must NOT mark the slot valid — the LBA is stale.
-    uint32_t my_gen = cache->flush_gen;
+    uint32_t my_gen = __atomic_load_n(&cache->flush_gen, __ATOMIC_ACQUIRE);
 
     // ---- Read from SD card via disc_image layer ----
-    // disc_read_sector() handles ISO synthesis, raw BIN pass-through, etc.
-    // Always fetch full 2352-byte raw sectors into the cache; the DA output
-    // streams the complete raw sector to Akiko on each playback cycle.
-    uint32_t bytes = disc_read_sector(cache->disc,
-                                       cache->next_fetch_lba,
-                                       slot->data,
-                                       SECTOR_MODE_RAW);
+    uint32_t bytes = disc_read_sector(cache->disc, fetch_lba, slot->data,
+                                      SECTOR_MODE_RAW);
     if (bytes > 0) {
         slot->valid_bytes = bytes;
-        // Memory barrier: ensure data is visible before setting valid flag
-        __dmb();               // RP2350 data memory barrier
-        // Only commit if Core 0 hasn't flushed since we started — otherwise
-        // this slot holds a stale LBA that would be delivered at the wrong position.
-        if (cache->flush_gen == my_gen) {
-            slot->valid = true;    // NOW Core 0 can see this sector
-            cache->next_fetch_lba++;
+        // Only commit if Core 0 hasn't flushed since we started.
+        // The RELEASE store on valid creates the happens-before edge so
+        // Core 0's ACQUIRE load sees the fully written slot->data.
+        if (__atomic_load_n(&cache->flush_gen, __ATOMIC_ACQUIRE) == my_gen) {
+            __atomic_store_n(&slot->valid, true, __ATOMIC_RELEASE);
+            __atomic_store_n(&cache->next_fetch_lba, fetch_lba + 1, __ATOMIC_RELEASE);
         }
-        /* If gen mismatched, Core 0 already set next_fetch_lba to the new seek
-         * position — do not advance it or the first sector of the seek is skipped. */
+        /* If gen mismatched, Core 0 already set next_fetch_lba via seek —
+         * do not advance it or the first sector of the new seek is skipped. */
     } else {
         slot->error = true;
         LOG_ERROR_MSG("cache prefetch SD read fail at LBA=%lu",
-                      (unsigned long)cache->next_fetch_lba);
-        printf("[CACHE] Read error at LBA %u\n", (unsigned)cache->next_fetch_lba);
-        cache->next_fetch_lba++;   /* skip bad sector regardless of seek */
+                      (unsigned long)fetch_lba);
+        printf("[CACHE] Read error at LBA %u\n", (unsigned)fetch_lba);
+        __atomic_store_n(&cache->next_fetch_lba, fetch_lba + 1, __ATOMIC_RELEASE);
     }
 }
