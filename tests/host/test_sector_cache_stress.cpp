@@ -178,6 +178,56 @@ static void test_concurrent_produce_consume(void)
     printf("[PASS] concurrent_produce_consume (TSan clean)\n");
 }
 
+static void test_fill_drain_fill_cycle(void)
+{
+    memset(&g_disc, 0, sizeof(g_disc));
+    g_disc.total_sectors = 32;
+    g_disc.file_open     = true;
+    sector_cache_init(&g_cache, &g_disc);
+
+    // Phase 1: fill 8 slots (LBAs 0-7) via prefetch_tick
+    for (int i = 0; i < SECTOR_BUFFER_COUNT; i++)
+        sector_cache_prefetch_tick(&g_cache);
+
+    for (int i = 0; i < SECTOR_BUFFER_COUNT; i++) {
+        assert(sector_cache_ready(&g_cache, (uint32_t)i));
+        uint8_t  buf[SECTOR_RAW_SIZE];
+        uint32_t bytes;
+        bool ok = sector_cache_get(&g_cache, (uint32_t)i, buf, &bytes);
+        assert(ok);
+        for (uint32_t j = 0; j < bytes; j++)
+            assert(buf[j] == (uint8_t)((i + j) & 0xFF));
+    }
+
+    // Phase 2: drain all slots via get + release_before
+    for (int i = 0; i < SECTOR_BUFFER_COUNT; i++) {
+        uint8_t  buf[SECTOR_RAW_SIZE];
+        uint32_t bytes;
+        sector_cache_get(&g_cache, (uint32_t)i, buf, &bytes);
+        sector_cache_release_before(&g_cache, (uint32_t)(i + 1));
+    }
+    for (int i = 0; i < SECTOR_BUFFER_COUNT; i++)
+        assert(!sector_cache_ready(&g_cache, (uint32_t)i));
+
+    // Phase 3: seek to LBA 8, fill again (LBAs 8-15), verify data integrity
+    sector_cache_seek(&g_cache, 8);
+    for (int i = 0; i < SECTOR_BUFFER_COUNT; i++)
+        sector_cache_prefetch_tick(&g_cache);
+
+    for (int i = 0; i < SECTOR_BUFFER_COUNT; i++) {
+        uint32_t lba = (uint32_t)(8 + i);
+        assert(sector_cache_ready(&g_cache, lba));
+        uint8_t  buf[SECTOR_RAW_SIZE];
+        uint32_t bytes;
+        bool ok = sector_cache_get(&g_cache, lba, buf, &bytes);
+        assert(ok);
+        for (uint32_t j = 0; j < bytes; j++)
+            assert(buf[j] == (uint8_t)((lba + j) & 0xFF));
+    }
+
+    printf("[PASS] fill_drain_fill_cycle\n");
+}
+
 // ---------------------------------------------------------------------------
 // main
 // ---------------------------------------------------------------------------
@@ -187,6 +237,7 @@ int main(void)
     test_queue_empty_boundary();
     test_queue_full_boundary();
     test_flush_gen_stale_guard();
+    test_fill_drain_fill_cycle();
     test_concurrent_produce_consume();
     printf("=== all tests PASSED ===\n");
     return 0;

@@ -451,3 +451,148 @@ TEST(CommoProtocol, SendString_ReadyAfterComplete)
     COMMO_INTERFACE();
     BYTES_EQUAL(COMMO_READY_WITHOUT_ERROR, SEND_STRING_READY());
 }
+
+/* -------------------------------------------------------------------------
+ * Fuzz / adversarial path
+ * ---------------------------------------------------------------------- */
+
+TEST_GROUP(CommoFuzz)
+{
+    void setup() override
+    {
+        COMMO_INIT();
+        s_rx_head      = 0;
+        s_rx_tail      = 0;
+        s_data_is_low  = 0;
+        s_tx_log_count = 0;
+        memset(s_rx_queue, 0, sizeof(s_rx_queue));
+        memset(s_tx_log,   0, sizeof(s_tx_log));
+    }
+};
+
+// After sending opcode 0x05 + its one param byte, the state machine is in
+// RXD_CHECKSUM waiting for ~(sum).  If the sender "aborts" and the next byte
+// is a new opcode (0x03), the SM reads it as the checksum: ~0x03=0xFC but
+// accumulated checksum=0x47 → mismatch → CMD_ERROR.  The SM must then recover
+// and accept a subsequent valid command.
+TEST(CommoFuzz, AbortedCommand_ByteConsumedAsChecksum)
+{
+    uint8_t partial[2] = { 0x05, 0x42 };
+    drive_packet(partial, 2);              // opcode + param; SM now in RXD_CHECKSUM
+
+    BYTES_EQUAL(COMMO_NO_COMMAND, NEW_CMD_RECEIVED());
+
+    // Abort: feed what would be the next opcode (0x03) as the checksum byte.
+    // ~0x03 = 0xFC ≠ 0x47 (= 0x05 + 0x42) → CMD_ERROR
+    s_rx_queue[s_rx_tail++] = 0x03;
+    s_data_is_low = 1;
+    COMMO_INTERFACE();
+
+    BYTES_EQUAL(COMMO_CMD_ERROR, NEW_CMD_RECEIVED());
+    FREE_CMD_BUFFER();
+
+    // SM must recover: a subsequent valid command returns NEW_COMMAND
+    uint8_t good[2] = { 0x03, 0 };
+    good[1] = checksum_of(good, 1);
+    drive_packet(good, 2);
+    BYTES_EQUAL(COMMO_NEW_COMMAND, NEW_CMD_RECEIVED());
+}
+
+// 50 rapid COMMO_INTERFACE calls with no pending TX and data_is_low=0 must
+// leave the state machine in IDLE with no spurious command reported.
+// Exercises the atomic-barrier path: no partial-status-word corruption.
+TEST(CommoFuzz, RapidStatusPoll_50Ticks_NoStateCorruption)
+{
+    s_data_is_low = 0;
+    for (int i = 0; i < 50; i++)
+        COMMO_INTERFACE();
+
+    BYTES_EQUAL(COMMO_SM_IDLE, (uint8_t)s_commo.state);
+    BYTES_EQUAL(COMMO_NO_COMMAND, NEW_CMD_RECEIVED());
+}
+
+// A spurious data strobe (data_is_low=1) while TX is in progress blocks the
+// TX byte from being sent but does not corrupt the TX buffer or advance the
+// byte pointer.  After the strobe clears, TX completes in order.
+TEST(CommoFuzz, TxNotInterruptedByRxStrobe)
+{
+    uint8_t tx[2] = { 0xA5, 0x5A };
+    SEND_STRING(SEND_STRING_COMPLETE, tx, 2);
+    s_data_is_low = 0;
+    COMMO_INTERFACE();   // IDLE → TXD_DATA (tx_req consumed)
+
+    s_data_is_low = 1;
+    COMMO_INTERFACE();   // TXD_DATA: data_is_low set → blocked, nothing transmitted
+    LONGS_EQUAL(0, s_tx_log_count);
+
+    s_data_is_low = 0;
+    COMMO_INTERFACE();   // transmit 0xA5
+    COMMO_INTERFACE();   // transmit 0x5A → TXD_CHECKSUM
+    COMMO_INTERFACE();   // transmit checksum → IDLE
+    LONGS_EQUAL(3, s_tx_log_count);
+    BYTES_EQUAL(0xA5, s_tx_log[0]);
+    BYTES_EQUAL(0x5A, s_tx_log[1]);
+}
+
+// data_is_low=1 in the TXD_CHECKSUM state must block the checksum byte just
+// as it does in TXD_DATA — the checksum is sent only after the line goes low.
+TEST(CommoFuzz, TxChecksumState_BlockedByDataLow)
+{
+    uint8_t tx = 0xA5;
+    SEND_STRING(SEND_STRING_COMPLETE, &tx, 1);
+    s_data_is_low = 0;
+    COMMO_INTERFACE();   // IDLE → TXD_DATA
+    COMMO_INTERFACE();   // TXD_DATA: transmit 0xA5 → TXD_CHECKSUM
+
+    s_data_is_low = 1;
+    COMMO_INTERFACE();   // TXD_CHECKSUM: data_is_low → blocked, count still 1
+    LONGS_EQUAL(1, s_tx_log_count);
+
+    s_data_is_low = 0;
+    COMMO_INTERFACE();   // TXD_CHECKSUM: transmit ~0xA5 → IDLE
+    LONGS_EQUAL(2, s_tx_log_count);
+    BYTES_EQUAL((uint8_t)~0xA5u, s_tx_log[1]);
+}
+
+// Two successive checksum failures keep last_command=0; a subsequent valid
+// command returns NEW_COMMAND both times (not SAME_COMMAND after the second).
+TEST(CommoFuzz, SuccessiveErrors_RetryIsNewCommand)
+{
+    uint8_t bad[2]  = { 0x03, 0x00 };   // wrong checksum (correct = 0xFC)
+    uint8_t good[2] = { 0x03, 0 };
+    good[1] = checksum_of(good, 1);
+
+    drive_packet(bad, 2);
+    BYTES_EQUAL(COMMO_CMD_ERROR, NEW_CMD_RECEIVED());
+    FREE_CMD_BUFFER();
+
+    drive_packet(bad, 2);
+    BYTES_EQUAL(COMMO_CMD_ERROR, NEW_CMD_RECEIVED());
+    FREE_CMD_BUFFER();
+
+    // After two errors, last_command must still be 0 — retry is NEW, not SAME
+    drive_packet(good, 2);
+    BYTES_EQUAL(COMMO_NEW_COMMAND, NEW_CMD_RECEIVED());
+}
+
+// Scenario 1: Amiga game engine bug — rapid-fire PAUSE then PLAY without the
+// host calling FREE_CMD_BUFFER between them.  The state machine has no buffer-
+// free guard in IDLE, so the second command silently overwrites the first.
+// This verifies that the SM accepts the new command and that PAUSE (0x06) is
+// gone from the buffer — only PLAY (0x09) is visible afterward.
+TEST(CommoFuzz, RapidFire_SecondCommandOverwritesFirst)
+{
+    uint8_t pause_pkt[2] = { 0x06, 0 };   // PAUSE_OPC, len=1
+    pause_pkt[1] = checksum_of(pause_pkt, 1);
+    uint8_t play_pkt[2]  = { 0x09, 0 };   // PLAY_OPC, len=1
+    play_pkt[1]  = checksum_of(play_pkt, 1);
+
+    // First command arrives; host app does NOT call FREE_CMD_BUFFER (game engine bug)
+    drive_packet(pause_pkt, 2);
+    BYTES_EQUAL(COMMO_NEW_COMMAND, NEW_CMD_RECEIVED());
+
+    // Second command hammered in immediately — report_cmd overwritten
+    drive_packet(play_pkt, 2);
+    BYTES_EQUAL(COMMO_NEW_COMMAND, NEW_CMD_RECEIVED());
+    BYTES_EQUAL(0x09, GET_BUFFER(0));   // PLAY visible, PAUSE (0x06) silently lost
+}

@@ -192,3 +192,18 @@ TEST(SectorCache, MultipleSlotsByLba)
     CHECK_TRUE(sector_cache_get(&cache, 300, buf, &bytes));
     BYTES_EQUAL(0xCC, buf[0]);
 }
+
+// Scenario 6: a sector injected with fewer than SECTOR_RAW_SIZE valid bytes
+// (simulating a short read mid-transfer) must report the exact byte count and
+// the data that was written, without padding or fabricating bytes.
+TEST(SectorCache, PartialSector_GetReturnsPartialBytes)
+{
+    inject_sector(&cache, 0, 50, 0xAB, 100);   // only 100 bytes valid
+
+    uint8_t buf[SECTOR_RAW_SIZE];
+    uint32_t bytes = 0;
+    CHECK_TRUE(sector_cache_get(&cache, 50, buf, &bytes));
+    LONGS_EQUAL(100, (long)bytes);
+    BYTES_EQUAL(0xAB, buf[0]);
+    BYTES_EQUAL(0xAB, buf[99]);
+}

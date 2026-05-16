@@ -145,19 +145,20 @@ All four PIO programs are always loaded. The upstream servo PIO programs
 
 **Location:** `tests/host/`  
 **Run:** `make && ./cd32_tests -v`  
-**Result:** 367 tests, 0 failures  
-**Parser tests:** `make parser_tests && ./parser_tests -v` → 26 tests, 0 failures (separate binary; uses FatFS injectable sim)
-**Stress tests:** `make stress_sector_cache && ./stress_sector_cache` → 4 tests, 0 failures (TSan binary; concurrent producer/consumer)
+**Result:** 426 tests, 0 failures  
+**Parser tests:** `make parser_tests && ./parser_tests -v` → 28 tests, 0 failures (separate binary; uses FatFS injectable sim)
+**Stress tests:** `make stress_sector_cache && ./stress_sector_cache` → 5 tests, 0 failures (TSan binary; concurrent producer/consumer)
 **Sanitizer:** `-fsanitize=undefined -fno-sanitize-recover=all` active on all C and C++ objects and the link step
 
 | Group | Tests | What it covers |
 |-------|-------|----------------|
 | `LbaMsf` | 11 | LBA↔MSF conversion, BCD encoding, round-trips |
-| `Ecc` | 9 | EDC round-trip, single-bit flip detection |
+| `Ecc` | 13 | EDC round-trip, single-bit flip detection, MSF header flip, last-data-byte flip, sync pattern inside payload passes EDC |
 | `Subcode` | 14 | CRC-16, CONAD byte, BCD track, absolute MSF |
+| `SubcodePio` | 3 | subcode_push_to_pio() PIO TX FIFO back-pressure: all 3 words pushed (never-full), first word rejected (full before push), 3rd word blocked (full after 2) |
 | `Fft` | 7 | Init, zero input, range, peak hold/decay |
 | `VisAudio` | 6 | SPSC ring, left-channel extraction, FIFO order |
-| `SectorCache` | 11 | Slot injection, seek/flush, flush_gen counter |
+| `SectorCache` | 12 | Slot injection, seek/flush, flush_gen counter, partial-sector valid_bytes |
 | `Maths` | 30 | BCD↔hex, add/subtract time, compare, calc_tracks |
 | `CsvReplay` | 10 | Real hardware signal validation (digital.csv, 4.9 GB, 100M rows) |
 | `CsvReplayPonPoff` | 10 | Power-on/power-off idle capture (pon-poff-idle.csv, 5.2 GB) |
@@ -180,11 +181,14 @@ All four PIO programs are always loaded. The upstream servo PIO programs
 | `DaExpand` | 10 | I2S word packing: zero sector, L/R separation, max/min int16_t, lower-half always zero, pair-N addressing, last pair, clkdiv 32/16 |
 | `DaSpeed` | 16 | DA playback state machine: init 1×/2×, start/pause/resume/stop transitions, da_set_double_speed idempotency, clkdiv write capture, speed change while playing |
 | `CommoProtocol` | 13 | COMMO state machine: single-byte opcode, opcode+param, bad checksum, same-command detection, zero opcode ERR_SEND countdown, free-buffer clear, max-param opcode, A→B→A sequence, CMD_ERROR clears last_command (fixed), TX data+checksum byte capture, BUSY/READY states |
+| `CommoFuzz` | 6 | Adversarial COMMO paths: aborted command (param byte consumed as checksum → CMD_ERROR + recovery), 50-tick rapid poll stays IDLE, TX blocked by spurious data strobe without corruption, TXD_CHECKSUM state also blocks on data_is_low, successive errors keep last_command=0 so retry is NEW_COMMAND, rapid-fire second command overwrites first (Amiga game engine bug) |
 | `EffectsColor` | 18 | rgb() RGB565 bswap packing, hsv() grey/red/black/distinct hues, copper_color() darkest/brightest/monotone, sample_to_y() centre/top/bottom/bounds |
 | `CoverDir` | 6 | display.cpp and webserver.c agree on cover-art directory; FatFS volume prefix; trailing slash; default path starts in covers dir |
 | `SectorLayout` | 5 | disc_synthesise_sector() sync pattern, MSF header bytes, mode byte 0x01, data payload copy |
-| `FormatDetect` | 7 | ext_match() case-insensitive extension detection for .iso/.bin/.nrg/.mdf; uppercase; unknown format rejected |
-| `AkikoDma` | 4 | Fake Akiko DMA engine (REPLICA pattern): ping-pong sector sequence, interrupt mid-transfer/restart at new LBA, cache-miss abort, next_lba tracking |
+| `FormatDetect` | 29 | ext_match() case-insensitive extension detection for .iso/.bin/.nrg/.mdf; uppercase; unknown format rejected; Unix slash path; Windows backslash path; space in filename; dot-in-directory-component not confused; Swedish/Danish/Norwegian (Ä Ö Å Ø Æ); German umlauts + ß; French accents; Spanish Ñ; Czech/Slovak carons (Š Č Ž); Polish (Ł Ź Ą); Hungarian double-acute (Ő Ű); Icelandic Þ/Ð; Portuguese Ã/Ç; multi-script Latin paths; Japanese katakana (3-byte); Japanese path; Chinese simplified hanzi; Korean hangul; mixed Latin+CJK paths; uppercase ASCII ext still folds over non-ASCII stems; non-ASCII filename with no extension never matches |
+| `AkikoDma` | 8 | Fake Akiko DMA engine (REPLICA pattern): ping-pong sequence, interrupt mid-transfer, cache-miss abort, next_lba tracking, card-yank exact delivery count, post-reset buf/lba zeroing, silence-pad UINT32_MAX never delivered, I2S word-packing data integrity (left/right channel expand) |
+| `CoreIpcDesync` | 5 | Dual-core IPC boundary: Core 1 stall → graceful stop, tick-after-stop no-op, all-slots-full prefetch_tick blocked safely, fill/drain/fill second batch correct, single-sector silence-pad buf_lba[1]=UINT32_MAX never received |
+| `SubchannelMath` | 15 | Q-channel relative time: index 01 zero at track start, index 00 countdown 1 frame/1 second, pregap boundary no uint32_t underflow, absolute time 2-second lead-in offset, index BCD 0x00/0x01 flip, data/audio CTRL nibble (0x41/0x01), two-digit track BCD, 1-minute relative time, CRC self-consistency; multiple indices: index 2 BCD, index 10 double-digit BCD, relative time from index 2 uses track_start_lba |
 
 **stress_sector_cache groups (TSan binary — `make stress_sector_cache`):**
 
@@ -193,6 +197,7 @@ All four PIO programs are always loaded. The upstream servo PIO programs
 | `queue_empty_boundary` | sector_cache_get returns false on fresh cache |
 | `queue_full_boundary` | prefetch_tick returns early when all 8 slots are valid; no crash or overwrite |
 | `flush_gen_stale_guard` | seek flushes gen; post-seek prefetch lands at new LBA; stale sector evicted |
+| `fill_drain_fill_cycle` | fill 8 slots, drain all, seek + fill 8 more; second batch data integrity verified |
 | `concurrent_produce_consume` | producer+consumer pthreads: 500 sectors, integrity check, TSan reports no races |
 
 **parser_tests groups (separate binary):**
@@ -203,7 +208,7 @@ All four PIO programs are always loaded. The upstream servo PIO programs
 | `ParseBin` | 7 | No CUE fallback, track 0/over-limit skip, INDEX-before-TRACK guard, unknown mode default, pregap underflow clamp, overlapping-track length clamp |
 | `ParseNrg` | 6 | File too small, no magic, chunk_size=0 guard (FIX-1), DAOX too short (FIX-2), lead-out skip, valid track, astronomical end_lba |
 | `ParseMdf` | 4 | Wrong signature, short header, zero sessions, sector_size=0 guard (FIX-3), lead-in/lead-out skip |
-| `SectorAccess` | 3 | Read LBA 0 on ISO, read LBA 0 on raw BIN, read LBA past total_sectors returns 0 |
+| `SectorAccess` | 5 | Read LBA 0 on ISO, read LBA 0 on raw BIN, read LBA past total_sectors returns 0, unaligned buffer no UBSan fault, non-sequential backwards read returns correct data per LBA |
 
 ### CsvReplay test windows
 

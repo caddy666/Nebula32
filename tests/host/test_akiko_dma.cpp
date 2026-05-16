@@ -226,6 +226,51 @@ TEST(AkikoDma, InterruptedMidTransfer)
 }
 
 // ---------------------------------------------------------------------------
+// CardYankMidPlay_ExactSectorsDelivered — inject 4 sectors (LBA 0-3).
+// start(0) pre-loads 0+1; tick1 delivers 0 and reloads 2; tick2 delivers 1
+// and reloads 3; tick3 delivers 2 and misses LBA 4 → playing stops.
+// akiko must have received exactly LBAs [0, 1, 2] and never LBA 3.
+// ---------------------------------------------------------------------------
+TEST(AkikoDma, CardYankMidPlay_ExactSectorsDelivered)
+{
+    for (int i = 0; i < 4; i++)
+        inject_sector(&cache, i, (uint32_t)i);
+
+    CHECK_TRUE(da.start(&cache, 0, &akiko));
+    da.tick(); da.tick(); da.tick();
+
+    LONGS_EQUAL(3, akiko.count);
+    LONGS_EQUAL(0u, akiko.lbas[0]);
+    LONGS_EQUAL(1u, akiko.lbas[1]);
+    LONGS_EQUAL(2u, akiko.lbas[2]);
+    CHECK_FALSE(akiko.contains(3));
+    CHECK_FALSE(da.playing);
+}
+
+// ---------------------------------------------------------------------------
+// PostReset_BufsZeroedNextLbaReset — after start() + 2 ticks, stop() must
+// zero both DMA buffers and reset next_lba to 0, matching the clean state
+// expected after an Amiga hardware reset.
+// ---------------------------------------------------------------------------
+TEST(AkikoDma, PostReset_BufsZeroedNextLbaReset)
+{
+    for (int i = 0; i < SECTOR_BUFFER_COUNT; i++)
+        inject_sector(&cache, i, (uint32_t)i);
+
+    CHECK_TRUE(da.start(&cache, 0, &akiko));
+    da.tick(); da.tick();
+
+    da.stop();
+
+    CHECK_FALSE(da.playing);
+    LONGS_EQUAL(0u, da.next_lba);
+    for (int i = 0; i < DA_WORDS; i++) {
+        LONGS_EQUAL(0u, da.buf[0][i]);
+        LONGS_EQUAL(0u, da.buf[1][i]);
+    }
+}
+
+// ---------------------------------------------------------------------------
 // StaleNextLba — next_lba advances correctly during playback and resets on
 // restart so the new session begins at exactly the requested LBA.
 //
@@ -257,4 +302,49 @@ TEST(AkikoDma, StaleNextLba)
     // Sectors 2, 3 from the first session must not appear
     CHECK_FALSE(akiko.contains(2));
     CHECK_FALSE(akiko.contains(3));
+}
+
+// ---------------------------------------------------------------------------
+// SilencePad_SingleSector_UInt32MaxNotDelivered — when start() can only
+// pre-load one sector, buf[1] is zeroed and buf_lba[1] set to UINT32_MAX.
+// The first tick delivers LBA 0 then misses LBA 1 → playing stops.
+// UINT32_MAX must never be passed to akiko.receive().
+// ---------------------------------------------------------------------------
+TEST(AkikoDma, SilencePad_SingleSector_UInt32MaxNotDelivered)
+{
+    inject_sector(&cache, 0, 0u);   // only LBA 0 available
+
+    CHECK_TRUE(da.start(&cache, 0, &akiko));
+    CHECK_TRUE(da.buf_lba[1] == UINT32_MAX);   // second buffer silence-padded
+
+    da.tick();
+
+    LONGS_EQUAL(1, akiko.count);
+    LONGS_EQUAL(0u, akiko.lbas[0]);
+    CHECK_FALSE(akiko.contains(UINT32_MAX));
+    CHECK_FALSE(da.playing);
+}
+
+// ---------------------------------------------------------------------------
+// DataIntegrity_ExpandedFirstSample — verify the I2S word-packing end-to-end:
+// inject_sector fills data[i] = (lba+i) & 0xFF; _expand shifts each 16-bit
+// PCM sample left 16 bits into the upper half of a uint32_t.
+//
+// LBA 0: data[0..3] = {0,1,2,3}
+//   left  word 0: l=0x0100 → 0x0100<<16 = 0x01000000
+//   right word 0: r=0x0302 → 0x0302<<16 = 0x03020000
+//
+// LBA 1: data[0..3] = {1,2,3,4}
+//   left  word 0: l=0x0201 → 0x02010000
+// ---------------------------------------------------------------------------
+TEST(AkikoDma, DataIntegrity_ExpandedFirstSample)
+{
+    for (int i = 0; i < SECTOR_BUFFER_COUNT; i++)
+        inject_sector(&cache, i, (uint32_t)i);
+
+    CHECK_TRUE(da.start(&cache, 0, &akiko));
+
+    UNSIGNED_LONGS_EQUAL(0x01000000u, da.buf[0][0]);   // LBA 0, left  ch, sample 0
+    UNSIGNED_LONGS_EQUAL(0x03020000u, da.buf[0][1]);   // LBA 0, right ch, sample 0
+    UNSIGNED_LONGS_EQUAL(0x02010000u, da.buf[1][0]);   // LBA 1, left  ch, sample 0
 }

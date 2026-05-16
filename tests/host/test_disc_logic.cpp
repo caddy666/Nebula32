@@ -547,6 +547,200 @@ TEST(FormatDetect, MixedCase_Detected)
     CHECK_TRUE(ext_match("0:/Zool2.Nrg", ".nrg"));
 }
 
+// ---------------------------------------------------------------------------
+// Path separator and whitespace handling
+// ext_match compares only the trailing suffix, so Unix paths, Windows paths,
+// and filenames with spaces all work correctly.
+// ---------------------------------------------------------------------------
+
+TEST(FormatDetect, UnixSlashPath_MatchesExtension)
+{
+    // Nested Unix path: suffix is ".iso"
+    CHECK_TRUE(ext_match("sd/games/zool2.iso", ".iso"));
+    CHECK_FALSE(ext_match("sd/games/zool2.iso", ".bin"));
+}
+
+TEST(FormatDetect, WindowsBackslashPath_MatchesExtension)
+{
+    // Windows-style path (backslash is a regular char in C strings): suffix is ".bin"
+    CHECK_TRUE(ext_match("D:\\GAMES\\disc.bin", ".bin"));
+    CHECK_FALSE(ext_match("D:\\GAMES\\disc.bin", ".iso"));
+}
+
+TEST(FormatDetect, SpaceInFilename_Handled)
+{
+    // Spaces are not special — suffix comparison still works
+    CHECK_TRUE(ext_match("my game disc.iso", ".iso"));
+}
+
+TEST(FormatDetect, DotInDirectoryComponent_NotConfused)
+{
+    // "path.dir/disc" — the last N chars are "disc", not ".iso"
+    CHECK_FALSE(ext_match("path.dir/disc", ".iso"));
+}
+
+// ---------------------------------------------------------------------------
+// Non-ASCII filename tests — extended Latin and CJK character sets
+//
+// ext_match compares raw bytes. UTF-8 guarantees that continuation bytes
+// (0x80-0xBF) never alias ASCII punctuation or letters, so a ".iso" suffix
+// is unambiguous regardless of what multibyte characters precede it.
+// Extended Latin (U+00C0-U+017E) uses 2 bytes; CJK uses 3 bytes.
+// The case-fold in ext_match only applies to ASCII A-Z (0x41-0x5A) — extended
+// uppercase characters such as Ä are never incorrectly folded.
+// ---------------------------------------------------------------------------
+
+// Swedish Ä, Ö, Å (each 2-byte UTF-8: C3 84 / C3 96 / C3 85)
+TEST(FormatDetect, SwedishAaAoA_IsoDetected)
+{
+    CHECK_TRUE(ext_match("Äventyrsspel.iso", ".iso"));     // Ä = C3 84
+    CHECK_TRUE(ext_match("Återvändsgränd.bin", ".bin"));   // Å = C3 85, ä = C3 A4
+    CHECK_TRUE(ext_match("Örnen_flyger.nrg", ".nrg"));     // Ö = C3 96
+}
+
+// Norwegian / Danish Ø and Æ (Ø = C3 98, Æ = C3 86)
+TEST(FormatDetect, NorwegianDanishOslashAe_BinDetected)
+{
+    CHECK_TRUE(ext_match("Øresund.bin", ".bin"));
+    CHECK_TRUE(ext_match("Ærefuldt_spil.mdf", ".mdf"));
+    CHECK_TRUE(ext_match("Blå_Øjne.nrg", ".nrg"));         // å = C3 A5, ø = C3 B8
+}
+
+// German ä, ö, ü, ß (ß = C3 9F; umlauts are C3-prefix 2-byte sequences)
+TEST(FormatDetect, GermanUmlautSzlig_MdfDetected)
+{
+    CHECK_TRUE(ext_match("Straße.mdf", ".mdf"));            // ß = C3 9F
+    CHECK_TRUE(ext_match("Züge_und_Bäume.iso", ".iso"));   // ü = C3 BC, ä = C3 A4
+    CHECK_TRUE(ext_match("Öl_und_Käse.bin", ".bin"));      // ö = C3 B6, ä = C3 A4
+}
+
+// French accented vowels (é = C3 A9, è = C3 A8, ê = C3 AA, ô = C3 B4, â = C3 A2)
+TEST(FormatDetect, FrenchAccents_BinDetected)
+{
+    CHECK_TRUE(ext_match("Héros_de_légende.bin", ".bin"));
+    CHECK_TRUE(ext_match("Châteaux_et_forêts.iso", ".iso"));
+    CHECK_TRUE(ext_match("Île_enchantée.nrg", ".nrg"));    // Î = C3 8E
+}
+
+// Spanish Ñ, accented vowels (ñ = C3 B1, á = C3 A1, é = C3 A9, ó = C3 B3, ú = C3 BA)
+TEST(FormatDetect, SpanishNtildeAccents_BinDetected)
+{
+    CHECK_TRUE(ext_match("Acción_Héroe.bin", ".bin"));
+    CHECK_TRUE(ext_match("España_Clásico.iso", ".iso"));   // ñ = C3 B1, á = C3 A1
+    CHECK_TRUE(ext_match("Añadir_Música.mdf", ".mdf"));    // ñ, ú
+}
+
+// Czech / Slovak š, č, ž, ř (each 2-byte: C5 A1 / C4 8D / C5 BE / C5 99)
+TEST(FormatDetect, CzechSlovakCarons_NrgDetected)
+{
+    CHECK_TRUE(ext_match("Šéf_Čert_Šel.nrg", ".nrg"));
+    CHECK_TRUE(ext_match("Žlutý_pes.iso", ".iso"));        // Ž = C5 BD, ý = C3 BD
+    CHECK_TRUE(ext_match("Brno_Řeka.bin", ".bin"));        // Ř = C5 98
+}
+
+// Polish ł, ź, ź, ą, ę, ó (ł = C5 82, ź = C5 BA, ą = C4 85, ę = C4 99)
+TEST(FormatDetect, PolishSpecialLetters_MdfDetected)
+{
+    CHECK_TRUE(ext_match("Łódź_Gdańsk.mdf", ".mdf"));     // Ł, ó, ź, ń
+    CHECK_TRUE(ext_match("Więcej_Małych.iso", ".iso"));    // ę, ł
+    CHECK_TRUE(ext_match("Ząb_Źródło.bin", ".bin"));       // Ą, Ź
+}
+
+// Hungarian double-acute accents Ő, Ű (Ő = C5 90, Ű = C5 B0)
+TEST(FormatDetect, HungarianDoubleAcute_BinDetected)
+{
+    CHECK_TRUE(ext_match("Győr_Város.bin", ".bin"));        // ő = C5 91
+    CHECK_TRUE(ext_match("Tűz_és_Fűszer.iso", ".iso"));    // ű = C5 B1
+}
+
+// Icelandic Þ (thorn = C3 BE) and Ð (eth = C3 90)
+TEST(FormatDetect, IcelandicThornEth_IsoDetected)
+{
+    CHECK_TRUE(ext_match("Þingvellir.iso", ".iso"));
+    CHECK_TRUE(ext_match("Ðalvík_saga.bin", ".bin"));
+}
+
+// Portuguese Ã, Ç, Õ (ã = C3 A3, ç = C3 A7, õ = C3 B5)
+TEST(FormatDetect, PortugueseTildeAndCedilla_BinDetected)
+{
+    CHECK_TRUE(ext_match("São_Paulo_Ação.bin", ".bin"));   // ã, ç
+    CHECK_TRUE(ext_match("Estação_Central.mdf", ".mdf"));  // ã
+    CHECK_TRUE(ext_match("Colões_Tradição.nrg", ".nrg"));  // õ, ã
+}
+
+// Mix of multiple extended-Latin scripts in a single path
+TEST(FormatDetect, MultiScriptLatinPath_IsoDetected)
+{
+    // German dir, Spanish filename
+    CHECK_TRUE(ext_match("Spiele/Acción.iso", ".iso"));
+    // Swedish dir, Polish filename
+    CHECK_TRUE(ext_match("Spel/Łódź.bin", ".bin"));
+    // French dir, Czech filename
+    CHECK_TRUE(ext_match("Jeux/Žlutý.nrg", ".nrg"));
+}
+
+// ---------------------------------------------------------------------------
+// CJK character sets — 3-byte UTF-8 sequences
+// ---------------------------------------------------------------------------
+
+// Japanese katakana (3 bytes each: E3 + 82/83 + xx)
+// ゲーム = game, ディスク = disc
+TEST(FormatDetect, JapaneseKatakana_IsoDetected)
+{
+    CHECK_TRUE(ext_match("ゲーム.iso", ".iso"));
+    CHECK_TRUE(ext_match("ディスク.bin", ".bin"));
+    CHECK_FALSE(ext_match("ゲーム.iso", ".bin"));   // wrong extension
+}
+
+// Japanese path: hiragana directory, katakana filename
+TEST(FormatDetect, JapanesePath_BinDetected)
+{
+    // げーむ (hiragana) / ゲーム.bin (katakana)
+    CHECK_TRUE(ext_match("げーむ/ゲーム.bin", ".bin"));
+}
+
+// Chinese simplified hanzi (3 bytes each)
+// 光盘镜像 = disc image
+TEST(FormatDetect, ChineseSimplified_BinDetected)
+{
+    CHECK_TRUE(ext_match("光盘镜像.bin", ".bin"));
+    CHECK_TRUE(ext_match("游戏光盘.iso", ".iso"));
+}
+
+// Korean hangul syllables (3 bytes each)
+// 게임 = game, 디스크 = disc
+TEST(FormatDetect, KoreanHangul_NrgDetected)
+{
+    CHECK_TRUE(ext_match("게임디스크.nrg", ".nrg"));
+    CHECK_TRUE(ext_match("광학디스크.mdf", ".mdf"));
+}
+
+// Mixed: Latin extended dir + CJK filename
+TEST(FormatDetect, MixedLatinCjkPath_IsoDetected)
+{
+    // German dir (ä = 2-byte), Japanese filename (3-byte katakana)
+    CHECK_TRUE(ext_match("Spiele/ゲーム.iso", ".iso"));
+    // Swedish dir, Korean filename
+    CHECK_TRUE(ext_match("Äventyr/게임.bin", ".bin"));
+}
+
+// Uppercase ASCII extension still case-folds correctly when filename is non-ASCII
+TEST(FormatDetect, NonAsciiFilename_UppercaseExtFolds)
+{
+    CHECK_TRUE(ext_match("ゲーム.ISO", ".iso"));       // ASCII ext folded; CJK stem irrelevant
+    CHECK_TRUE(ext_match("光盘镜像.BIN", ".bin"));
+    CHECK_TRUE(ext_match("Straße.NRG", ".nrg"));       // extended Latin stem + ASCII ext
+}
+
+// Non-ASCII filename with NO ASCII extension must never match any format
+TEST(FormatDetect, NonAsciiNoExtension_NotMatched)
+{
+    CHECK_FALSE(ext_match("ゲーム", ".iso"));
+    CHECK_FALSE(ext_match("光盘镜像", ".bin"));
+    CHECK_FALSE(ext_match("게임디스크", ".nrg"));
+    CHECK_FALSE(ext_match("Straße", ".mdf"));
+}
+
 /* =========================================================================
  * LbaFileOffset — LBA-to-byte-offset seek formula
  *

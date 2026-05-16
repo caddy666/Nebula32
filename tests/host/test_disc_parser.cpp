@@ -628,3 +628,59 @@ TEST(SectorAccess, ReadLba0_RawBin_ReturnsRawSector)
     uint32_t n = disc_read_sector(&disc, 0, buf, SECTOR_MODE_RAW);
     LONGS_EQUAL(SECTOR_RAW_BYTES, n);
 }
+
+// disc_read_sector must not assume 32-bit buffer alignment.
+// UBSan would catch any unaligned multi-byte access to the output buffer.
+TEST(SectorAccess, ReadWithUnalignedBuffer_NoFault)
+{
+    static uint8_t img[2048 * 3];
+    memset(img, 0x5A, sizeof(img));
+    fatfs_sim_inject(&disc.image_file, img, sizeof(img));
+    disc.file_open = true;
+    CHECK_TRUE(disc_parse_iso(&disc));
+
+    // Back the output buffer with one extra byte and use a +1 pointer so the
+    // read lands at a byte-aligned but NOT 32-bit-aligned address.
+    uint8_t backing[SECTOR_RAW_BYTES + 1];
+    uint8_t *unaligned = backing + 1;
+    memset(backing, 0xAA, sizeof(backing));
+
+    uint32_t n = disc_read_sector(&disc, 0, unaligned, SECTOR_MODE_RAW);
+    LONGS_EQUAL(SECTOR_RAW_BYTES, n);
+    // Synthesised Mode-1 sector: first byte is CD sync 0x00
+    BYTES_EQUAL(0x00, unaligned[0]);
+    // Byte before the buffer must be untouched (no overwrite before buf start)
+    BYTES_EQUAL(0xAA, backing[0]);
+}
+
+// Scenario 13: reads in backwards / non-sequential LBA order must return the
+// correct data for each LBA regardless of the read sequence.
+// fatfs_sim always seeks before reading, so non-linear access is supported.
+// Uses a 10-sector ISO where sector N contains fill byte N; reads 7 → 2 → 5.
+TEST(SectorAccess, ReadNonSequential_LbaOrderIndependent)
+{
+    static uint8_t img[2048 * 10];
+    for (int i = 0; i < 10; i++)
+        memset(img + (size_t)i * 2048, (uint8_t)i, 2048);
+    fatfs_sim_inject(&disc.image_file, img, sizeof(img));
+    disc.file_open = true;
+    CHECK_TRUE(disc_parse_iso(&disc));
+    LONGS_EQUAL(10, disc.total_sectors);
+
+    uint32_t n;
+
+    // Backwards from the end: LBA 7, first data byte of the synthesised sector
+    n = disc_read_sector(&disc, 7, buf, SECTOR_MODE_RAW);
+    LONGS_EQUAL(SECTOR_RAW_BYTES, n);
+    BYTES_EQUAL(0x07, buf[16]);   // first user-data byte at offset 16
+
+    // Jump backwards to near the start
+    n = disc_read_sector(&disc, 2, buf, SECTOR_MODE_RAW);
+    LONGS_EQUAL(SECTOR_RAW_BYTES, n);
+    BYTES_EQUAL(0x02, buf[16]);
+
+    // Forward again
+    n = disc_read_sector(&disc, 5, buf, SECTOR_MODE_RAW);
+    LONGS_EQUAL(SECTOR_RAW_BYTES, n);
+    BYTES_EQUAL(0x05, buf[16]);
+}

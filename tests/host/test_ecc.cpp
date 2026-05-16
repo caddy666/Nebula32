@@ -159,6 +159,50 @@ TEST(Ecc, LbaVariationProducesDifferentEdc)
     CHECK_TRUE(edc_a != edc_b);
 }
 
+/* ---------------------------------------------------------------------------
+ * Scenario 9/10: sync corruption and header flip
+ * The EDC covers bytes 0-2063 (sync + MSF header + mode + user data).
+ * A single-bit flip anywhere in that range must break the check.
+ * Embedding a valid sync pattern inside the user data must NOT confuse the
+ * checker — it verifies the checksum, not the structure.
+ * -------------------------------------------------------------------------- */
+
+/* Flipping a byte in the MSF header (bytes 12-14) must break the EDC check. */
+TEST(Ecc, FlipInMsfHeader_Fails)
+{
+    uint8_t sector[2352];
+    make_sector(sector, 100, 0xAA);
+    ecc_write_edc(sector);
+    sector[12] ^= 0x01;   /* corrupt MSF minute byte */
+    CHECK_FALSE(ecc_verify_edc(sector));
+}
+
+/* Flipping the last data byte (byte 2063) must also fail. */
+TEST(Ecc, FlipAtDataPayloadEnd_Fails)
+{
+    uint8_t sector[2352];
+    make_sector(sector, 0, 0x00);
+    ecc_write_edc(sector);
+    sector[2063] ^= 0x80;   /* last user-data byte before EDC field */
+    CHECK_FALSE(ecc_verify_edc(sector));
+}
+
+/* Embedding the 12-byte CD sync pattern inside the user data payload must NOT
+ * cause ecc_verify_edc to fail — the EDC covers content, not structure. */
+TEST(Ecc, SyncPatternInPayload_PassesEdc)
+{
+    static const uint8_t sync[12] = {
+        0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+        0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x00
+    };
+    uint8_t sector[2352];
+    make_sector(sector, 0, 0x5A);
+    /* Overwrite first 12 bytes of user-data area with the sync pattern */
+    memcpy(sector + 16, sync, 12);
+    ecc_write_edc(sector);
+    CHECK_TRUE(ecc_verify_edc(sector));   /* EDC passes — content, not structure */
+}
+
 /* =============================================================================
  * SectorLayout — disc_synthesise_sector() output structure
  *

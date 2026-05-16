@@ -24,6 +24,12 @@ extern "C" {
 #include "cd_types.h"
 }
 
+// PIO FIFO stub state — definitions satisfy the extern declarations in
+// hardware/pio.h.  Only this TU calls subcode_push_to_pio, so no other TU
+// generates a reference to these globals.
+int g_stub_pio_put_count       = 0;
+int g_stub_pio_fifo_full_after = -1;
+
 TEST_GROUP(Subcode) {};
 
 /* -------------------------------------------------------------------------
@@ -277,4 +283,53 @@ TEST(Subcode, AbsTimeUnaffectedByRelTimeFix)
     BYTES_EQUAL(0x00, buf[7]);  /* absolute minute */
     BYTES_EQUAL(0x04, buf[8]);  /* absolute second — 300/75 = 4 */
     BYTES_EQUAL(0x00, buf[9]);  /* absolute frame  */
+}
+
+/* =========================================================================
+ * SubcodePio — Scenario 8: PIO TX FIFO back-pressure via subcode_push_to_pio
+ *
+ * subcode_push_to_pio() packs 12 Q-channel bytes into 3 × 32-bit words and
+ * checks pio_sm_is_tx_fifo_full() before each push.  It returns false (and
+ * stops pushing) the moment the FIFO is full, mirroring real PIO back-pressure.
+ *
+ * The stub FIFO is controlled by g_stub_pio_fifo_full_after:
+ *   -1 → never full (normal path)
+ *   0  → already full before the first word (immediate rejection)
+ *   N  → full after N words have been pushed
+ * ======================================================================= */
+
+TEST_GROUP(SubcodePio)
+{
+    uint8_t qbuf[QCHANNEL_SIZE];
+
+    void setup() {
+        g_stub_pio_put_count       = 0;
+        g_stub_pio_fifo_full_after = -1;   // -1 = never full
+        subcode_build_q_position(1, 1, false, 150u, 225u, qbuf);
+    }
+};
+
+/* Normal path: FIFO never full → all 3 words pushed, returns true. */
+TEST(SubcodePio, PushAllThreeWords_Succeeds)
+{
+    CHECK_TRUE(subcode_push_to_pio(pio0, 0, qbuf));
+    LONGS_EQUAL(3, g_stub_pio_put_count);
+}
+
+/* Scenario 8a: FIFO is already full before the first word.
+ * subcode_push_to_pio must return false immediately with 0 words pushed. */
+TEST(SubcodePio, FullFifo_FirstWordRejected)
+{
+    g_stub_pio_fifo_full_after = 0;   // full before any push
+    CHECK_FALSE(subcode_push_to_pio(pio0, 0, qbuf));
+    LONGS_EQUAL(0, g_stub_pio_put_count);
+}
+
+/* Scenario 8b: FIFO fills after 2 words (simulates 4-word FIFO with 2 words
+ * already occupied).  The third push is blocked; function returns false. */
+TEST(SubcodePio, PartiallyFull_ThirdWordBlocked)
+{
+    g_stub_pio_fifo_full_after = 2;   // full after 2 pushes
+    CHECK_FALSE(subcode_push_to_pio(pio0, 0, qbuf));
+    LONGS_EQUAL(2, g_stub_pio_put_count);   // exactly 2 words made it in
 }
