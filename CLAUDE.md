@@ -121,9 +121,10 @@ Data transitions on the **falling** BCLK edge; Akiko samples on the **rising** e
 | `tests/host/test_csv_replay_pon_poff.cpp` | ✅ Correct | CsvReplayPonPoff: 10 windowed tests against pon-poff-idle.csv |
 | `tests/host/test_csv_replay_zool2.cpp` | ✅ Correct | CsvReplayZool2: 10 windowed tests against zool2.csv |
 | `tests/host/test_csv_replay_pinball.cpp` | ✅ Correct | CsvReplayPinball: 10 windowed tests against pinball.csv |
-| `tests/host/test_door_tray.cpp` | ✅ Correct | DoorTray: 10 tests — insert/eject state, ACTIVE pin/LED, status bits; DoorPin: 8 tests — GPIO edge detection, boot snapshot, motor/LED state |
+| `tests/host/test_door_tray.cpp` | ✅ Correct | DoorTray: 10 tests — insert/eject state, ACTIVE pin/LED, status bits; DoorPin: 8 tests — GPIO edge detection, boot snapshot, motor/LED state; HostReset: 7 tests — /RESET contract (GPIO 14), drive state cleared, door state preserved |
 | `tests/host/test_opc_responses.cpp` | ✅ Correct | OpcResponses: 34-case table test — every COMMO opcode → status + state (incl. SEEK from PLAYING, SEEK invalid BCD) |
 | `tests/host/test_motor_sled_fake.cpp` | ✅ Correct | MotorSledFake: 10 tests — motor active states, BCD→LBA, virtual sled seek |
+| `tests/host/test_webserver_html.cpp` | ✅ Correct | WebserverHtml: 10 tests — compiles real build_html_page() via WEBSERVER_TEST_BUILD; verifies buffer, title, starfield, SD space, CSS escaping, disc grid, drive state label |
 
 ---
 
@@ -145,7 +146,7 @@ All four PIO programs are always loaded. The upstream servo PIO programs
 
 **Location:** `tests/host/`  
 **Run:** `make && ./cd32_tests -v`  
-**Result:** 426 tests, 0 failures  
+**Result:** 443 tests, 0 failures  
 **Parser tests:** `make parser_tests && ./parser_tests -v` → 28 tests, 0 failures (separate binary; uses FatFS injectable sim)
 **Stress tests:** `make stress_sector_cache && ./stress_sector_cache` → 5 tests, 0 failures (TSan binary; concurrent producer/consumer)
 **Sanitizer:** `-fsanitize=undefined -fno-sanitize-recover=all` active on all C and C++ objects and the link step
@@ -189,6 +190,8 @@ All four PIO programs are always loaded. The upstream servo PIO programs
 | `AkikoDma` | 8 | Fake Akiko DMA engine (REPLICA pattern): ping-pong sequence, interrupt mid-transfer, cache-miss abort, next_lba tracking, card-yank exact delivery count, post-reset buf/lba zeroing, silence-pad UINT32_MAX never delivered, I2S word-packing data integrity (left/right channel expand) |
 | `CoreIpcDesync` | 5 | Dual-core IPC boundary: Core 1 stall → graceful stop, tick-after-stop no-op, all-slots-full prefetch_tick blocked safely, fill/drain/fill second batch correct, single-sector silence-pad buf_lba[1]=UINT32_MAX never received |
 | `SubchannelMath` | 15 | Q-channel relative time: index 01 zero at track start, index 00 countdown 1 frame/1 second, pregap boundary no uint32_t underflow, absolute time 2-second lead-in offset, index BCD 0x00/0x01 flip, data/audio CTRL nibble (0x41/0x01), two-digit track BCD, 1-minute relative time, CRC self-consistency; multiple indices: index 2 BCD, index 10 double-digit BCD, relative time from index 2 uses track_start_lba |
+| `HostReset` | 7 | /RESET pin (GPIO 14) contract: PLAYING/SEEKING/SPINUP → IDLE, ThenTrayIn restarts spinup, multiple resets idempotent, door GPIO snapshot preserved across reset, DRIVE_ERROR fault cleared |
+| `WebserverHtml` | 10 | Compiles and runs the real build_html_page() via WEBSERVER_TEST_BUILD hook; checks: fits 32 KB, DOCTYPE present, Nebula32 title, starfield script, SD card status label, GB space output, loadDisc JS, CSS %% escaping, disc names in grid, Drive State label |
 
 **stress_sector_cache groups (TSan binary — `make stress_sector_cache`):**
 

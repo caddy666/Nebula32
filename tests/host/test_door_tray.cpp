@@ -444,3 +444,204 @@ TEST(DoorPin, RisingEdgeFromSeekingGoesIdle)
     CHECK_TRUE_TEXT(!motor_active(),
                     "Motor must be inactive after door opens during seek");
 }
+
+// =============================================================================
+// HostReset test group
+// =============================================================================
+//
+// Documents the expected contract for handling the active-low /RESET line from
+// the CD32 (GPIO 14, PIN_RESET, connector pin 7).
+//
+// Current firmware status:
+//   PIN_RESET is defined in gpio_map.h and checked idle-high in selftest.c,
+//   but is NOT polled in the main loop.  commo_bridge_poll() currently ignores
+//   /RESET pulses from the CD32 host.  These tests specify the missing contract.
+//
+// What a /RESET assertion MUST cause:
+//   DA output stopped    (da_stop() — DMA halted, PIO SM cleaned)
+//   Sector cache seek 0  (sector_cache_seek(&g_cache, 0) — flush + next_lba=0)
+//   Drive state → IDLE   (motor off, ACTIVE pin low)
+//   COMMO SM → IDLE      (ready to receive the TRAY_IN_OPC Akiko will send)
+//
+// What /RESET MUST NOT change:
+//   disc_image_t state   — the disc is still physically present; re-parsing
+//                          the same ISO/BIN/NRG after every host reset is
+//                          unnecessary and wastes SD card bandwidth.
+//   door GPIO state      — s_door_prev is a snapshot of a real-time physical
+//                          pin; whether the door was open before the host CPU
+//                          reset is still true immediately after it.
+//
+// After /RESET the CD32 re-initialises Akiko and sends TRAY_IN_OPC.  The drive
+// must respond as if it just powered on with a disc already loaded.
+//
+// handle_host_reset() replicates the expected commo_bridge_poll() response.
+// =============================================================================
+
+// Replicates what commo_bridge_poll() SHOULD do when PIN_RESET goes low.
+// NOTE: s_door_prev is intentionally not touched — it is a GPIO snapshot.
+static void handle_host_reset(void)
+{
+    s_state = DRIVE_IDLE;
+}
+
+TEST_GROUP(HostReset)
+{
+    void setup()
+    {
+        s_state     = DRIVE_IDLE;
+        s_door_prev = false;   // door closed
+    }
+    void teardown() {}
+};
+
+// ---------------------------------------------------------------------------
+// 1 — /RESET from PLAYING returns drive to IDLE.
+//
+// The most common case: the user presses the CD32 reset button while a game
+// is running.  DA DMA must halt and the drive must not report BUSY to Akiko's
+// re-initialisation sequence.
+// ---------------------------------------------------------------------------
+TEST(HostReset, FromPlaying_DriveGoesIdle)
+{
+    s_state = DRIVE_PLAYING;
+    handle_host_reset();
+
+    CHECK_EQUAL_TEXT((int)DRIVE_IDLE, (int)s_state,
+                     "/RESET from PLAYING must set state to DRIVE_IDLE");
+    CHECK_TRUE_TEXT(!motor_active(),
+                    "Motor must be inactive (ACTIVE pin low) after /RESET");
+}
+
+// ---------------------------------------------------------------------------
+// 2 — /RESET from SEEKING aborts the seek cleanly.
+//
+// A slow seek may be in progress when the user resets.  The drive must not
+// stay in SEEKING — Akiko's post-reset TRAY_IN expects BUSY then READY,
+// not a stuck seek state.
+// ---------------------------------------------------------------------------
+TEST(HostReset, FromSeeking_DriveGoesIdle)
+{
+    s_state = DRIVE_SEEKING;
+    handle_host_reset();
+
+    CHECK_EQUAL_TEXT((int)DRIVE_IDLE, (int)s_state,
+                     "/RESET from SEEKING must abort seek and go IDLE");
+    CHECK_TRUE_TEXT(!motor_active(),
+                    "Motor must be inactive after /RESET from SEEKING");
+}
+
+// ---------------------------------------------------------------------------
+// 3 — /RESET during SPINUP collapses back to IDLE.
+//
+// The CD32 can assert /RESET during its own power-on before spinup completes.
+// The drive must not latch in SPINUP — it must restart the full TRAY_IN
+// sequence once Akiko re-initialises.
+// ---------------------------------------------------------------------------
+TEST(HostReset, FromSpinup_DriveGoesIdle)
+{
+    s_state = DRIVE_SPINUP;
+    handle_host_reset();
+
+    CHECK_EQUAL_TEXT((int)DRIVE_IDLE, (int)s_state,
+                     "/RESET during SPINUP must collapse to DRIVE_IDLE");
+    CHECK_TRUE_TEXT(!motor_active(),
+                    "Motor must be off after /RESET from SPINUP");
+}
+
+// ---------------------------------------------------------------------------
+// 4 — After /RESET a TRAY_IN sequence restarts correctly.
+//
+// Akiko's boot ROM always sends TRAY_IN_OPC after reset if a disc is present.
+// The drive must enter SPINUP → READY as if it had just powered on, not skip
+// straight to READY (which would give Akiko a stale Q-channel).
+// ---------------------------------------------------------------------------
+TEST(HostReset, ThenTrayIn_RestartsSpinup)
+{
+    s_state = DRIVE_PLAYING;
+    handle_host_reset();
+
+    CHECK_EQUAL_TEXT((int)DRIVE_IDLE, (int)s_state,
+                     "State must be IDLE before TRAY_IN");
+
+    handle_tray_in();
+    CHECK_EQUAL_TEXT((int)DRIVE_SPINUP, (int)s_state,
+                     "TRAY_IN after /RESET must enter SPINUP, not skip to READY");
+    CHECK_TRUE_TEXT(motor_active(),
+                    "Motor must be active during post-reset spinup");
+
+    advance_state();
+    CHECK_EQUAL_TEXT((int)DRIVE_READY, (int)s_state,
+                     "SPINUP must advance to READY normally after /RESET");
+    CHECK_EQUAL_TEXT(DRIVE_STATUS_DISC, build_status(),
+                     "READY status must have only DISC bit after post-reset spinup");
+}
+
+// ---------------------------------------------------------------------------
+// 5 — Multiple /RESET pulses are idempotent.
+//
+// The CD32 power supply can glitch and assert /RESET several times in rapid
+// succession.  Each reset must leave the drive in IDLE — the state must not
+// cycle through intermediate values or accumulate errors.
+// ---------------------------------------------------------------------------
+TEST(HostReset, MultipleResetsAreIdempotent)
+{
+    s_state = DRIVE_PLAYING;
+
+    handle_host_reset();
+    CHECK_EQUAL_TEXT((int)DRIVE_IDLE, (int)s_state, "First /RESET");
+
+    handle_host_reset();
+    CHECK_EQUAL_TEXT((int)DRIVE_IDLE, (int)s_state, "Second /RESET");
+
+    handle_host_reset();
+    CHECK_EQUAL_TEXT((int)DRIVE_IDLE, (int)s_state, "Third /RESET");
+
+    CHECK_TRUE_TEXT(!motor_active(),
+                    "Motor must remain inactive across repeated /RESET pulses");
+}
+
+// ---------------------------------------------------------------------------
+// 6 — /RESET does NOT change the door GPIO state.
+//
+// s_door_prev is a snapshot of a physical GPIO — whether the cover was open
+// when the host reset fired is still physically true immediately after.  If
+// handle_host_reset() cleared s_door_prev, the next poll_door() would see a
+// spurious LOW→HIGH edge and send a false eject status to Akiko.
+// ---------------------------------------------------------------------------
+TEST(HostReset, DoorStatePreservedAcrossReset)
+{
+    // Door was open before the reset (HIGH = door open)
+    s_door_prev = true;
+    s_state     = DRIVE_PLAYING;
+
+    handle_host_reset();
+
+    CHECK_EQUAL_TEXT((int)DRIVE_IDLE, (int)s_state,
+                     "Drive must be IDLE after reset");
+    CHECK_TRUE_TEXT(s_door_prev,
+                    "/RESET must not alter door pin snapshot — "
+                    "clearing it would cause a spurious eject on next poll");
+
+    // The next poll must NOT fire a rising-edge eject (door is still open)
+    uint8_t sent = poll_door(true);  // pin is still HIGH
+    CHECK_EQUAL_TEXT(0xFF, sent,
+                     "No spurious eject after /RESET with door already open");
+}
+
+// ---------------------------------------------------------------------------
+// 7 — /RESET from ERROR clears the fault state.
+//
+// A hardware error (e.g. SD card removed mid-read) sets DRIVE_ERROR.  After
+// the user resets the CD32, the drive must return to IDLE — not stay faulted
+// — so that the post-reset TRAY_IN can succeed.
+// ---------------------------------------------------------------------------
+TEST(HostReset, FromError_FaultCleared)
+{
+    s_state = DRIVE_ERROR;
+    handle_host_reset();
+
+    CHECK_EQUAL_TEXT((int)DRIVE_IDLE, (int)s_state,
+                     "/RESET must clear DRIVE_ERROR and return to DRIVE_IDLE");
+    CHECK_TRUE_TEXT(!(build_status() & DRIVE_STATUS_ERROR),
+                    "ERROR bit must not be set after /RESET clears the fault");
+}

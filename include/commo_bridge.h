@@ -84,4 +84,7 @@ void commo_bridge_send_qchannel(const uint8_t *qbuf_12bytes);
 // Returns true if the COMMO bus hardware is present and initialised.
 bool commo_bridge_is_active(void);
 
+// Return the current drive state (used by webserver.c to render status).
+drive_state_t commo_bridge_get_drive_state(void);
+
 

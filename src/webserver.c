@@ -27,6 +27,7 @@
 #include "sd_card_api.h"
 #include "disc_image.h"   // MAX_PATH_LEN
 #include "cd_types.h"
+#include "commo_bridge.h" // commo_bridge_get_drive_state()
 
 // Pico W WiFi + lwIP headers
 #include "pico/stdlib.h"
@@ -168,6 +169,29 @@ static const char *state_name(int state) {
     }
 }
 
+// SD card space via f_getfree. Returns false if the volume is not mounted.
+static bool sd_get_space(uint64_t *used_out, uint64_t *total_out) {
+    FATFS *fs;
+    DWORD  fre_clust;
+    if (f_getfree("0:", &fre_clust, &fs) != FR_OK) return false;
+    uint64_t clust_bytes = (uint64_t)fs->csize * 512;
+    uint64_t total       = (uint64_t)(fs->n_fatent - 2) * clust_bytes;
+    uint64_t free_bytes  = (uint64_t)fre_clust * clust_bytes;
+    *total_out = total;
+    *used_out  = total - free_bytes;
+    return true;
+}
+
+// Human-readable byte count: "X.X GB", "X.X MB", or "XXX KB"
+static void fmt_bytes(char *buf, int bufsz, uint64_t bytes) {
+    if (bytes >= (uint64_t)1024 * 1024 * 1024)
+        snprintf(buf, bufsz, "%.1f GB", (double)bytes / (1024.0 * 1024 * 1024));
+    else if (bytes >= (uint64_t)1024 * 1024)
+        snprintf(buf, bufsz, "%.1f MB", (double)bytes / (1024.0 * 1024));
+    else
+        snprintf(buf, bufsz, "%lu KB", (unsigned long)(bytes / 1024));
+}
+
 // Generate the main HTML page into a dynamically allocated string.
 // Caller must free() the returned pointer.
 static char *build_html_page(void) {
@@ -187,7 +211,7 @@ static char *build_html_page(void) {
          "<meta charset='UTF-8'>"
          "<meta name='viewport' content='width=device-width,initial-scale=1'>"
          "<meta http-equiv='refresh' content='5'>"
-         "<title>CD32 ODE — Disc Selector</title>"
+         "<title>Nebula32 — Disc Selector</title>"
          "<style>"
          "body{font-family:system-ui,sans-serif;background:#1a1a2e;color:#e0e0e0;"
               "margin:0;padding:16px}"
@@ -230,7 +254,7 @@ static char *build_html_page(void) {
                                  ".disc-cover,.disc-cover-svg{width:120px;height:120px}}"
          "</style></head><body>");
 
-    HCAT("<h1>💿 CD32 Optical Drive Emulator</h1>"
+    HCAT("<h1>💿 Nebula32, a CD32 Optical Drive Emulator</h1>"
          "<p class='subtitle'>%s &nbsp;·&nbsp; IP: %s &nbsp;·&nbsp; "
          "Use rotary encoder or click below to load a disc</p>",
          s_host, s_ip_str);
@@ -240,7 +264,7 @@ static char *build_html_page(void) {
          "<div class='status-item'>"
          "<span class='status-label'>Drive State</span>"
          "<span class='status-value'>%s</span></div>",
-         state_name(g_cxd.state));
+         state_name(commo_bridge_get_drive_state()));
 
     if (s_loaded_index < s_image_count) {
         char base[128];
@@ -254,9 +278,21 @@ static char *build_html_page(void) {
 
     HCAT("<div class='status-item'>"
          "<span class='status-label'>Images Found</span>"
-         "<span class='status-value'>%lu</span></div>"
-         "</div>",
+         "<span class='status-value'>%lu</span></div>",
          (unsigned long)s_image_count);
+
+    uint64_t sd_used = 0, sd_total = 0;
+    if (sd_get_space(&sd_used, &sd_total)) {
+        char used_str[16], total_str[16];
+        fmt_bytes(used_str, sizeof(used_str), sd_used);
+        fmt_bytes(total_str, sizeof(total_str), sd_total);
+        HCAT("<div class='status-item'>"
+             "<span class='status-label'>SD Card</span>"
+             "<span class='status-value'>%s used / %s</span></div>",
+             used_str, total_str);
+    }
+
+    HCAT("</div>");
 
     // Disc grid
     HCAT("<div class='grid'>");
@@ -317,10 +353,47 @@ static char *build_html_page(void) {
          "}"
          "</script>");
 
+    // Perspective starfield — 150 stars in normalised 3D space.
+    // Each frame z decreases (star approaches); projected with x/z * W + cx.
+    // Stars that reach z<=0 or fly off-screen are recycled at z=1 (far away).
+    HCAT("<script>"
+         "(function(){"
+         "var c=document.createElement('canvas');"
+         "c.style.cssText='position:fixed;top:0;left:0;width:100%%;height:100%%;z-index:-1;pointer-events:none';"
+         "document.body.appendChild(c);"
+         "var ctx=c.getContext('2d'),W,H,N=150,stars=[];"
+         "function resize(){"
+         "W=c.width=innerWidth;H=c.height=innerHeight;"
+         "ctx.fillStyle='#1a1a2e';ctx.fillRect(0,0,W,H);}"
+         "window.addEventListener('resize',resize);resize();"
+         "function mk(){return{x:Math.random()-.5,y:Math.random()-.5,z:Math.random()*.9+.1};}"
+         "for(var i=0;i<N;i++)stars.push(mk());"
+         "function frame(){"
+         "ctx.fillStyle='rgba(26,26,46,.2)';ctx.fillRect(0,0,W,H);"
+         "var cx=W/2,cy=H/2;"
+         "for(var i=0;i<N;i++){"
+         "var s=stars[i];"
+         "s.z-=.004;"
+         "if(s.z<=0){stars[i]=mk();continue;}"
+         "var px=s.x/s.z*W+cx,py=s.y/s.z*H+cy;"
+         "if(px<0||px>W||py<0||py>H){stars[i]=mk();continue;}"
+         "ctx.fillStyle='rgba(255,255,255,'+(1-s.z*.5)+')';"
+         "ctx.beginPath();ctx.arc(px,py,Math.max(.2,(1-s.z)*2.5),0,6.28);ctx.fill();}"
+         "requestAnimationFrame(frame);}"
+         "frame();"
+         "})();"
+         "</script>");
+
     HCAT("</body></html>");
     return html;
 #undef HCAT
 }
+
+#ifdef WEBSERVER_TEST_BUILD
+// Expose build_html_page() to the host test suite.
+// Only compiled when building with -DWEBSERVER_TEST_BUILD.
+const char *webserver_get_page_for_test(void) { return build_html_page(); }
+#endif
 
 // ---------------------------------------------------------------------------
 // Build JSON status response
@@ -333,16 +406,26 @@ static void build_json_status(char *buf, int bufsz) {
         strncpy(loaded_name, sl ? sl + 1 : p, sizeof(loaded_name) - 1);
     }
 
-    snprintf(buf, bufsz,
+    int pos = snprintf(buf, bufsz,
         "HTTP/1.1 200 OK\r\n"
         "Content-Type: application/json\r\n"
         "Connection: close\r\n\r\n"
         "{\"ok\":true,\"state\":\"%s\",\"state_id\":%d,"
         "\"loaded_index\":%lu,\"loaded_name\":\"%s\","
-        "\"image_count\":%lu,\"ip\":\"%s\"}",
-        state_name(g_cxd.state), g_cxd.state,
+        "\"image_count\":%lu,\"ip\":\"%s\"",
+        state_name(commo_bridge_get_drive_state()), commo_bridge_get_drive_state(),
         (unsigned long)s_loaded_index, loaded_name,
         (unsigned long)s_image_count, s_ip_str);
+
+    uint64_t sd_used = 0, sd_total = 0;
+    if (sd_get_space(&sd_used, &sd_total)) {
+        snprintf(buf + pos, bufsz - pos,
+            ",\"sd_used_mb\":%lu,\"sd_total_mb\":%lu}",
+            (unsigned long)(sd_used  / (1024 * 1024)),
+            (unsigned long)(sd_total / (1024 * 1024)));
+    } else {
+        snprintf(buf + pos, bufsz - pos, "}");
+    }
 }
 
 // ---------------------------------------------------------------------------

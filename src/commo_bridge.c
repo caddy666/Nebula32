@@ -674,6 +674,10 @@ bool commo_bridge_is_active(void) {
     return s_active;
 }
 
+drive_state_t commo_bridge_get_drive_state(void) {
+    return s_drive_state;
+}
+
 // =============================================================================
 // PIO HARDWARE ABSTRACTION FUNCTIONS
 // =============================================================================
