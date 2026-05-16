@@ -365,6 +365,10 @@ bool commo_bridge_poll(void) {
         LOG_INFO_MSG("COMMO", "opc=0x%02X p1=%02X p2=%02X p3=%02X", opc, p1, p2, p3);
 
         uint8_t status = _handle_opc(opc, p1, p2, p3);
+        // Clear player_interface before Dispatcher/cmd_hndl writes it on
+        // the next tick — prevents Path C from double-processing this command.
+        player_interface.a_command = IDLE_OPC;
+        player_interface.p_status  = READY;
         FREE_CMD_BUFFER();
         commo_bridge_send_status(status);
         return true;
@@ -479,8 +483,7 @@ static uint8_t _handle_opc(uint8_t opc, uint8_t p1, uint8_t p2, uint8_t p3) {
             return _build_status();
         }
 
-        case SEEK_OPC:
-        case JUMP_TRACKS_OPC: {
+        case SEEK_OPC: {
             // p1=MM, p2=SS, p3=FF in BCD (same encoding as Q-channel)
             msf_t m = { p1, p2, p3 };
             s_seek_lba = msf_to_lba(m);
@@ -490,16 +493,30 @@ static uint8_t _handle_opc(uint8_t opc, uint8_t p1, uint8_t p2, uint8_t p3) {
             sector_cache_seek(&g_cache, s_seek_lba);
             s_drive_state = DRIVE_SEEKING;
             _update_active_pin();
-            // #ifdef FAKE_TIMING
-            //     uint32_t dist = (s_seek_lba > s_current_lba)
-            //                     ? (s_seek_lba - s_current_lba)
-            //                     : (s_current_lba - s_seek_lba);
-            //     uint32_t delay = SEEK_DELAY_MIN_US + dist * SEEK_DELAY_US_PER_TRACK;
-            //     if (delay > SEEK_DELAY_MAX_US) delay = SEEK_DELAY_MAX_US;
-            //     s_state_deadline_us = time_us_32() + delay;
-            // #else
-            s_state_deadline_us = 0;  // instant — uncomment FAKE_TIMING to delay
-            // #endif
+            s_state_deadline_us = 0;
+            return _build_status();
+        }
+
+        case JUMP_TRACKS_OPC: {
+            // p1=high byte, p2=low byte of signed 16-bit relative track count.
+            // Explicit shift preserves the big-endian wire encoding — the
+            // byte_hl_t union in the original 8051 code inverts on little-endian ARM.
+            int16_t delta = (int16_t)((uint16_t)p1 << 8 | p2);
+            uint32_t cur_lba = da_get_current_lba();
+            const track_t *cur_trk = disc_find_track(&g_disc, cur_lba);
+            int target = cur_trk ? (int)cur_trk->number + (int)delta
+                                 : (int)g_disc.first_track;
+            if (target < (int)g_disc.first_track) target = (int)g_disc.first_track;
+            if (target > (int)g_disc.last_track)  target = (int)g_disc.last_track;
+            s_seek_lba = g_disc.tracks[target - 1].start_lba;
+            printf("[COMMO] JUMP_TRACKS delta=%d → track=%d LBA=%lu\n",
+                   (int)delta, target, (unsigned long)s_seek_lba);
+            LOG_INFO_MSG("COMMO", "JUMP_TRACKS delta=%d track=%d LBA=%lu",
+                         (int)delta, target, (unsigned long)s_seek_lba);
+            sector_cache_seek(&g_cache, s_seek_lba);
+            s_drive_state = DRIVE_SEEKING;
+            _update_active_pin();
+            s_state_deadline_us = 0;
             return _build_status();
         }
 

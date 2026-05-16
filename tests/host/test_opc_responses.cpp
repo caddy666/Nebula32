@@ -83,11 +83,19 @@ static uint8_t handle_opc(uint8_t opc, uint8_t p1, uint8_t p2, uint8_t p3)
             s_state = DRIVE_PLAYING;
             return build_status();
 
-        case SEEK_OPC:
-        case JUMP_TRACKS_OPC: {
+        case SEEK_OPC: {
             msf_t m = { p1, p2, p3 };
             s_seek_lba = msf_to_lba(m);
             /* sector_cache_seek — no-op */
+            s_state = DRIVE_SEEKING;
+            return build_status();
+        }
+
+        case JUMP_TRACKS_OPC: {
+            // p1=high byte, p2=low byte of signed 16-bit relative track count.
+            // No disc image in test harness; LBA computation is not replicated.
+            // State and status transitions are what matter here.
+            (void)p1; (void)p2; (void)p3;
             s_state = DRIVE_SEEKING;
             return build_status();
         }
@@ -132,9 +140,10 @@ static uint8_t handle_opc(uint8_t opc, uint8_t p1, uint8_t p2, uint8_t p3)
 //
 // Notes on START_UP_OPC: two rows — one from IDLE (promotes to SPINUP) and
 // one from READY (leaves state unchanged).
-// Notes on SEEK/JUMP_TRACKS: p1=0x00 p2=0x02 p3=0x00 is BCD 00:02:00
-// → LBA = (2 s × 75) − 150 = 0.  The exact LBA value is not asserted here;
-// only the resulting state (SEEKING) and status (DISC|BUSY) matter.
+// Notes on SEEK: p1=0x00 p2=0x02 p3=0x00 is BCD 00:02:00 → LBA = 0.
+//   Only the resulting state (SEEKING) and status (DISC|BUSY) are asserted.
+// Notes on JUMP_TRACKS: p1=high byte, p2=low byte of signed 16-bit track delta.
+//   p1=0x00 p2=0x02 = delta +2. LBA depends on disc; state/status are asserted.
 // ---------------------------------------------------------------------------
 struct OpcCase {
     const char   *name;
