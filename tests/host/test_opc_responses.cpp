@@ -142,6 +142,10 @@ static uint8_t handle_opc(uint8_t opc, uint8_t p1, uint8_t p2, uint8_t p3)
 // one from READY (leaves state unchanged).
 // Notes on SEEK: p1=0x00 p2=0x02 p3=0x00 is BCD 00:02:00 → LBA = 0.
 //   Only the resulting state (SEEKING) and status (DISC|BUSY) are asserted.
+//   SEEK_from_PLAYING: Akiko may seek mid-game; state must move to SEEKING.
+//   SEEK_invalid_BCD: 0xFF nibbles are not valid BCD digits (each nibble decodes
+//   as 15).  Firmware passes bytes straight to msf_to_lba without validation;
+//   the drive must not return an error — it must still enter SEEKING.
 // Notes on JUMP_TRACKS: p1=high byte, p2=low byte of signed 16-bit track delta.
 //   p1=0x00 p2=0x02 = delta +2. LBA depends on disc; state/status are asserted.
 // ---------------------------------------------------------------------------
@@ -165,6 +169,8 @@ static const OpcCase CASES[] = {
     { "PAUSE_ON",                PAUSE_ON_OPC,             0x00, 0x00, 0x00, DRIVE_PLAYING, DRIVE_STATUS_DISC,           DRIVE_PAUSED  },
     { "PAUSE_OFF",               PAUSE_OFF_OPC,            0x00, 0x00, 0x00, DRIVE_PAUSED,  DRIVE_STATUS_DISC,           DRIVE_PLAYING },
     { "SEEK",                    SEEK_OPC,                 0x00, 0x02, 0x00, DRIVE_READY,   DRIVE_STATUS_DISC|DRIVE_STATUS_BUSY, DRIVE_SEEKING },
+    { "SEEK_from_PLAYING",       SEEK_OPC,                 0x00, 0x02, 0x00, DRIVE_PLAYING, DRIVE_STATUS_DISC|DRIVE_STATUS_BUSY, DRIVE_SEEKING },
+    { "SEEK_invalid_BCD",        SEEK_OPC,                 0xFF, 0xFF, 0xFF, DRIVE_READY,   DRIVE_STATUS_DISC|DRIVE_STATUS_BUSY, DRIVE_SEEKING },
     { "READ_TOC",                READ_TOC_OPC,             0x00, 0x00, 0x00, DRIVE_SPINUP,  DRIVE_STATUS_DISC,           DRIVE_READY   },
     { "READ_SUBCODE",            READ_SUBCODE_OPC,         0x00, 0x00, 0x00, DRIVE_PLAYING, DRIVE_STATUS_DISC,           DRIVE_READY   },
     { "SINGLE_SPEED",            SINGLE_SPEED_OPC,         0x00, 0x00, 0x00, DRIVE_READY,   DRIVE_STATUS_DISC,           DRIVE_READY   },

@@ -118,7 +118,7 @@ bool disc_open(disc_image_t *disc, const char *path) {
         return false;
     }
 
-    printf("[DISC] Opened: %d tracks, %lu total sectors\n",
+    printf("[DISC] Opened: %d tracks, %u total sectors\n",
            disc->last_track, disc->total_sectors);
     return true;
 }
@@ -162,7 +162,7 @@ bool disc_parse_iso(disc_image_t *disc) {
     trk->sector_size     = SECTOR_DATA_BYTES;  // Stored as 2048-byte sectors
     trk->data_offset     = 0;                  // Data starts at byte 0 of file sector
 
-    printf("[ISO] %lu sectors (%.1f MB)\n",
+    printf("[ISO] %u sectors (%.1f MB)\n",
            total_sectors, (float)(fsize) / (1024.0f * 1024.0f));
     return true;
 }
@@ -294,11 +294,15 @@ bool disc_parse_bin(disc_image_t *disc, const char *cue_path) {
             trk->start_lba  = lba;
             if (trk->pregap_lba == 0) trk->pregap_lba = lba;
             // Subtract accumulated virtual pregap: those sectors aren't in the file.
-            trk->file_offset = (lba - accumulated_pregap) * trk->sector_size;
+            // Guard against malformed CUE where pregap exceeds the INDEX 01 LBA.
+            uint32_t file_lba = (lba >= accumulated_pregap) ? (lba - accumulated_pregap) : 0;
+            trk->file_offset = file_lba * trk->sector_size;
         }
     }
 
     f_close(&cue_file);
+
+    if (disc->first_track == 0) return true;  // all tracks skipped — no UB in loop below
 
     // Calculate track lengths
     for (uint8_t i = disc->first_track; i <= disc->last_track; i++) {
@@ -311,7 +315,8 @@ bool disc_parse_bin(disc_image_t *disc, const char *cue_path) {
             next_lba = trk->start_lba + (uint32_t)((fsize - trk->file_offset)
                        / trk->sector_size);
         }
-        trk->length_sectors = next_lba - trk->start_lba;
+        trk->length_sectors = (next_lba > trk->start_lba)
+                            ? (next_lba - trk->start_lba) : 0;
     }
 
     disc->total_sectors = disc->tracks[disc->last_track - 1].start_lba
@@ -343,7 +348,7 @@ bool disc_parse_nrg(disc_image_t *disc) {
         if (br == sizeof(footer) && be32(footer.magic) == 0x4E455235) { // "NER5"
             is_v2        = true;
             chunk_offset = be64(footer.offset);
-            printf("[NRG] Detected v2 header at offset %llu\n", chunk_offset);
+            printf("[NRG] Detected v2 header at offset %llu\n", (unsigned long long)chunk_offset);
         }
     }
 
@@ -355,7 +360,7 @@ bool disc_parse_nrg(disc_image_t *disc) {
         f_read(&disc->image_file, &footer, sizeof(footer), &br);
         if (br == sizeof(footer) && be32(footer.magic) == 0x4E45524F) { // "NERO"
             chunk_offset = be32(footer.offset);
-            printf("[NRG] Detected v1 header at offset %llu\n", chunk_offset);
+            printf("[NRG] Detected v1 header at offset %llu\n", (unsigned long long)chunk_offset);
         } else {
             printf("[NRG] No valid NRG footer found\n");
             return false;
@@ -378,6 +383,7 @@ bool disc_parse_nrg(disc_image_t *disc) {
         uint32_t chunk_size = be32(hdr.chunk_size);
 
         if (chunk_id == NRG_CHUNK_END) break;
+        if (chunk_size == 0) break;  /* malformed: zero-size chunk loops forever */
 
         FSIZE_t chunk_data_pos = f_tell(&disc->image_file);
 
@@ -386,6 +392,10 @@ bool disc_parse_nrg(disc_image_t *disc) {
             // Structure: 22-byte header, then variable track entries
             // Each entry is 42 bytes for DAOX (v2) or 30 bytes for DAOI (v1)
 
+            if (chunk_size < 22) {              /* malformed: underflows bytes_left */
+                f_lseek(&disc->image_file, chunk_data_pos + chunk_size);
+                continue;
+            }
             // Skip 22-byte DAO session header
             f_lseek(&disc->image_file, chunk_data_pos + 22);
             uint32_t bytes_left = chunk_size - 22;
@@ -415,7 +425,9 @@ bool disc_parse_nrg(disc_image_t *disc) {
 
                 uint64_t file_off;
                 if (is_v2) {
-                    file_off = be64(*(uint64_t*)(entry + 28));
+                    uint64_t raw64;
+                    memcpy(&raw64, entry + 28, sizeof(raw64));
+                    file_off = be64(raw64);
                 } else {
                     // v1 (DAOI): 30-byte entries have no file-offset field.
                     // Data is laid out sequentially from byte 0 of the image.
@@ -450,7 +462,7 @@ bool disc_parse_nrg(disc_image_t *disc) {
                     trk->data_offset = (trk->sector_size == 2352) ? 16 : 0;
                 }
 
-                printf("[NRG] Track %d: LBA %lu–%lu, size %lu\n",
+                printf("[NRG] Track %d: LBA %u-%u, size %u\n",
                        trk->number, trk->start_lba,
                        trk->start_lba + trk->length_sectors, trk->sector_size);
 
@@ -542,7 +554,7 @@ bool disc_parse_mdf(disc_image_t *disc, const char *mds_path) {
                 trk->data_offset = (trk->sector_size == 2352) ? 16 : 0;
             }
 
-            printf("[MDF] Track %d: LBA %lu sector_size %lu\n",
+            printf("[MDF] Track %d: LBA %u sector_size %u\n",
                    trk->number, trk->start_lba, trk->sector_size);
 
             if (disc->first_track == 0) disc->first_track = trk->number;
@@ -554,10 +566,13 @@ bool disc_parse_mdf(disc_image_t *disc, const char *mds_path) {
     // Calculate track lengths
     for (uint8_t i = 0; i < track_idx; i++) {
         if (i + 1 < track_idx) {
-            disc->tracks[i].length_sectors =
-                disc->tracks[i + 1].start_lba - disc->tracks[i].start_lba;
+            uint32_t end_lba = disc->tracks[i + 1].start_lba;
+            uint32_t beg_lba = disc->tracks[i].start_lba;
+            disc->tracks[i].length_sectors = (end_lba > beg_lba) ? (end_lba - beg_lba) : 0;
         } else {
             // Last track: length from file size
+            if (disc->tracks[i].sector_size == 0)   /* malformed: avoid divide-by-zero */
+                disc->tracks[i].sector_size = SECTOR_RAW_BYTES;
             FSIZE_t fsize = f_size(&disc->image_file);
             disc->tracks[i].length_sectors =
                 (uint32_t)((fsize - disc->tracks[i].file_offset) / disc->tracks[i].sector_size);
@@ -620,7 +635,7 @@ uint32_t disc_read_sector(disc_image_t *disc, uint32_t lba,
     // Seek to the sector in the file
     FRESULT fr = f_lseek(&disc->image_file, file_offset);
     if (fr != FR_OK) {
-        printf("[DISC] Seek error at offset %lu\n", file_offset);
+        printf("[DISC] Seek error at offset %u\n", file_offset);
         LOG_ERROR_MSG("disc f_lseek failed at offset=%lu lba=%lu fr=%d",
                       (unsigned long)file_offset, (unsigned long)lba, fr);
         return 0;

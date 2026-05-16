@@ -50,7 +50,7 @@ SUB lines. The COMMO 3-wire bus is the command/status channel.
 | 20  | IF_CLK     | 15        | BIDIR     | COMMO clock (idles high, active-low pulses) |
 | 21  | IF_DATA    | 16        | BIDIR     | COMMO data (setup ≥150 ns before CLK edge) |
 | 23  | PASSIVE    | 13        | OUT       | Drive passive/standby status |
-| 24  | ACTIVE     | 10        | OUT       | Drive active/spinning status |
+| 24  | ACTIVE     | 10        | OUT       | Drive active/spinning status; also drives front-panel drive LED |
 | 25  | IF_DIR     | 17        | OUT       | COMMO direction control |
 | 26  | DOOR       | 11        | IN        | Door/tray switch |
 
@@ -98,7 +98,7 @@ Data transitions on the **falling** BCLK edge; Akiko samples on the **rising** e
 | `upstream/utils/maths.c` | ✅ Correct | BCD/time arithmetic; tracks_calc() widened to uint64_t |
 | `upstream/utils/timer.c` | ✅ Correct | 8 ms software timer; delay() zero-entry guard |
 | `upstream/pio/commo.pio` | ✅ Correct | COMMO PIO |
-| `src/disc_image.c` | ✅ Correct | ISO/BIN/NRG/MDF parsers; CUE PREGAP+INDEX00 fix; NRG lead-out skip fix |
+| `src/disc_image.c` | ✅ Correct | ISO/BIN/NRG/MDF parsers; CUE PREGAP+INDEX00 fix; NRG lead-out skip fix; NRG chunk_size=0/DAOX-too-short guards; MDF sector_size=0 guard; CUE/MDF track-length underflow clamp; NRG uint64_t aligned memcpy |
 | `src/sector_cache.c` | ✅ Correct | SD prefetch ring buffer + flush_gen race fix; hard_assert null-cache guard in prefetch_tick |
 | `src/subcode.c` | ✅ Correct | Q-channel generation |
 | `pio/subcode_encoder.pio` | ✅ Correct | SUB signal output on GPIO 5-8 |
@@ -121,8 +121,8 @@ Data transitions on the **falling** BCLK edge; Akiko samples on the **rising** e
 | `tests/host/test_csv_replay_pon_poff.cpp` | ✅ Correct | CsvReplayPonPoff: 10 windowed tests against pon-poff-idle.csv |
 | `tests/host/test_csv_replay_zool2.cpp` | ✅ Correct | CsvReplayZool2: 10 windowed tests against zool2.csv |
 | `tests/host/test_csv_replay_pinball.cpp` | ✅ Correct | CsvReplayPinball: 10 windowed tests against pinball.csv |
-| `tests/host/test_door_tray.cpp` | ✅ Correct | DoorTray: 10 tests — insert/eject state, ACTIVE pin, status bits |
-| `tests/host/test_opc_responses.cpp` | ✅ Correct | OpcResponses: 32-case table test — every COMMO opcode → status + state |
+| `tests/host/test_door_tray.cpp` | ✅ Correct | DoorTray: 10 tests — insert/eject state, ACTIVE pin/LED, status bits; DoorPin: 8 tests — GPIO edge detection, boot snapshot, motor/LED state |
+| `tests/host/test_opc_responses.cpp` | ✅ Correct | OpcResponses: 34-case table test — every COMMO opcode → status + state (incl. SEEK from PLAYING, SEEK invalid BCD) |
 | `tests/host/test_motor_sled_fake.cpp` | ✅ Correct | MotorSledFake: 10 tests — motor active states, BCD→LBA, virtual sled seek |
 
 ---
@@ -145,7 +145,8 @@ All four PIO programs are always loaded. The upstream servo PIO programs
 
 **Location:** `tests/host/`  
 **Run:** `make && ./cd32_tests -v`  
-**Result:** 355 tests, 0 failures  
+**Result:** 363 tests, 0 failures  
+**Parser tests:** `make parser_tests && ./parser_tests -v` → 26 tests, 0 failures (separate binary; uses FatFS injectable sim)
 **Sanitizer:** `-fsanitize=undefined -fno-sanitize-recover=all` active on all C and C++ objects and the link step
 
 | Group | Tests | What it covers |
@@ -161,8 +162,9 @@ All four PIO programs are always loaded. The upstream servo PIO programs
 | `CsvReplayPonPoff` | 10 | Power-on/power-off idle capture (pon-poff-idle.csv, 5.2 GB) |
 | `CsvReplayZool2` | 10 | Zool 2 gameplay capture (zool2.csv, 12.1 GB) |
 | `CsvReplayPinball` | 10 | Pinball Illusions capture (pinball.csv, 5.6 GB) |
-| `DoorTray` | 10 | Disc insert/eject state machine, ACTIVE pin, status bits |
-| `OpcResponses` | 1 | All 32 COMMO opcodes → correct status byte + drive state (table-driven) |
+| `DoorTray` | 10 | Disc insert/eject state machine, ACTIVE pin/LED, status bits |
+| `DoorPin` | 8 | GPIO door-pin edge detection: rising edge ejects, stable/falling silent, boot snapshot, motor/LED state |
+| `OpcResponses` | 1 | All 34 COMMO opcodes → correct status byte + drive state (table-driven; incl. SEEK from PLAYING, SEEK invalid BCD) |
 | `MotorSledFake` | 10 | Motor active states, BCD MSF→LBA, seek LBA, virtual sled positioning |
 | `DiscFindTrack` | 8 | disc_find_track boundaries, single/multi-track, track type |
 | `TocResponse` | 6 | disc_build_toc_response BCD encoding, lead-out 0xAA, truncation |
@@ -181,6 +183,16 @@ All four PIO programs are always loaded. The upstream servo PIO programs
 | `CoverDir` | 6 | display.cpp and webserver.c agree on cover-art directory; FatFS volume prefix; trailing slash; default path starts in covers dir |
 | `SectorLayout` | 5 | disc_synthesise_sector() sync pattern, MSF header bytes, mode byte 0x01, data payload copy |
 | `FormatDetect` | 7 | ext_match() case-insensitive extension detection for .iso/.bin/.nrg/.mdf; uppercase; unknown format rejected |
+
+**parser_tests groups (separate binary):**
+
+| Group | Tests | What it covers |
+|-------|-------|----------------|
+| `ParseIso` | 4 | Empty file, exact 1 sector, partial sector, multi-sector count |
+| `ParseBin` | 7 | No CUE fallback, track 0/over-limit skip, INDEX-before-TRACK guard, unknown mode default, pregap underflow clamp, overlapping-track length clamp |
+| `ParseNrg` | 6 | File too small, no magic, chunk_size=0 guard (FIX-1), DAOX too short (FIX-2), lead-out skip, valid track, astronomical end_lba |
+| `ParseMdf` | 4 | Wrong signature, short header, zero sessions, sector_size=0 guard (FIX-3), lead-in/lead-out skip |
+| `SectorAccess` | 3 | Read LBA 0 on ISO, read LBA 0 on raw BIN, read LBA past total_sectors returns 0 |
 
 ### CsvReplay test windows
 

@@ -131,6 +131,7 @@ static drive_state_t s_drive_state        = DRIVE_IDLE;
 static uint32_t      s_seek_lba           = 0;   // last seek target
 static uint32_t      s_current_lba        = 0;   // last confirmed head position
 static uint32_t      s_state_deadline_us  = 0;   // 0 = no pending delay
+static bool          s_door_prev          = true; // set to real pin state in init
 
 // Advance through transient states (SPINUP → READY, SEEKING → READY).
 // With FAKE_TIMING defined, the transition is held until s_state_deadline_us
@@ -166,6 +167,7 @@ static uint8_t _build_status(void) {
 }
 
 // PIN_ACTIVE (conn 24, GPIO 10): high whenever the motor is spinning.
+// Also drives the drive LED on the CD32 front panel — low = LED off.
 // Low only in DRIVE_IDLE (tray open / motor stopped) and DRIVE_ERROR.
 static void _update_active_pin(void) {
     bool active = (s_drive_state != DRIVE_IDLE && s_drive_state != DRIVE_ERROR);
@@ -266,7 +268,7 @@ static void _send_toc_packets(void) {
 // commo_bridge_init
 // ---------------------------------------------------------------------------
 // Initialises the COMMO side of the ODE hardware:
-//   1. PIN_ACTIVE (GPIO 10, conn 24): drive-active output, cleared to 0 (idle)
+//   1. PIN_ACTIVE (GPIO 10, conn 24): drive-active output + drive LED, cleared to 0 (idle)
 //   2. COMMO PIO programs loaded onto PIO1 SM0/SM1 (commo_program_init)
 //   3. PIO1 IRQ routed to the COMMO RX/TX interrupt handler
 //   4. Upstream command-handler pipeline (Init_command_handler)
@@ -300,6 +302,10 @@ void commo_bridge_init(void) {
     gpio_init(PIN_ACTIVE);
     gpio_set_dir(PIN_ACTIVE, GPIO_OUT);
     gpio_put(PIN_ACTIVE, 0);
+
+    // Snapshot the door pin so the first poll doesn't fire a false eject event
+    // if the door happens to be open at boot.
+    s_door_prev = gpio_get(PIN_DOOR);
 
     // Step 3: Load COMMO PIO programs onto PIO1 SM0 (RX) and SM1 (TX) only.
     // This is extracted from pio_hw_init() — just the COMMO section.
@@ -342,6 +348,25 @@ bool commo_bridge_poll(void) {
     // has elapsed.  With FAKE_TIMING disabled this is immediate; with it on
     // the drive holds BUSY until the simulated mechanical delay expires.
     _maybe_advance_state();
+
+    // ---- Door pin monitor — rising edge (LOW→HIGH) means door opened ----
+    // PIN_DOOR is active-low with a pull-up: door closed = LOW, door open = HIGH.
+    // On the rising edge we stop playback and send the 0x00 eject status so
+    // Akiko clears the DISC bit without waiting for a TRAY_OUT_OPC command.
+    // NOTE: this logic is replicated verbatim in tests/host/test_door_tray.cpp
+    // (DoorPin test group).  Update that replica whenever this block changes.
+    bool door_now = gpio_get(PIN_DOOR);
+    if (door_now && !s_door_prev) {
+        printf("[COMMO] DOOR open — stopping drive\n");
+        LOG_INFO_MSG("COMMO", "DOOR open");
+        da_stop();
+        s_drive_state = DRIVE_IDLE;
+        _update_active_pin();
+        commo_bridge_send_status(0x00);
+        s_door_prev = door_now;
+        return true;
+    }
+    s_door_prev = door_now;
 
     // ---- Step upstream modules ----
     // Step the dispatcher (routes commands and status packets)

@@ -1,6 +1,7 @@
 #include "vis_audio.h"
 #include "fft.h"
 #include <string.h>
+#include <stdatomic.h>
 
 /*
  * CD-DA sector: 588 stereo pairs × 4 bytes = 2352 bytes.
@@ -18,9 +19,16 @@ static int16_t s_ring[VIS_AUDIO_RING][FFT_SIZE];
 static int16_t s_acc[FFT_SIZE];
 static int     s_acc_pos = 0;     /* next write position in s_acc */
 
-/* Ring read/write indices (wrap at VIS_AUDIO_RING). */
-static volatile int s_wr = 0;     /* next slot to write (ISR) */
-static volatile int s_rd = 0;     /* next slot to read  (main) */
+/*
+ * SPSC ring indices — _Atomic with acquire/release ordering.
+ * Writer (ISR/Core 1) owns s_wr; reader (Core 0) owns s_rd.
+ * Release store on s_wr: ensures slot data is visible before the index advances.
+ * Acquire load on s_wr: ensures slot data is visible before the reader copies it.
+ * volatile alone is insufficient — it prevents register caching but does not
+ * order the memcpy stores relative to the index update on a weakly-ordered CPU.
+ */
+static _Atomic int s_wr = 0;     /* next slot to write (ISR)  */
+static _Atomic int s_rd = 0;     /* next slot to read  (main) */
 
 void vis_audio_push_sector(const uint8_t *buf) {
     /* Walk the interleaved stereo buffer, extracting left-channel int16_t. */
@@ -32,10 +40,13 @@ void vis_audio_push_sector(const uint8_t *buf) {
 
         if (s_acc_pos >= FFT_SIZE) {
             /* Slot complete — commit to ring if not full */
-            int next_wr = (s_wr + 1) & (VIS_AUDIO_RING - 1);
-            if (next_wr != s_rd) {  /* ring not full */
-                memcpy(s_ring[s_wr], s_acc, FFT_SIZE * sizeof(int16_t));
-                s_wr = next_wr;
+            int wr      = atomic_load_explicit(&s_wr, memory_order_relaxed);
+            int rd      = atomic_load_explicit(&s_rd, memory_order_acquire);
+            int next_wr = (wr + 1) & (VIS_AUDIO_RING - 1);
+            if (next_wr != rd) {  /* ring not full */
+                memcpy(s_ring[wr], s_acc, FFT_SIZE * sizeof(int16_t));
+                /* Release: data must be visible before s_wr advances */
+                atomic_store_explicit(&s_wr, next_wr, memory_order_release);
             }
             s_acc_pos = 0;
         }
@@ -43,8 +54,12 @@ void vis_audio_push_sector(const uint8_t *buf) {
 }
 
 bool vis_audio_get_samples(int16_t *out) {
-    if (s_rd == s_wr) return false;  /* no new frame */
-    memcpy(out, s_ring[s_rd], FFT_SIZE * sizeof(int16_t));
-    s_rd = (s_rd + 1) & (VIS_AUDIO_RING - 1);
+    int rd = atomic_load_explicit(&s_rd, memory_order_relaxed);
+    /* Acquire: pairs with writer's release store — slot data visible after this */
+    int wr = atomic_load_explicit(&s_wr, memory_order_acquire);
+    if (rd == wr) return false;  /* no new frame */
+    memcpy(out, s_ring[rd], FFT_SIZE * sizeof(int16_t));
+    /* Release: slot is visibly free before the writer re-uses it */
+    atomic_store_explicit(&s_rd, (rd + 1) & (VIS_AUDIO_RING - 1), memory_order_release);
     return true;
 }

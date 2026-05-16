@@ -1,9 +1,11 @@
 // =============================================================================
 // test_door_tray.cpp — Drive state machine: TRAY_IN / TRAY_OUT behaviour
+//                      + GPIO door-pin edge detection
 // =============================================================================
 //
 // Tests the COMMO opcode handler contract for disc insert and eject as
-// implemented in src/commo_bridge.c (_handle_opc / _build_status).
+// implemented in src/commo_bridge.c (_handle_opc / _build_status), and the
+// PIN_DOOR rising-edge detection added to commo_bridge_poll().
 //
 // commo_bridge.c is hardware-bound (GPIO, PIO, DMA) and cannot be compiled
 // into the host suite directly.  Instead this file replicates its ~30 lines
@@ -12,6 +14,7 @@
 //
 // Relevant production code:
 //   src/commo_bridge.c  — _handle_opc(), _build_status(), _update_active_pin()
+//                         commo_bridge_poll() door-pin monitor block
 //   include/cd_types.h  — drive_state_t, DRIVE_STATUS_* bit definitions
 //   upstream/include/defs.h — TRAY_OUT_OPC (0x00), TRAY_IN_OPC (0x01)
 //
@@ -23,6 +26,11 @@
 //
 // Key protocol rule: TRAY_OUT_OPC returns 0x00 (hardcoded), NOT _build_status().
 // This clears the DISC bit, signalling to Akiko that no disc is loaded.
+//
+// Door-pin convention (gpio_map.h): PIN_DOOR is active-low with a pull-up.
+//   Door closed = LOW (switch shorts to GND)
+//   Door open   = HIGH (switch open, pull-up wins)
+// A LOW→HIGH rising edge is the "door opened" event.
 // =============================================================================
 
 #include <CppUTest/TestHarness.h>
@@ -262,4 +270,177 @@ TEST(DoorTray, DiscBitSetInAllActiveStates)
         CHECK_TRUE_TEXT((status & DRIVE_STATUS_DISC) != 0,
                         "DISC bit must be set in every active drive state");
     }
+}
+
+// =============================================================================
+// DoorPin test group
+// =============================================================================
+//
+// Replicates the door-pin rising-edge monitor from commo_bridge_poll()
+// (src/commo_bridge.c — see NOTE comment above that block).
+//
+// PIN_DOOR (GPIO 11) is active-low with a pull-up:
+//   door closed = LOW, door open = HIGH.
+// A LOW→HIGH rising edge is the "door opened" event.
+//
+// poll_door() mirrors the production block exactly.  It returns the status
+// byte that would be sent via commo_bridge_send_status(): 0x00 on eject,
+// 0xFF as a sentinel meaning "nothing sent".
+// =============================================================================
+
+static bool s_door_prev;
+
+// Replicated from commo_bridge_poll() — keep in sync with production source.
+static uint8_t poll_door(bool door_now)
+{
+    uint8_t sent = 0xFF;  // sentinel: no status sent
+    if (door_now && !s_door_prev) {
+        s_state = DRIVE_IDLE;
+        sent = 0x00;
+    }
+    s_door_prev = door_now;
+    return sent;
+}
+
+TEST_GROUP(DoorPin)
+{
+    void setup()
+    {
+        s_state    = DRIVE_READY;
+        s_door_prev = false;   // door closed at start of each test
+    }
+    void teardown() {}
+};
+
+// ---------------------------------------------------------------------------
+// Test 1 — Rising edge sends the 0x00 eject status.
+//
+// The 0x00 status clears Akiko's DISC bit immediately, without waiting for a
+// TRAY_OUT_OPC command.  This mirrors the hardcoded return value of
+// handle_tray_out() — both paths must produce the same wire byte.
+// ---------------------------------------------------------------------------
+TEST(DoorPin, RisingEdgeSendsZeroStatus)
+{
+    uint8_t sent = poll_door(true);  // LOW→HIGH
+
+    CHECK_EQUAL_TEXT(0x00, sent,
+                     "Rising edge must send 0x00 status (DISC bit clear)");
+}
+
+// ---------------------------------------------------------------------------
+// Test 2 — Rising edge moves drive to IDLE.
+//
+// Any in-progress playback or seek must be abandoned immediately when the
+// door opens.  DRIVE_IDLE is the only state where motor_active() returns
+// false, which drives the ACTIVE pin low.
+// ---------------------------------------------------------------------------
+TEST(DoorPin, RisingEdgeGoesIdle)
+{
+    poll_door(true);
+
+    CHECK_EQUAL_TEXT((int)DRIVE_IDLE, (int)s_state,
+                     "Drive must be IDLE after door-open rising edge");
+}
+
+// ---------------------------------------------------------------------------
+// Test 3 — Rising edge from PLAYING stops the motor.
+//
+// Akiko may open the cover mid-game.  The motor must be reported inactive
+// immediately so the mainboard knows the spindle has stopped.
+// ---------------------------------------------------------------------------
+TEST(DoorPin, RisingEdgeFromPlayingStopsMotor)
+{
+    s_state = DRIVE_PLAYING;
+    poll_door(true);
+
+    CHECK_TRUE_TEXT(!motor_active(),
+                    "Motor must be inactive after door opens during playback");
+}
+
+// ---------------------------------------------------------------------------
+// Test 4 — Stable high after eject does not fire a second eject.
+//
+// Once the door is open, the pin stays high.  Subsequent poll ticks must not
+// re-send 0x00 or re-enter the eject path — the edge fires exactly once.
+// ---------------------------------------------------------------------------
+TEST(DoorPin, StableHighAfterOpenNoRepeat)
+{
+    poll_door(true);               // rising edge — eject fires
+    uint8_t sent = poll_door(true); // pin still high — must be silent
+
+    CHECK_EQUAL_TEXT(0xFF, sent,
+                     "No second eject when pin remains high after door open");
+    CHECK_EQUAL_TEXT((int)DRIVE_IDLE, (int)s_state,
+                     "State must remain IDLE on second poll");
+}
+
+// ---------------------------------------------------------------------------
+// Test 5 — Falling edge (door closing) does not trigger an eject.
+//
+// A HIGH→LOW transition means the door is being closed, not opened.  The
+// drive should not change state or send any status byte.
+// ---------------------------------------------------------------------------
+TEST(DoorPin, FallingEdgeNoEject)
+{
+    s_door_prev = true;            // door was open
+    s_state     = DRIVE_IDLE;
+
+    uint8_t sent = poll_door(false); // HIGH→LOW (door closing)
+
+    CHECK_EQUAL_TEXT(0xFF, sent,
+                     "Falling edge must not send any status byte");
+    CHECK_EQUAL_TEXT((int)DRIVE_IDLE, (int)s_state,
+                     "State must not change on falling edge");
+}
+
+// ---------------------------------------------------------------------------
+// Test 6 — Stable low (door closed, normal operation) is silent.
+//
+// The common case: disc loaded, door closed, pin held LOW by the switch.
+// Every poll tick must be a no-op.
+// ---------------------------------------------------------------------------
+TEST(DoorPin, StableLowNoEject)
+{
+    s_state = DRIVE_PLAYING;
+
+    uint8_t sent = poll_door(false); // pin stable low
+
+    CHECK_EQUAL_TEXT(0xFF, sent,
+                     "Stable low must not send any status byte");
+    CHECK_EQUAL_TEXT((int)DRIVE_PLAYING, (int)s_state,
+                     "State must be unchanged while pin is stable low");
+}
+
+// ---------------------------------------------------------------------------
+// Test 7 — Boot with door already open does not produce a spurious eject.
+//
+// commo_bridge_init() snapshots gpio_get(PIN_DOOR) into s_door_prev so that
+// if the cover is open when the Pico boots the first poll does not fire the
+// rising-edge path.  Simulate this by initialising s_door_prev = true.
+// ---------------------------------------------------------------------------
+TEST(DoorPin, BootDoorAlreadyOpenNoSpuriousEject)
+{
+    s_door_prev = true;   // mirrors commo_bridge_init() reading pin = HIGH
+
+    uint8_t sent = poll_door(true); // first poll — pin still high
+
+    CHECK_EQUAL_TEXT(0xFF, sent,
+                     "No eject when door is already open at boot");
+}
+
+// ---------------------------------------------------------------------------
+// Test 8 — Rising edge from SEEKING stops cleanly.
+//
+// A seek may be in progress when the user opens the cover.  The drive must
+// abandon the seek and go idle, not stay in SEEKING with the motor running.
+// ---------------------------------------------------------------------------
+TEST(DoorPin, RisingEdgeFromSeekingGoesIdle)
+{
+    s_state = DRIVE_SEEKING;
+    poll_door(true);
+
+    CHECK_EQUAL_TEXT((int)DRIVE_IDLE, (int)s_state,
+                     "Drive must be IDLE after door opens during seek");
+    CHECK_TRUE_TEXT(!motor_active(),
+                    "Motor must be inactive after door opens during seek");
 }
