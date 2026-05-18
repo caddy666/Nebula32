@@ -11,6 +11,7 @@ declare -A SEPARATE
 SEPARATE[test_disc_parser.cpp]=1        # parser_tests binary
 SEPARATE[test_sector_cache_stress.cpp]=1 # stress_sector_cache binary
 SEPARATE[test_vis_audio_stress.cpp]=1   # stress_tests binary
+SEPARATE[test_virtual_disc.cpp]=1       # vdisc_tests binary
 
 errors=0
 for f in test_*.cpp; do

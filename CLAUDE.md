@@ -208,6 +208,12 @@ All four PIO programs are always loaded. The upstream servo PIO programs
 | `SubchannelMath` | 15 | Q-channel relative time: index 01 zero at track start, index 00 countdown 1 frame/1 second, pregap boundary no uint32_t underflow, absolute time 2-second lead-in offset, index BCD 0x00/0x01 flip, data/audio CTRL nibble (0x41/0x01), two-digit track BCD, 1-minute relative time, CRC self-consistency; multiple indices: index 2 BCD, index 10 double-digit BCD, relative time from index 2 uses track_start_lba |
 | `HostReset` | 7 | /RESET pin (GPIO 14) contract: PLAYING/SEEKING/SPINUP → IDLE, ThenTrayIn restarts spinup, multiple resets idempotent, door GPIO snapshot preserved across reset, DRIVE_ERROR fault cleared |
 | `WebserverHtml` | 10 | Compiles and runs the real build_html_page() via WEBSERVER_TEST_BUILD hook; checks: fits 32 KB, DOCTYPE present, Nebula32 title, starfield script, SD card status label, GB space output, loadDisc JS, CSS %% escaping, disc names in grid, Drive State label |
+| `SectorCadence` | 5 | DA delivery timing budget: zero misses when on-time, miss counted per late sector, all-late saturates, exact-at-budget passes, one-over-budget fails |
+| `RingBuffer` | 5 | Generic SPSC ring: push to capacity succeeds, push when full fails, pop in order, pop when empty underflows, wraparound preserves order |
+| `SdStallSim` | 4 | Stochastic SD stall injection: zero stalls below threshold, seed-42 count in expected range, deterministic replay same-seed, count scales with sector count |
+| `QSubchannel` | 5 | Q-channel field encoding: relative MSF 75 sectors in, absolute MSF at LBA 225, pregap relative countdown, index byte 0x01 in programme area, index byte 0x00 in pregap |
+| `CommandFuzz` | 5 | Opcode classification exhaustive sweep: all 256 opcodes no UB, status/control/query sets classified correctly, null and 0xFF return unknown |
+| `DmaDoubleBuffer` | 4 | Ping-pong DMA buffer isolation: fill patterns isolated between A/B, swap gives correct active buffer, standby write does not corrupt active, after swap new standby is overwritable |
 
 **vdisc_tests groups (separate binary — `make vdisc_tests`):**
 
