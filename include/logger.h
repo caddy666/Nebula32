@@ -34,6 +34,9 @@
 //     log_errors        = 1        # Log error conditions
 //     log_irq           = 0        # Log every IRQ assertion (very verbose)
 //     log_max_kb        = 4096     # Maximum log file size in KB (0 = unlimited)
+//     wifi_ssid         =          # WiFi network name (leave blank to disable WiFi)
+//     wifi_password     =          # WiFi password
+//     wifi_hostname     = nebula32 # mDNS hostname (access as nebula32.local)
 //
 //   Example cd32_ode.cfg:
 //     # CD32 ODE settings
@@ -100,6 +103,9 @@ typedef struct {
     bool     log_irq;           // Every IRQ assertion (very verbose!)
     uint32_t log_max_kb;        // Max log file size KB (0 = unlimited)
     char     sdcard_base[256];  // Base dir for disc image scan (default "0:/")
+    char     wifi_ssid[64];     // WiFi SSID (parsed from cd32_ode.cfg)
+    char     wifi_password[64]; // WiFi password
+    char     wifi_hostname[32]; // mDNS hostname (default "nebula32")
 } logger_config_t;
 
 // ---------------------------------------------------------------------------
@@ -159,24 +165,6 @@ void logger_write(log_level_t level, const char *tag, const char *fmt, ...)
 // ---------------------------------------------------------------------------
 // Each macro checks both the compile-time guard and the runtime flag.
 // The tag argument must be a 4-char string literal for alignment.
-
-// Log a COMMO command dispatch
-// opc       — raw opcode byte
-// params    — pointer to parameter bytes (may be NULL)
-// n_params  — number of parameter bytes
-#define LOG_CMD(opc, params, n_params) \
-    do { if (logger_is_enabled() && logger_get_config()->log_commands) { \
-        _log_cmd(opc, params, n_params); \
-    } } while(0)
-
-// Log a COMMO command response
-// opc       — opcode this response is for
-// resp      — pointer to response bytes
-// n_resp    — number of response bytes
-#define LOG_CMD_RESP(opc, resp, n_resp) \
-    do { if (logger_is_enabled() && logger_get_config()->log_commands) { \
-        _log_cmd_resp(opc, resp, n_resp); \
-    } } while(0)
 
 // Log a sector delivery
 // lba        — logical block address
@@ -239,8 +227,6 @@ void logger_write(log_level_t level, const char *tag, const char *fmt, ...)
 // ---------------------------------------------------------------------------
 // Internal helpers (called by macros — do not call directly)
 // ---------------------------------------------------------------------------
-void _log_cmd(uint8_t cmd, const uint8_t *params, uint8_t n_params);
-void _log_cmd_resp(uint8_t cmd, const uint8_t *resp, uint8_t n_resp);
 void _log_sector(uint32_t lba, const char *mode_str,
                  uint32_t bytes, bool filtered);
 void _log_seek_start(uint32_t from_lba, uint32_t to_lba, uint32_t est_us);

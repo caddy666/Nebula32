@@ -28,6 +28,7 @@
 #include "pico/stdlib.h"
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 
 // FatFS filesystem object (one per volume; we use volume "0:")
 static FATFS s_fs;
@@ -84,6 +85,11 @@ bool sd_card_init_and_mount(void) {
 // Fills 'paths' with up to 'max_count' image file paths.
 // Supported extensions: .iso, .bin, .nrg, .mdf
 // Returns the number of images found.
+// Results are sorted alphabetically so disc indices are stable across reboots.
+
+static int _path_cmp(const void *a, const void *b) {
+    return strcmp((const char *)a, (const char *)b);
+}
 
 static bool is_image_file(const char *name) {
     size_t len = strlen(name);
@@ -96,13 +102,14 @@ static bool is_image_file(const char *name) {
 }
 
 uint32_t sd_scan_images(char paths[][MAX_PATH_LEN], uint32_t max_count,
-                        const char *base_dir) {
+                        const char *base_dir, uint32_t offset) {
     if (!s_mounted) return 0;
     if (!base_dir || base_dir[0] == '\0') base_dir = "0:/";
 
-    DIR     dir;
-    FILINFO fno;
-    uint32_t count = 0;
+    DIR      dir;
+    FILINFO  fno;
+    uint32_t skipped = 0;
+    uint32_t count   = 0;
 
     FRESULT fr = f_opendir(&dir, base_dir);
     if (fr != FR_OK) {
@@ -113,19 +120,45 @@ uint32_t sd_scan_images(char paths[][MAX_PATH_LEN], uint32_t max_count,
     while (count < max_count) {
         fr = f_readdir(&dir, &fno);
         if (fr != FR_OK || fno.fname[0] == '\0') break;
-
         if (fno.fattrib & AM_DIR) continue;
+        if (!is_image_file(fno.fname)) continue;
 
-        if (is_image_file(fno.fname)) {
-            snprintf(paths[count], MAX_PATH_LEN, "%s%s", base_dir, fno.fname);
-            printf("[SD] Found image: %s (%lu KB)\n",
-                   fno.fname, (uint32_t)(fno.fsize / 1024));
-            count++;
-        }
+        if (skipped < offset) { skipped++; continue; }
+
+        snprintf(paths[count], MAX_PATH_LEN, "%s%s", base_dir, fno.fname);
+        printf("[SD] [%lu] %s (%lu KB)\n",
+               (unsigned long)(offset + count),
+               fno.fname, (uint32_t)(fno.fsize / 1024));
+        count++;
     }
 
     f_closedir(&dir);
-    printf("[SD] Total images found: %lu\n", count);
+
+    // Sort alphabetically so disc indices are stable across reboots.
+    if (count > 1) {
+        qsort(paths, (size_t)count, sizeof(paths[0]), _path_cmp);
+    }
+
+    return count;
+}
+
+uint32_t sd_count_images(const char *base_dir) {
+    if (!s_mounted) return 0;
+    if (!base_dir || base_dir[0] == '\0') base_dir = "0:/";
+
+    DIR      dir;
+    FILINFO  fno;
+    uint32_t count = 0;
+
+    if (f_opendir(&dir, base_dir) != FR_OK) return 0;
+
+    while (true) {
+        if (f_readdir(&dir, &fno) != FR_OK || fno.fname[0] == '\0') break;
+        if (!(fno.fattrib & AM_DIR) && is_image_file(fno.fname)) count++;
+    }
+
+    f_closedir(&dir);
+    printf("[SD] Total images in %s: %lu\n", base_dir, (unsigned long)count);
     return count;
 }
 

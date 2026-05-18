@@ -33,6 +33,8 @@ extern int g_stub_pio_fifo_full_after;
 
 static inline uint pio_add_program(PIO p, const pio_program_t *prog)
     { (void)p; (void)prog; return 0; }
+static inline void pio_gpio_init(PIO p, uint pin)
+    { (void)p; (void)pin; }  // no-op: GPIO direction set separately
 static inline void pio_sm_set_clkdiv(PIO p, uint sm, float div)
     { (void)p; (void)sm; g_stub_last_clkdiv = div; }
 static inline void pio_sm_set_enabled(PIO p, uint sm, bool en)
@@ -43,6 +45,7 @@ static inline bool pio_sm_is_tx_fifo_full(PIO p, uint sm)
              g_stub_pio_put_count >= g_stub_pio_fifo_full_after; }
 static inline void pio_sm_put(PIO p, uint sm, uint32_t data)
     { (void)p; (void)sm; (void)data; g_stub_pio_put_count++; }
+static inline void pio_sm_clear_fifos(PIO p, uint sm) { (void)p; (void)sm; }
 static inline bool pio_sm_is_rx_fifo_empty(PIO p, uint sm)
     { (void)p; (void)sm; return true; }
 static inline uint32_t pio_sm_get_blocking(PIO p, uint sm)

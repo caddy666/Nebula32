@@ -128,12 +128,11 @@ static void rs_p_encode(const uint8_t *data, int stride, int len,
     *p1 = r1;
 }
 
-// RS(43, 41) Q-parity encoder: 43-byte codeword, 2 parity bytes.
-// Generator polynomial: g(x) = (x - α^0)(x - α^1)
-static void rs_q_encode(const uint8_t *data, int stride, int len,
-                         uint8_t *q0, uint8_t *q1) {
-    // Same structure as P, but different codeword length
-    rs_p_encode(data, stride, len, q0, q1);
+// Accessor for the 2236-byte combined ECC data field D (ECMA-130 Annex C).
+//   D[0..2063]   = sector[12..2075]  (header + user data + EDC + zeroes)
+//   D[2064..2235]= sector[2076..2247] (P parity, already written before Q)
+static inline uint8_t _ecc_d(const uint8_t *sector, int n) {
+    return (n < 2064) ? sector[12 + n] : sector[2076 + (n - 2064)];
 }
 
 // ---------------------------------------------------------------------------
@@ -155,30 +154,27 @@ void ecc_generate(uint8_t *sector) {
     // 2236-byte virtual data stream after zero-padding the EDC and zeroes.
     // Implementation follows the ECMA-130 Annex C matrix layout.
 
-    // P-parity: 86 columns × 24 rows
-    // Each column uses stride 86, covering 24 elements.
+    // P-parity: 86 codewords × 24 data bytes (ECMA-130 Annex C).
+    // Codeword col: D[col + row*86] for row = 0..23.
+    // D[n] = sector[12+n] (n<2064), so sector[12+col], sector[12+col+86], ...
+    // This covers all bytes 12..2075 including EDC (rows 22–23).
     for (int col = 0; col < 86; col++) {
         uint8_t p0, p1;
-        // Data source base for this column: sector byte (col*2) + 12 for MSF offset
-        // The exact interleave formula from ECMA-130:
-        //   D[col + row*86] for row = 0..21  (22 data bytes)
-        // Source data is at sector[12 + col + row*86] but wraps through the
-        // EDC and zero fields.  We use a helper pointer array.
-        // For simplicity: the sector bytes 12–2075 form the data matrix.
-        const uint8_t *base = sector + 12 + col;
-        rs_p_encode(base, 86, 22, &p0, &p1);
+        rs_p_encode(sector + 12 + col, 86, 24, &p0, &p1);
         sector[2076 + col * 2    ] = p0;
         sector[2076 + col * 2 + 1] = p1;
     }
 
-    // Q-parity: 52 codewords, each spanning the full 2236-byte data+P matrix
-    // Q uses a diagonal interleave pattern.
+    // Q-parity: 52 codewords × 43 data bytes with diagonal interleave.
+    // Codeword j: D[(j + k*44) % 2236] for k = 0..42.
+    // D spans both the data region and the P-parity bytes just written above,
+    // so P must be written before Q.
     for (int j = 0; j < 52; j++) {
+        uint8_t tmp[43];
+        for (int k = 0; k < 43; k++)
+            tmp[k] = _ecc_d(sector, (j + k * 44) % 2236);
         uint8_t q0, q1;
-        // Q diagonal stride is 43 elements, starting at different offsets.
-        // Simplified: treat the P+data region as a linear array.
-        const uint8_t *base = sector + 12 + j * 43;
-        rs_q_encode(base, 1, 41, &q0, &q1);
+        rs_p_encode(tmp, 1, 43, &q0, &q1);
         sector[2248 + j * 2    ] = q0;
         sector[2248 + j * 2 + 1] = q1;
     }

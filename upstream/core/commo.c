@@ -170,7 +170,12 @@ static void commo_step(commo_ctx_t *c)
         break;
 
     case COMMO_SM_TXD_DATA:
-        /* Wait for host to release bus (DATA high) before we transmit */
+        /* commo_data_is_low() reads gpio_get(PIN_COMMO_DATA).  During TX the
+         * pin is driven high by commo_tx_send(), so this always returns false
+         * and execution always falls through.  The check is a vestige of the
+         * original bit-bang code where the host could abort mid-transfer; it
+         * is harmless but intentionally left in place to preserve the SM shape
+         * for bisect-ability. */
         if (commo_data_is_low()) break;
         transmit_txd(c->tx_buffer[c->byte_pointer]);
         c->checksum += c->tx_buffer[c->byte_pointer];

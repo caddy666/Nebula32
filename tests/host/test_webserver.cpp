@@ -58,14 +58,15 @@ static const char *basename_no_ext(const char *path, char *buf, int bufsz)
     return buf;
 }
 
+// Replica of static state_name() from webserver.c — aligned with drive_state_t (DRIVE_IDLE=0)
 static const char *state_name(int state)
 {
     switch (state) {
-        case 0: return "RESET";   case 1: return "IDLE";
-        case 2: return "SPINUP";  case 3: return "READY";
-        case 4: return "SEEKING"; case 5: return "READING";
-        case 6: return "PLAYING"; case 7: return "PAUSED";
-        default: return "ERROR";
+        case 0: return "IDLE";    case 1: return "SPINUP";
+        case 2: return "READY";   case 3: return "SEEKING";
+        case 4: return "READING"; case 5: return "PLAYING";
+        case 6: return "PAUSED";  case 7: return "ERROR";
+        default: return "UNKNOWN";
     }
 }
 
@@ -158,21 +159,21 @@ TEST(Webserver, BasenameNoExt_DotInDir_StripsOnlyFileExt)
 
 TEST(Webserver, StateName_AllKnownStates)
 {
-    STRCMP_EQUAL("RESET",   state_name(0));
-    STRCMP_EQUAL("IDLE",    state_name(1));
-    STRCMP_EQUAL("SPINUP",  state_name(2));
-    STRCMP_EQUAL("READY",   state_name(3));
-    STRCMP_EQUAL("SEEKING", state_name(4));
-    STRCMP_EQUAL("READING", state_name(5));
-    STRCMP_EQUAL("PLAYING", state_name(6));
-    STRCMP_EQUAL("PAUSED",  state_name(7));
+    STRCMP_EQUAL("IDLE",    state_name(0));
+    STRCMP_EQUAL("SPINUP",  state_name(1));
+    STRCMP_EQUAL("READY",   state_name(2));
+    STRCMP_EQUAL("SEEKING", state_name(3));
+    STRCMP_EQUAL("READING", state_name(4));
+    STRCMP_EQUAL("PLAYING", state_name(5));
+    STRCMP_EQUAL("PAUSED",  state_name(6));
+    STRCMP_EQUAL("ERROR",   state_name(7));
 }
 
 TEST(Webserver, StateName_UnknownIsError)
 {
-    STRCMP_EQUAL("ERROR", state_name(8));
-    STRCMP_EQUAL("ERROR", state_name(-1));
-    STRCMP_EQUAL("ERROR", state_name(255));
+    STRCMP_EQUAL("UNKNOWN", state_name(8));
+    STRCMP_EQUAL("UNKNOWN", state_name(-1));
+    STRCMP_EQUAL("UNKNOWN", state_name(255));
 }
 
 /* -------------------------------------------------------------------------

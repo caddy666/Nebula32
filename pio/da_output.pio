@@ -14,7 +14,7 @@
 ;   BCLK   = 2.1168 MHz at 1× speed (measured: 2.12 MHz)
 ;   LRCLK  = 44.1 kHz  (= BCLK / 48, i.e. 24 BCLK cycles per channel)
 ;   DATA   transitions on BCLK falling edge, sampled on BCLK rising edge
-;   LRCLK  high = left channel, low = right channel
+;   LRCLK  low = left channel, high = right channel  (I2S specification)
 ;
 ; WORD FORMAT in TX FIFO (32-bit, one word per channel):
 ;   bits [31:16] = 16-bit PCM sample (MSB at bit 31)
@@ -46,31 +46,30 @@
 ; side-set bit 0 = BCLK  (GPIO base+1)
 
 ; Notation: side 0b<LRCLK><BCLK>
-;   0b10 = LRCLK high, BCLK low   → left channel, data settling
-;   0b11 = LRCLK high, BCLK high  → left channel, data latched
-;   0b00 = LRCLK low,  BCLK low   → right channel, data settling
-;   0b01 = LRCLK low,  BCLK high  → right channel, data latched
+;   0b00 = LRCLK low,  BCLK low   → left channel,  data settling
+;   0b01 = LRCLK low,  BCLK high  → left channel,  data latched
+;   0b10 = LRCLK high, BCLK low   → right channel, data settling
+;   0b11 = LRCLK high, BCLK high  → right channel, data latched
 
 ; Left channel — 48 SM cycles total for 24 bits:
-;   set x,22 = 1 cycle (BCLK low, no data bit — also latches last right bit
-;              from the previous wrap via the LRCLK-high transition)
+;   set x,22 = 1 cycle (BCLK low, LRCLK low — left channel)
 ;   loop × 23 = 46 cycles (23 data bits, each 2 SM cycles: settle + latch)
-;   final out  = 1 cycle  (24th bit, LRCLK drops to signal right channel)
+;   final out  = 1 cycle  (24th bit, LRCLK rises to signal right channel)
 
 .wrap_target
-    set x, 22          side 0b10   ; arm left counter; LRCLK high, BCLK low
+    set x, 22          side 0b00   ; arm left counter; LRCLK low, BCLK low
 left_loop:
-    out pins, 1        side 0b10   ; data bit settling (BCLK low)
-    jmp x-- left_loop  side 0b11   ; data bit latched  (BCLK high), decrement
-    out pins, 1        side 0b00   ; 24th left bit; LRCLK falls — right channel starts
+    out pins, 1        side 0b00   ; data bit settling (LRCLK low, BCLK low)
+    jmp x-- left_loop  side 0b01   ; data bit latched  (LRCLK low, BCLK high), decrement
+    out pins, 1        side 0b10   ; 24th left bit; LRCLK rises — right channel starts
 
-    set x, 22          side 0b01   ; arm right counter; BCLK high latches left24
+    set x, 22          side 0b11   ; arm right counter; BCLK high latches left24
 right_loop:
-    out pins, 1        side 0b00   ; data bit settling (BCLK low)
-    jmp x-- right_loop side 0b01   ; data bit latched  (BCLK high), decrement
-    out pins, 1        side 0b10   ; 24th right bit; LRCLK rises — left channel next
+    out pins, 1        side 0b10   ; data bit settling (LRCLK high, BCLK low)
+    jmp x-- right_loop side 0b11   ; data bit latched  (LRCLK high, BCLK high), decrement
+    out pins, 1        side 0b00   ; 24th right bit; LRCLK falls — left channel next
 .wrap
-; .wrap → set x,22 side 0b10: BCLK goes low, latching the previous right24.
+; .wrap → set x,22 side 0b00: BCLK goes low, latching the previous right24.
 
 % c-sdk {
 #include "hardware/clocks.h"

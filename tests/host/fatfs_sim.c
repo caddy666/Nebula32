@@ -90,3 +90,14 @@ char *f_gets(char *buf, int len, FIL *fp)
     buf[n] = '\0';
     return (n > 0) ? buf : NULL;
 }
+
+// ---------------------------------------------------------------------------
+// Directory traversal stubs (no-ops for parser_tests compatibility)
+// ---------------------------------------------------------------------------
+
+FRESULT f_opendir(DIR *dp, const TCHAR *path)
+    { (void)path; if (dp) dp->_sim_dir_idx = -1; return FR_NO_FILE; }
+FRESULT f_readdir(DIR *dp, FILINFO *fno)
+    { (void)dp; if (fno) fno->fname[0] = '\0'; return FR_OK; }
+FRESULT f_closedir(DIR *dp)
+    { (void)dp; return FR_OK; }

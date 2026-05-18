@@ -9,6 +9,7 @@
 // Signal format: 24-bit I2S (MSB first), matching CXD2545Q output
 //   BCLK  = 2.1168 MHz at 1× speed  (sys_clk / 32 / 2)
 //   LRCLK = 44.1 kHz                (BCLK / 48, 24 BCLK cycles per channel)
+//   LRCLK low = left channel, high = right channel  (I2S specification)
 //
 // The DMA engine feeds uint32_t words with one channel per word:
 //   [31:16] = 16-bit PCM sample, [15:0] = zero padding.
@@ -82,6 +83,11 @@ bool da_is_playing(void);
 // Returns the approximate LBA currently being streamed (next sector to fetch).
 // Valid during play and pause; 0 when stopped.
 uint32_t da_get_current_lba(void);
+
+// Returns the LBA of the earliest sector currently in the DMA ping-pong buffers.
+// This is the actual playback position (where DMA is streaming from), not the
+// prefetch position (s_next_lba).  Use during pause/resume for accurate track lookup.
+uint32_t da_get_resume_lba(void);
 
 // ---------------------------------------------------------------------------
 // M17SINE phase-lock (clkdiv trim)

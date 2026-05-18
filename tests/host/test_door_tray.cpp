@@ -67,7 +67,7 @@ static uint8_t handle_tray_in(void)
     return build_status();
 }
 
-// Instant advance (FAKE_TIMING off, matching current firmware default).
+// Instant advance for test purposes (firmware uses FAKE_TIMING in production).
 static void advance_state(void)
 {
     if (s_state == DRIVE_SPINUP)  s_state = DRIVE_READY;

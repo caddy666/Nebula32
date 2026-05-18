@@ -49,6 +49,9 @@ static logger_config_t s_cfg = {
     .log_irq         = false,
     .log_max_kb      = 4096,
     .sdcard_base     = "0:/",
+    .wifi_ssid       = "",
+    .wifi_password   = "",
+    .wifi_hostname   = "nebula32",
 };
 
 // Ring buffer for deferred SD card writes
@@ -128,7 +131,14 @@ static void parse_settings_file(void) {
                 "log_state       = 1\n"
                 "log_errors      = 1\n"
                 "log_irq         = 0\n"
-                "log_max_kb      = 4096\n";
+                "log_max_kb      = 4096\n"
+                "#\n"
+                "# --- WiFi ---\n"
+                "# Leave wifi_ssid blank to disable the web interface.\n"
+                "# wifi_hostname sets the mDNS name (access as hostname.local).\n"
+                "# wifi_ssid     = MyNetwork\n"
+                "# wifi_password = MyPassword\n"
+                "wifi_hostname   = nebula32\n";
             UINT bw;
             f_write(&out, template_text, strlen(template_text), &bw);
             f_close(&out);
@@ -186,7 +196,16 @@ static void parse_settings_file(void) {
         } else if (strcasecmp(key, "log_irq") == 0) {
             s_cfg.log_irq = parse_bool(val);
         } else if (strcasecmp(key, "log_max_kb") == 0) {
-            s_cfg.log_max_kb = (uint32_t)atoi(val);
+            s_cfg.log_max_kb = (val[0] == '-') ? 0u : (uint32_t)atoi(val);
+        } else if (strcasecmp(key, "wifi_ssid") == 0) {
+            strncpy(s_cfg.wifi_ssid, val, sizeof(s_cfg.wifi_ssid) - 1);
+            s_cfg.wifi_ssid[sizeof(s_cfg.wifi_ssid) - 1] = '\0';
+        } else if (strcasecmp(key, "wifi_password") == 0) {
+            strncpy(s_cfg.wifi_password, val, sizeof(s_cfg.wifi_password) - 1);
+            s_cfg.wifi_password[sizeof(s_cfg.wifi_password) - 1] = '\0';
+        } else if (strcasecmp(key, "wifi_hostname") == 0) {
+            strncpy(s_cfg.wifi_hostname, val, sizeof(s_cfg.wifi_hostname) - 1);
+            s_cfg.wifi_hostname[sizeof(s_cfg.wifi_hostname) - 1] = '\0';
         }
         // Unknown keys are silently ignored
     }
@@ -312,13 +331,10 @@ void logger_write(log_level_t level, const char *tag,
     line[total]     = '\n';
     line[total + 1] = '\0';
 
-    // Append to ring buffer
+    // Append to ring buffer; flush is deferred to the main loop via
+    // logger_flush_if_due() — calling logger_flush() here would block 2-5 ms
+    // during a COMMO burst and violate the non-blocking contract.
     ring_append(line, (uint32_t)(total + 1));
-
-    // Trigger an immediate flush if the ring is getting full
-    if (s_ring_used >= LOG_FLUSH_WATERMARK) {
-        logger_flush();
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -466,96 +482,8 @@ void logger_set_enabled(bool enabled) {
 }
 
 // ---------------------------------------------------------------------------
-// Command name lookup
-// ---------------------------------------------------------------------------
-static const char *cmd_name(uint8_t cmd) {
-    switch (cmd) {
-        case 0x00: return "SYNC";
-        case 0x01: return "GETSTAT";
-        case 0x02: return "SETLOC";
-        case 0x03: return "PLAY";
-        case 0x04: return "FORWARD";
-        case 0x05: return "BACKWARD";
-        case 0x06: return "READN";
-        case 0x07: return "MOTORON";
-        case 0x08: return "STOP";
-        case 0x09: return "PAUSE";
-        case 0x0A: return "RESET";
-        case 0x0B: return "MUTE";
-        case 0x0C: return "UNMUTE";
-        case 0x0D: return "SETFILTER";
-        case 0x0E: return "SETMODE";
-        case 0x0F: return "GETPARAM";
-        case 0x10: return "GETLOCL";
-        case 0x11: return "GETLOCP";
-        case 0x13: return "GETTN";
-        case 0x14: return "GETTD";
-        case 0x15: return "SEEKL";
-        case 0x16: return "SEEKP";
-        case 0x19: return "TEST";
-        case 0x1A: return "ID";
-        case 0x1B: return "READS";
-        case 0x1E: return "READTOC";
-        default:   return "UNKNOWN";
-    }
-}
-
-// ---------------------------------------------------------------------------
 // Internal log helpers (called by macros in logger.h)
 // ---------------------------------------------------------------------------
-
-void _log_cmd(uint8_t cmd, const uint8_t *params, uint8_t n_params) {
-    char param_str[48] = "";
-    if (params && n_params > 0) {
-        int pos = 0;
-        for (int i = 0; i < n_params && pos < (int)sizeof(param_str) - 4; i++) {
-            pos += snprintf(param_str + pos, sizeof(param_str) - pos,
-                            "%02X", params[i]);
-            if (i < n_params - 1) {
-                param_str[pos++] = ':';
-                param_str[pos]   = '\0';
-            }
-        }
-    }
-
-    if (n_params > 0) {
-        logger_write(LOG_INFO, "CMD ",
-                     "0x%02X %-10s params=[%s]",
-                     cmd, cmd_name(cmd), param_str);
-    } else {
-        logger_write(LOG_INFO, "CMD ",
-                     "0x%02X %-10s",
-                     cmd, cmd_name(cmd));
-    }
-}
-
-void _log_cmd_resp(uint8_t cmd, const uint8_t *resp, uint8_t n_resp) {
-    if (!resp || n_resp == 0) return;
-
-    char resp_str[48] = "";
-    int pos = 0;
-    for (int i = 0; i < n_resp && pos < (int)sizeof(resp_str) - 4; i++) {
-        pos += snprintf(resp_str + pos, sizeof(resp_str) - pos,
-                        "%02X", resp[i]);
-        if (i < n_resp - 1) {
-            resp_str[pos++] = ':';
-            resp_str[pos]   = '\0';
-        }
-    }
-
-    // Decode the status byte (first response byte) into human-readable flags
-    uint8_t stat = resp[0];
-    char stat_flags[32] = "";
-    if (stat & 0x80) strcat(stat_flags, "BUSY ");
-    if (stat & 0x40) strcat(stat_flags, "RSLR ");
-    if (stat & 0x20) strcat(stat_flags, "DRQ ");
-    if (stat & 0x04) strcat(stat_flags, "DISC ");
-    if (stat & 0x01) strcat(stat_flags, "ERR");
-
-    logger_write(LOG_INFO, "CMD ",
-                 "0x%02X %-10s → [%s] (%s)",
-                 cmd, cmd_name(cmd), resp_str, stat_flags);
-}
 
 void _log_sector(uint32_t lba, const char *mode_str,
                   uint32_t bytes, bool filtered) {
@@ -578,23 +506,14 @@ void _log_seek_start(uint32_t from_lba, uint32_t to_lba, uint32_t est_us) {
 
 void _log_state(int old_state, int new_state) {
     static const char *state_names[] = {
-        "RESET", "IDLE", "SPINUP", "READY",
-        "SEEKING", "READING", "PLAYING", "PAUSED", "ERROR"
+        "IDLE", "SPINUP", "READY", "SEEKING",
+        "READING", "PLAYING", "PAUSED", "ERROR"
     };
-    const char *old_name = (old_state >= 0 && old_state <= 8)
+    const char *old_name = (old_state >= 0 && old_state <= 7)
                             ? state_names[old_state] : "???";
-    const char *new_name = (new_state >= 0 && new_state <= 8)
+    const char *new_name = (new_state >= 0 && new_state <= 7)
                             ? state_names[new_state] : "???";
     logger_write(LOG_INFO, "DRV ",
                  "state %-8s → %s", old_name, new_name);
 }
 
-void _log_irq(uint8_t flags) {
-    char flag_str[48] = "";
-    if (flags & 0x01) strcat(flag_str, "DATA_END ");
-    if (flags & 0x02) strcat(flag_str, "SUBCODE ");
-    if (flags & 0x04) strcat(flag_str, "DISC_DET ");
-    if (flags & 0x08) strcat(flag_str, "CMD_DONE ");
-    if (flags & 0x10) strcat(flag_str, "SEEK_DONE");
-    logger_write(LOG_DEBUG, "IRQ ", "flags=0x%02X [%s]", flags, flag_str);
-}

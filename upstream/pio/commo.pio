@@ -44,9 +44,9 @@ rx_loop:
     wait 0 pin 0                 ; wait for CLK to fall (complete one clock cycle)
     jmp x-- rx_loop              ; repeat for remaining bits
 
-    ; Brief DIR=0 acknowledge pulse
-    set pins, 0b000              ; DIR=0, DATA=0 (acknowledge, pin+2=0, pin+1=0)
-    nop
+    ; DIR=0 acknowledge pulse — held for 32 cycles ≈ 237 ns at 135 MHz sys_clk
+    ; (Akiko input filter requires >150 ns; 237 ns provides comfortable margin)
+    set pins, 0b000 [31]         ; DIR=0, DATA=0 (acknowledge, 32 cycles total)
     set pins, 0b100              ; DIR=1 (release)
 
     push noblock                 ; push received byte to RX FIFO

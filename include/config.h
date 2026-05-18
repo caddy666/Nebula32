@@ -29,6 +29,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include "cd_types.h"  // CD32_SASSERT
 
 // ---------------------------------------------------------------------------
 // Config page location in flash
@@ -42,7 +43,7 @@
 #define CONFIG_MAGIC         0xCD320DE5u   // "CD32 ODE" signature
 
 // Config format version — increment when the struct layout changes
-#define CONFIG_VERSION       1u
+#define CONFIG_VERSION       2u
 
 // ---------------------------------------------------------------------------
 // Config structure
@@ -54,16 +55,16 @@ typedef struct __attribute__((packed)) {
     uint16_t version;           // CONFIG_VERSION
     uint16_t flags;             // Bitfield — see FLAG_* defines below
 
-    uint8_t  last_image_index;  // 0-based index of last loaded image (0-31)
+    uint16_t last_image_index;  // absolute 0-based index of last loaded image
     uint8_t  speed_mode;        // 1 = 1× speed, 2 = 2× speed
-    uint8_t  reserved[58];      // Pad to 64 bytes before CRC
+    uint8_t  reserved[57];      // Pad to 64 bytes before CRC
 
     uint32_t crc32;             // CRC32 of bytes 0..(sizeof-4)
 } ode_config_t;
 
 // Ensure the struct fits in one flash page
-_Static_assert(sizeof(ode_config_t) <= 4096,
-               "Config struct too large for one 4 KB flash page");
+CD32_SASSERT(sizeof(ode_config_t) <= 4096,
+             "Config struct too large for one 4 KB flash page");
 
 // Flags bitfield
 #define CFG_FLAG_AUDIO_ENABLED    (1u << 0)  // I2S audio output active

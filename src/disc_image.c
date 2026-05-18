@@ -14,6 +14,7 @@
 // =============================================================================
 
 #include "disc_image.h"
+#include "virtual_disc.h"
 #include "sector_cache.h" // SECTOR_RAW_SIZE
 
 #include "ff.h"          // FatFS
@@ -124,6 +125,10 @@ bool disc_open(disc_image_t *disc, const char *path) {
 }
 
 void disc_close(disc_image_t *disc) {
+    if (disc->format == DISC_FORMAT_VDIR) {
+        disc->vdisc = NULL;
+        return;
+    }
     if (disc->file_open) {
         f_close(&disc->image_file);
         disc->file_open = false;
@@ -296,7 +301,7 @@ bool disc_parse_bin(disc_image_t *disc, const char *cue_path) {
             // Subtract accumulated virtual pregap: those sectors aren't in the file.
             // Guard against malformed CUE where pregap exceeds the INDEX 01 LBA.
             uint32_t file_lba = (lba >= accumulated_pregap) ? (lba - accumulated_pregap) : 0;
-            trk->file_offset = file_lba * trk->sector_size;
+            trk->file_offset = (uint64_t)file_lba * trk->sector_size;
         }
     }
 
@@ -419,9 +424,13 @@ bool disc_parse_nrg(disc_image_t *disc) {
                 uint16_t raw_sector_size = (uint16_t)((entry[12] << 8) | entry[13]);
                 uint8_t  track_mode      = entry[14];
 
-                uint32_t idx0_lba = be32(*(uint32_t*)(entry + 16));
-                uint32_t idx1_lba = be32(*(uint32_t*)(entry + 20));
-                uint32_t end_lba  = be32(*(uint32_t*)(entry + 24));
+                uint32_t idx0_raw, idx1_raw, end_raw;
+                memcpy(&idx0_raw, entry + 16, sizeof(idx0_raw));
+                memcpy(&idx1_raw, entry + 20, sizeof(idx1_raw));
+                memcpy(&end_raw,  entry + 24, sizeof(end_raw));
+                uint32_t idx0_lba = be32(idx0_raw);
+                uint32_t idx1_lba = be32(idx1_raw);
+                uint32_t end_lba  = be32(end_raw);
 
                 uint64_t file_off;
                 if (is_v2) {
@@ -430,8 +439,8 @@ bool disc_parse_nrg(disc_image_t *disc) {
                     file_off = be64(raw64);
                 } else {
                     // v1 (DAOI): 30-byte entries have no file-offset field.
-                    // Data is laid out sequentially from byte 0 of the image.
-                    file_off = (uint64_t)idx0_lba * raw_sector_size;
+                    // Data is laid out sequentially; the track starts at INDEX 01.
+                    file_off = (uint64_t)idx1_lba * raw_sector_size;
                 }
 
                 // Skip lead-in (idx1=0, end=0) and lead-out (idx1==end, zero-length)
@@ -449,7 +458,7 @@ bool disc_parse_nrg(disc_image_t *disc) {
                 trk->start_lba      = idx1_lba;
                 trk->pregap_lba     = idx0_lba;
                 trk->length_sectors = end_lba - idx1_lba;
-                trk->file_offset    = (uint32_t)file_off;
+                trk->file_offset    = file_off;
                 trk->sector_size    = (raw_sector_size == 0x0800) ? 2048
                                     : (raw_sector_size == 0x0920) ? 2352
                                     : 2352;  // Default to 2352
@@ -542,7 +551,7 @@ bool disc_parse_mdf(disc_image_t *disc, const char *mds_path) {
             track_t *trk = &disc->tracks[track_idx];
             trk->number  = tblk.track_number;
             trk->start_lba  = tblk.start_sector;
-            trk->file_offset = (uint32_t)(tblk.start_offset & 0xFFFFFFFF);
+            trk->file_offset = tblk.start_offset;
             trk->sector_size = tblk.sector_size;
 
             // Determine track type from ADR/CTL
@@ -618,6 +627,14 @@ void disc_synthesise_sector(uint8_t *buf, uint32_t lba, const uint8_t *data2048)
 // Returns number of bytes placed in buf (up to SECTOR_RAW_BYTES).
 uint32_t disc_read_sector(disc_image_t *disc, uint32_t lba,
                            uint8_t *buf, sector_mode_t mode) {
+    if (disc->format == DISC_FORMAT_VDIR) {
+        uint8_t data2048[SECTOR_DATA_BYTES];
+        vdisc_read_sector(disc->vdisc, lba, data2048);
+        disc_synthesise_sector(buf, lba, data2048);
+        disc->last_read_lba = lba;
+        return (mode == SECTOR_MODE_RAW) ? SECTOR_RAW_BYTES : SECTOR_DATA_BYTES;
+    }
+
     if (!disc->file_open) return 0;
 
     // Find the track this LBA belongs to
@@ -630,14 +647,14 @@ uint32_t disc_read_sector(disc_image_t *disc, uint32_t lba,
 
     // Sector's byte offset in the image file
     uint32_t sector_idx  = lba - trk->start_lba;
-    uint32_t file_offset = trk->file_offset + sector_idx * trk->sector_size;
+    uint64_t file_offset = trk->file_offset + (uint64_t)sector_idx * trk->sector_size;
 
     // Seek to the sector in the file
-    FRESULT fr = f_lseek(&disc->image_file, file_offset);
+    FRESULT fr = f_lseek(&disc->image_file, (FSIZE_t)file_offset);
     if (fr != FR_OK) {
-        printf("[DISC] Seek error at offset %u\n", file_offset);
-        LOG_ERROR_MSG("disc f_lseek failed at offset=%lu lba=%lu fr=%d",
-                      (unsigned long)file_offset, (unsigned long)lba, fr);
+        printf("[DISC] Seek error at offset %llu\n", (unsigned long long)file_offset);
+        LOG_ERROR_MSG("disc f_lseek failed at offset=%llu lba=%lu fr=%d",
+                      (unsigned long long)file_offset, (unsigned long)lba, fr);
         return 0;
     }
 
@@ -677,7 +694,10 @@ uint32_t disc_read_sector(disc_image_t *disc, uint32_t lba,
 const track_t *disc_find_track(const disc_image_t *disc, uint32_t lba) {
     for (uint8_t i = disc->first_track; i <= disc->last_track; i++) {
         const track_t *trk = &disc->tracks[i - 1];
-        if (lba >= trk->start_lba && lba < trk->start_lba + trk->length_sectors) {
+        // Include pregap LBAs: a pregap sector belongs to the track that follows it
+        uint32_t range_start = (trk->pregap_lba < trk->start_lba)
+                               ? trk->pregap_lba : trk->start_lba;
+        if (lba >= range_start && lba < trk->start_lba + trk->length_sectors) {
             return trk;
         }
     }
@@ -688,14 +708,14 @@ const track_t *disc_find_track(const disc_image_t *disc, uint32_t lba) {
 // TOC response builder
 // ---------------------------------------------------------------------------
 // The CD32 akiko reads the TOC as a series of bytes in the format returned
-// by READTOC / GETTD commands.  Each entry is: [track_no, min, sec] (BCD).
+// by READTOC / GETTD commands.  Each entry is: [track_no, min, sec, frame] (BCD).
 
 uint32_t disc_build_toc_response(const disc_image_t *disc,
                                   uint8_t *buf, uint32_t buf_size) {
     uint32_t pos = 0;
 
     for (uint8_t i = disc->first_track; i <= disc->last_track; i++) {
-        if (pos + 3 > buf_size) break;
+        if (pos + 4 > buf_size) break;
         const track_t *trk = &disc->tracks[i - 1];
         msf_t msf = lba_to_msf(trk->start_lba);
 
@@ -703,15 +723,51 @@ uint32_t disc_build_toc_response(const disc_image_t *disc,
         buf[pos++] = ((i / 10) << 4) | (i % 10);
         buf[pos++] = msf.minute;
         buf[pos++] = msf.second;
+        buf[pos++] = msf.frame;
     }
 
     // Lead-out entry (track 0xAA)
-    if (pos + 3 <= buf_size) {
+    if (pos + 4 <= buf_size) {
         msf_t msf = lba_to_msf(disc->total_sectors);
         buf[pos++] = 0xAA;
         buf[pos++] = msf.minute;
         buf[pos++] = msf.second;
+        buf[pos++] = msf.frame;
     }
 
     return pos;
+}
+
+// ---------------------------------------------------------------------------
+// disc_open_vdir — mount partition 2 as a virtual ISO 9660 data disc
+// ---------------------------------------------------------------------------
+bool disc_open_vdir(disc_image_t *disc, vdisc_t *vd) {
+    memset(disc, 0, sizeof(*disc));
+    disc->format = DISC_FORMAT_VDIR;
+    disc->vdisc  = vd;
+    strncpy(disc->image_path, "1:/", MAX_PATH_LEN - 1);
+
+    if (!vdisc_mount(vd)) {
+        printf("[VDIR] Failed to mount partition 2\n");
+        return false;
+    }
+
+    disc->first_track   = 1;
+    disc->last_track    = 1;
+    disc->total_sectors = vd->total_sectors;
+
+    track_t *trk        = &disc->tracks[0];
+    trk->number         = 1;
+    trk->type           = TRACK_TYPE_DATA;
+    trk->start_lba      = 0;
+    trk->pregap_lba     = 0;
+    trk->length_sectors = vd->total_sectors;
+    trk->file_offset    = 0;
+    trk->sector_size    = SECTOR_DATA_BYTES;
+    trk->data_offset    = 0;
+
+    printf("[VDIR] Mounted: %u entries, %u sectors (%.1f MB)\n",
+           vd->entry_count, vd->total_sectors,
+           (float)vd->total_sectors * 2048.0f / (1024.0f * 1024.0f));
+    return true;
 }

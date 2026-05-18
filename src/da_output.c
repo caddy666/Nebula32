@@ -66,8 +66,8 @@ static uint8_t        s_raw[SECTOR_RAW_SIZE]; // scratch for sector_cache_get
 static uint32_t       s_buf_lba[2];             // LBA currently loaded in each buffer
 static sector_cache_t *s_cache      = NULL;
 static uint32_t        s_next_lba   = 0;
-static volatile bool   s_audio_mode = false; // true = CD-DA; enables vis_audio snoop
-static volatile bool   s_drq_pending = false; // set by ISR; cleared by da_drq_pending()
+static bool            s_audio_mode = false; // true = CD-DA; enables vis_audio snoop
+static bool            s_drq_pending = false; // set by ISR via __atomic_store RELEASE
 static uint32_t        s_clkdiv_fixed = 32u * 256u; // 16.8 fixed-point: nominal 32×256 at 1×
 
 // ---------------------------------------------------------------------------
@@ -131,6 +131,7 @@ static void _push_subcode(uint32_t lba) {
     bool is_data = (trk->type != TRACK_TYPE_AUDIO);
     uint8_t qbuf[QCHANNEL_SIZE];
     subcode_build_q_position(trk->number, 1, is_data, trk->start_lba, lba, qbuf);
+    subcode_pulse_sector_clocks();
     subcode_push_to_pio(SUBCODE_PIO, SUBCODE_SM, qbuf);
 }
 
@@ -174,6 +175,14 @@ void da_set_double_speed(bool double_speed) {
     s_double_speed = double_speed;
     pio_sm_set_clkdiv(DA_PIO, DA_SM, _clkdiv(double_speed));
 
+    // Update subcode encoder rate to match DA speed (176400 samples/s at 1×,
+    // 352800 at 2×; each sample takes 32 SM clock cycles in the PIO program).
+    {
+        float sub_clkdiv = (float)clock_get_hz(clk_sys) /
+                           ((double_speed ? 176400.0f * 2.0f : 176400.0f) * 32.0f);
+        pio_sm_set_clkdiv(SUBCODE_PIO, SUBCODE_SM, sub_clkdiv);
+    }
+
     printf("[DA] speed → %s (clkdiv=%.0f)\n",
            double_speed ? "2x" : "1x", (double)_clkdiv(double_speed));
     LOG_INFO_MSG("DA", "speed → %s", double_speed ? "2x" : "1x");
@@ -203,14 +212,14 @@ void da_start_play(sector_cache_t *cache, uint32_t start_lba) {
         return;
     }
     expand_to_i2s24(s_raw, s_buf[0]);
-    sector_cache_release_before(s_cache, s_next_lba);
     s_next_lba++;
+    sector_cache_release_before(s_cache, s_next_lba);  // free just-consumed slot
 
     s_buf_lba[1] = s_next_lba;
     if (sector_cache_get(s_cache, s_next_lba, s_raw, &bytes)) {
         expand_to_i2s24(s_raw, s_buf[1]);
-        sector_cache_release_before(s_cache, s_next_lba);
         s_next_lba++;
+        sector_cache_release_before(s_cache, s_next_lba);
     } else {
         memset(s_buf[1], 0, sizeof(s_buf[1]));  // silence pad if cache not yet full
     }
@@ -268,6 +277,7 @@ static void __isr _dma_irq_handler(void) {
     (void)ch1_done;  // one of ch0/ch1 always set; no other DMA uses IRQ0
 
     if (!s_playing || s_paused) return;
+    if (!s_cache) return;
 
     // chain_to has already started the OTHER channel.  Push Q-channel subcode
     // for that sector NOW so the subcode PIO has data from the first bit-clock.
@@ -275,20 +285,26 @@ static void __isr _dma_irq_handler(void) {
 
     uint32_t bytes_unused;
     if (sector_cache_get(s_cache, s_next_lba, s_raw, &bytes_unused)) {
-        if (s_audio_mode) {
+        if (__atomic_load_n(&s_audio_mode, __ATOMIC_RELAXED)) {
             vis_audio_push_sector(s_raw);  // visualiser needs raw PCM bytes
         }
         expand_to_i2s24(s_raw, s_buf[done_buf]);
-        sector_cache_release_before(s_cache, s_next_lba);
         s_buf_lba[done_buf] = s_next_lba;
         s_next_lba++;
+        sector_cache_release_before(s_cache, s_next_lba);  // free just-consumed slot
         dma_channel_set_read_addr(done_ch, s_buf[done_buf], false);
         dma_channel_set_trans_count(done_ch, SECTOR_DMA_WORDS, false);
-        s_drq_pending = true;  // signal commo_bridge_poll to send DRQ status
+        __atomic_store_n(&s_drq_pending, true, __ATOMIC_RELEASE);  // signal commo_bridge_poll
     } else {
-        // Option A: end of disc — stop cleanly.
-        // chain_to already started the other channel, so let it drain to avoid
-        // leaving the PIO FIFO in a half-filled state; flag stops the next IRQ.
+        // Option A: end of disc — abort both channels from within the ISR.
+        // chain_to has already re-triggered the other channel; disabling IRQ and
+        // calling abort here is the only way to stop the loop — setting s_playing
+        // alone does not prevent the other channel from firing another IRQ.
+        dma_channel_set_irq0_enabled(s_dma_ch,  false);
+        dma_channel_set_irq0_enabled(s_dma_ch2, false);
+        irq_set_enabled(DMA_IRQ_0, false);
+        dma_channel_abort(s_dma_ch);
+        dma_channel_abort(s_dma_ch2);
         s_playing = false;
         LOG_INFO_MSG("DA", "end of disc at LBA=%lu", (unsigned long)s_next_lba);
     }
@@ -322,12 +338,18 @@ void da_stop(void) {
 // ---------------------------------------------------------------------------
 void da_pause(void) {
     if (!s_playing || s_paused) return;
-    // Abort DMA and remember position; s_next_lba holds the next sector to load
     dma_channel_set_irq0_enabled(s_dma_ch,  false);
     dma_channel_set_irq0_enabled(s_dma_ch2, false);
     irq_set_enabled(DMA_IRQ_0, false);
     dma_channel_abort(s_dma_ch);
     dma_channel_abort(s_dma_ch2);
+    // Drain PIO TX FIFO: words already queued would clock out as stale I2S
+    // frames on resume, corrupting the first audio samples Akiko receives.
+    pio_sm_set_enabled(DA_PIO, DA_SM, false);
+    pio_sm_clear_fifos(DA_PIO, DA_SM);
+    pio_sm_restart(DA_PIO, DA_SM);
+    pio_sm_exec(DA_PIO, DA_SM, pio_encode_jmp(s_offset));
+    pio_sm_set_enabled(DA_PIO, DA_SM, true);
     s_paused = true;
     printf("[DA] paused at LBA=%lu\n", (unsigned long)s_next_lba);
     LOG_INFO_MSG("DA", "paused LBA=%lu", (unsigned long)s_next_lba);
@@ -337,29 +359,43 @@ void da_resume(void) {
     if (!s_playing || !s_paused || !s_cache) return;
     s_paused = false;
 
-    // Rewind two sectors to account for the two buffers that were loaded but not
-    // (fully) streamed at the time of pause, then reload both ping-pong buffers.
-    uint32_t resume_lba = (s_next_lba > 2) ? s_next_lba - 2 : 0;
+    // Resume from the earliest of the two loaded buffers — that's the last sector
+    // that was actually handed to DMA.  Using s_next_lba-2 is wrong if the cache
+    // advanced past the buffer boundary; the buf_lba[] slots hold the truth.
+    uint32_t resume_lba = (s_buf_lba[0] < s_buf_lba[1]) ? s_buf_lba[0] : s_buf_lba[1];
     s_next_lba = resume_lba;
     // Flush and reseek so Core 1 prefetch resumes from the correct position;
     // without this the cache may still be fetching sectors well ahead of
     // resume_lba and the first sector_cache_get() below will return stale data.
     sector_cache_seek(s_cache, resume_lba);
 
+    // Give Core 1 up to ~10 ms to prefetch the sectors we're about to play.
+    // Without this, sector_cache_get() always misses immediately after the flush,
+    // filling both DMA buffers with silence before any real data arrives.
+    {
+        const uint32_t spin_deadline = time_us_32() + 10000u;
+        uint32_t dummy_bytes;
+        uint8_t  dummy_raw[SECTOR_RAW_SIZE];
+        while (time_us_32() < spin_deadline) {
+            if (sector_cache_get(s_cache, resume_lba, dummy_raw, &dummy_bytes)) break;
+            tight_loop_contents();
+        }
+    }
+
     uint32_t bytes;
     s_buf_lba[0] = s_next_lba;
     if (sector_cache_get(s_cache, s_next_lba, s_raw, &bytes)) {
         expand_to_i2s24(s_raw, s_buf[0]);
-        sector_cache_release_before(s_cache, s_next_lba);
         s_next_lba++;
+        sector_cache_release_before(s_cache, s_next_lba);
     } else {
         memset(s_buf[0], 0, sizeof(s_buf[0]));
     }
     s_buf_lba[1] = s_next_lba;
     if (sector_cache_get(s_cache, s_next_lba, s_raw, &bytes)) {
         expand_to_i2s24(s_raw, s_buf[1]);
-        sector_cache_release_before(s_cache, s_next_lba);
         s_next_lba++;
+        sector_cache_release_before(s_cache, s_next_lba);
     } else {
         memset(s_buf[1], 0, sizeof(s_buf[1]));
     }
@@ -379,7 +415,7 @@ void da_resume(void) {
 }
 
 void da_set_audio_mode(bool is_audio) {
-    s_audio_mode = is_audio;
+    __atomic_store_n(&s_audio_mode, is_audio, __ATOMIC_RELAXED);
 }
 
 // ---------------------------------------------------------------------------
@@ -427,8 +463,13 @@ uint32_t da_get_current_lba(void) {
     return (s_playing || s_paused) ? s_next_lba : 0;
 }
 
+uint32_t da_get_resume_lba(void) {
+    if (!s_playing && !s_paused) return 0;
+    return (s_buf_lba[0] < s_buf_lba[1]) ? s_buf_lba[0] : s_buf_lba[1];
+}
+
 bool da_drq_pending(void) {
-    if (!s_drq_pending) return false;
-    s_drq_pending = false;
+    if (!__atomic_load_n(&s_drq_pending, __ATOMIC_ACQUIRE)) return false;
+    __atomic_store_n(&s_drq_pending, false, __ATOMIC_RELEASE);
     return true;
 }

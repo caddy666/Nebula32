@@ -1,18 +1,22 @@
 // =============================================================================
-// test_subcode.cpp — Q-channel subcode generation tests
+// test_subcode.cpp — Q-channel subcode generation and subcode clock tests
 //
-// Intent: verify that subcode_build_q_position/mcn/isrc produce byte-exact
-// output matching the Red Book (ECMA-130) Q-channel specification.
+// Subcode group: verify that subcode_build_q_position/mcn/isrc produce
+//   byte-exact output matching the Red Book (ECMA-130) Q-channel spec.
 //
-// Key invariants under test:
-//   - CRC-16/CCITT (init=0x0000, poly=0x1021) computed over bytes 0-9 and
-//     stored bitwise-inverted in bytes 10-11.
-//   - Relative time (bytes 3-5): BCD frames elapsed since track INDEX 01,
-//     with NO lead-in offset.  Pregap (index 0) counts down toward 00:00:00.
-//   - Absolute time (bytes 7-9): BCD MSF from disc start, INCLUDING the
-//     150-frame (2-second) lead-in offset added by lba_to_msf().
-//   - Track and index fields (bytes 1-2) encoded as BCD.
+// SubcodePio group: verify subcode_push_to_pio() PIO FIFO back-pressure.
+//
+// SubcodeClk group: verify subcode_pulse_sector_clocks() drives SUB_SCOR
+//   (GPIO 8) and SUB_WFCLK (GPIO 7) without disturbing SUB_DATA/SUB_CLK.
+//   These pulses are required by Akiko to frame-synchronise the subcode
+//   bitstream delivered on SUB_DATA + SUB_CLK (see FINDING-20 in third_pass.md).
+//
+// Key invariants:
 //   - CTRL/ADR byte 0: data track = 0x41, audio track = 0x01.
+//   - CRC-16/CCITT (init=0x0000, poly=0x1021) over bytes 0-9, bit-inverted.
+//   - Relative time: BCD frames since INDEX 01, NO lead-in offset.
+//   - Absolute time: BCD MSF including 150-frame lead-in offset.
+//   - Track and index fields (bytes 1-2) encoded as BCD.
 //   - Reserved byte 6 always zero in position mode.
 // =============================================================================
 
@@ -332,4 +336,85 @@ TEST(SubcodePio, PartiallyFull_ThirdWordBlocked)
     g_stub_pio_fifo_full_after = 2;   // full after 2 pushes
     CHECK_FALSE(subcode_push_to_pio(pio0, 0, qbuf));
     LONGS_EQUAL(2, g_stub_pio_put_count);   // exactly 2 words made it in
+}
+
+/* =========================================================================
+ * SubcodeClk — FINDING-20: verify subcode_pulse_sector_clocks() drives
+ *              SUB_SCOR (GPIO 8) and SUB_WFCLK (GPIO 7) correctly and does
+ *              not disturb SUB_DATA (GPIO 5) or SUB_CLK (GPIO 6).
+ *
+ * gpio_levels[] is a static array in the hardware/gpio.h stub.
+ * subcode_pulse_sector_clocks() is a static inline in subcode.h.
+ * When inlined into this TU it writes to this TU's gpio_levels[], which
+ * the tests below can inspect directly.
+ * ======================================================================= */
+
+TEST_GROUP(SubcodeClk)
+{
+    void setup() {
+        gpio_init(PIN_SUB_DATA);
+        gpio_init(PIN_SUB_CLK);
+        gpio_init(PIN_SUB_WFCLK);
+        gpio_init(PIN_SUB_SCOR);
+    }
+};
+
+/* Both pins idle low after pulse — confirms the function completed the
+ * high-then-low sequence and did not leave either pin stuck high. */
+TEST(SubcodeClk, ScorAndWfclkIdleLowAfterPulse)
+{
+    subcode_pulse_sector_clocks();
+    LONGS_EQUAL(0, (long)gpio_levels[PIN_SUB_SCOR]);
+    LONGS_EQUAL(0, (long)gpio_levels[PIN_SUB_WFCLK]);
+}
+
+/* Start both pins HIGH (as if a previous operation left them asserted).
+ * After pulse() both must be LOW — proves the function drove them, not just
+ * left them in their initial state. */
+TEST(SubcodeClk, ScorAndWfclkReturnToLowFromHighState)
+{
+    gpio_put(PIN_SUB_SCOR,  1);
+    gpio_put(PIN_SUB_WFCLK, 1);
+    subcode_pulse_sector_clocks();
+    LONGS_EQUAL(0, (long)gpio_levels[PIN_SUB_SCOR]);
+    LONGS_EQUAL(0, (long)gpio_levels[PIN_SUB_WFCLK]);
+}
+
+/* SUB_DATA pin (GPIO 5) must not be touched by subcode_pulse_sector_clocks(). */
+TEST(SubcodeClk, SubDataPinUnchangedByPulse)
+{
+    gpio_put(PIN_SUB_DATA, 1);
+    subcode_pulse_sector_clocks();
+    LONGS_EQUAL(1, (long)gpio_levels[PIN_SUB_DATA]);
+}
+
+/* SUB_CLK pin (GPIO 6) must not be touched by subcode_pulse_sector_clocks(). */
+TEST(SubcodeClk, SubClkPinUnchangedByPulse)
+{
+    gpio_put(PIN_SUB_CLK, 1);
+    subcode_pulse_sector_clocks();
+    LONGS_EQUAL(1, (long)gpio_levels[PIN_SUB_CLK]);
+}
+
+/* SCOR and WFCLK are distinct GPIO numbers from each other and from DATA/CLK. */
+TEST(SubcodeClk, SubcodePinsMutuallyDistinct)
+{
+    CHECK_TRUE(PIN_SUB_SCOR  != PIN_SUB_DATA);
+    CHECK_TRUE(PIN_SUB_SCOR  != PIN_SUB_CLK);
+    CHECK_TRUE(PIN_SUB_SCOR  != PIN_SUB_WFCLK);
+    CHECK_TRUE(PIN_SUB_WFCLK != PIN_SUB_DATA);
+    CHECK_TRUE(PIN_SUB_WFCLK != PIN_SUB_CLK);
+}
+
+/* Integration: pulse then push a full Q-channel block — all 3 FIFO words
+ * delivered (confirms the two operations are independent and compose). */
+TEST(SubcodeClk, PulseBeforePush_AllThreeWordsDelivered)
+{
+    g_stub_pio_put_count       = 0;
+    g_stub_pio_fifo_full_after = -1;
+    uint8_t qbuf[QCHANNEL_SIZE];
+    subcode_build_q_position(1, 1, false, 0, 75, qbuf);
+    subcode_pulse_sector_clocks();
+    CHECK_TRUE(subcode_push_to_pio(pio0, 0, qbuf));
+    LONGS_EQUAL(3, g_stub_pio_put_count);
 }

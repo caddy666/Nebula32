@@ -102,7 +102,7 @@ static void test_sd_card(void) {
 
     // Scan for images
     static char paths[4][MAX_PATH_LEN];
-    uint32_t count = sd_scan_images(paths, 4);
+    uint32_t count = sd_scan_images(paths, 4, "0:/", 0);
     TEST_ASSERT(count > 0, "At least one disc image found on SD card");
 
     if (count == 0) return;

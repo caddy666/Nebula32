@@ -26,6 +26,7 @@
 // =============================================================================
 
 #include "hw_config.h"   // Provided by no-OS-FatFS library
+#include "ff.h"          // for PARTITION typedef (required when FF_MULTI_PARTITION=1)
 
 // ---------------------------------------------------------------------------
 // SDIO bus descriptor
@@ -71,6 +72,16 @@ static sd_card_t sd_cards[] = {
         // .card_detect_gpio = 17,
         // .card_detected_true = 0,
     },
+};
+
+// ---------------------------------------------------------------------------
+// Partition mapping (required when FF_MULTI_PARTITION=1 in ffconf.h)
+// ---------------------------------------------------------------------------
+// "0:/" → physical drive 0, partition 1  (disc images, config, cover art)
+// "1:/" → physical drive 0, partition 2  (virtual CD-ROM content, max 650 MB)
+PARTITION VolToPart[] = {
+    {0, 1},
+    {0, 2},
 };
 
 // ---------------------------------------------------------------------------

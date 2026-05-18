@@ -69,6 +69,19 @@ static volatile uint32_t s_load_index   = 0;
 static volatile uint32_t s_loaded_index = 0;   // Currently loaded disc
 
 // ---------------------------------------------------------------------------
+// Pending page-change request from web interface
+// ---------------------------------------------------------------------------
+static volatile bool s_page_request = false;
+static volatile int  s_page_delta   = 0;   // +1 = next, -1 = prev
+
+// ---------------------------------------------------------------------------
+// Current page position (set by main.c via webserver_set_page_info)
+// ---------------------------------------------------------------------------
+static uint32_t s_ws_page_offset = 0;
+static uint32_t s_ws_page_count  = 0;
+static uint32_t s_ws_total_count = 0;
+
+// ---------------------------------------------------------------------------
 // TCP listener state
 // ---------------------------------------------------------------------------
 static struct tcp_pcb *s_listener = NULL;
@@ -78,41 +91,38 @@ typedef struct {
     char    request[512];      // Accumulate incoming HTTP request
     int     req_len;
     bool    headers_done;
+    bool    in_use;            // Pool slot occupancy flag
 } http_conn_t;
 
-// ---------------------------------------------------------------------------
-// Read WiFi credentials from cd32_ode.cfg
-// ---------------------------------------------------------------------------
-static void read_wifi_config(void) {
-    FIL f;
-    if (f_open(&f, "0:/cd32_ode.cfg", FA_READ) != FR_OK) return;
+// Static pool — avoids repeated heap fragmentation on an RTOS-less embedded target.
+// The web page auto-refreshes every 5 seconds; 3 slots covers normal concurrent use.
+#define HTTP_CONN_POOL_SIZE 3
+static http_conn_t s_conn_pool[HTTP_CONN_POOL_SIZE];
 
-    char line[128];
-    while (f_gets(line, sizeof(line), &f)) {
-        // Trim
-        int len = strlen(line);
-        while (len > 0 && (line[len-1] == '\r' || line[len-1] == '\n' ||
-                            line[len-1] == ' '))
-            line[--len] = '\0';
-
-        if (line[0] == '#' || line[0] == ';' || line[0] == '\0') continue;
-        char *eq = strchr(line, '=');
-        if (!eq) continue;
-        *eq = '\0';
-        char *key = line, *val = eq + 1;
-        // Trim key and val
-        while (*key == ' ') key++;
-        while (*val == ' ') val++;
-
-        if (strcasecmp(key, WS_CFG_SSID_KEY) == 0) {
-            strncpy(s_ssid, val, WS_SSID_MAX - 1);
-        } else if (strcasecmp(key, WS_CFG_PASS_KEY) == 0) {
-            strncpy(s_pass, val, WS_PASS_MAX - 1);
-        } else if (strcasecmp(key, WS_CFG_HOSTNAME_KEY) == 0) {
-            strncpy(s_host, val, WS_HOST_MAX - 1);
+static http_conn_t *conn_alloc(void) {
+    for (int i = 0; i < HTTP_CONN_POOL_SIZE; i++) {
+        if (!s_conn_pool[i].in_use) {
+            memset(&s_conn_pool[i], 0, sizeof(s_conn_pool[i]));
+            s_conn_pool[i].in_use = true;
+            return &s_conn_pool[i];
         }
     }
-    f_close(&f);
+    return NULL;
+}
+
+static void conn_free(http_conn_t *conn) {
+    if (conn) conn->in_use = false;
+}
+
+// ---------------------------------------------------------------------------
+// Load WiFi credentials from the logger config (parsed once from cd32_ode.cfg)
+// ---------------------------------------------------------------------------
+static void read_wifi_config(void) {
+    const logger_config_t *cfg = logger_get_config();
+    strncpy(s_ssid, cfg->wifi_ssid,     sizeof(s_ssid) - 1);
+    strncpy(s_pass, cfg->wifi_password, sizeof(s_pass) - 1);
+    if (cfg->wifi_hostname[0] != '\0')
+        strncpy(s_host, cfg->wifi_hostname, sizeof(s_host) - 1);
 }
 
 // ---------------------------------------------------------------------------
@@ -133,9 +143,54 @@ static const char *basename_no_ext(const char *path, char *buf, int bufsz) {
     return buf;
 }
 
+// Escape HTML special characters (<, >, &, ", ') into a caller-supplied buffer.
+// Returns the number of bytes written (not counting the NUL terminator).
+static int html_escape(char *out, int outsz, const char *in) {
+    int n = 0;
+    for (const char *p = in; *p; p++) {
+        const char *esc;
+        int elen;
+        switch (*p) {
+            case '&':  esc = "&amp;";  elen = 5; break;
+            case '<':  esc = "&lt;";   elen = 4; break;
+            case '>':  esc = "&gt;";   elen = 4; break;
+            case '"':  esc = "&quot;"; elen = 6; break;
+            case '\'': esc = "&#39;";  elen = 5; break;
+            default:   esc = NULL;     elen = 1; break;
+        }
+        if (esc) {
+            if (n + elen >= outsz - 1) break;
+            memcpy(out + n, esc, elen);
+            n += elen;
+        } else {
+            if (n >= outsz - 1) break;
+            out[n++] = *p;
+        }
+    }
+    out[n] = '\0';
+    return n;
+}
+
+// Escape a string for safe embedding in a JSON string value.
+// Escapes " and \ per RFC 8259; skips control chars (illegal in JSON strings).
+static int json_escape(char *out, int outsz, const char *in) {
+    int n = 0;
+    for (const char *p = in; *p && n < outsz - 1; p++) {
+        if (*p == '"' || *p == '\\') {
+            if (n + 2 >= outsz - 1) break;
+            out[n++] = '\\'; out[n++] = *p;
+        } else if ((unsigned char)*p >= 0x20) {
+            out[n++] = *p;
+        }
+        // control chars silently dropped
+    }
+    out[n] = '\0';
+    return n;
+}
+
 // Check if a cover image exists for a given disc image path
 static bool cover_exists(const char *image_path, char *cover_path_out, int outsz) {
-    char base[128];
+    char base[MAX_PATH_LEN];
     basename_no_ext(image_path, base, sizeof(base));
 
     // Try covers/ directory first
@@ -158,14 +213,14 @@ static bool cover_exists(const char *image_path, char *cover_path_out, int outsz
     return false;
 }
 
-// Drive state name
+// Drive state name — aligned with drive_state_t (DRIVE_IDLE=0)
 static const char *state_name(int state) {
     switch (state) {
-        case 0: return "RESET";   case 1: return "IDLE";
-        case 2: return "SPINUP";  case 3: return "READY";
-        case 4: return "SEEKING"; case 5: return "READING";
-        case 6: return "PLAYING"; case 7: return "PAUSED";
-        default: return "ERROR";
+        case 0: return "IDLE";    case 1: return "SPINUP";
+        case 2: return "READY";   case 3: return "SEEKING";
+        case 4: return "READING"; case 5: return "PLAYING";
+        case 6: return "PAUSED";  case 7: return "ERROR";
+        default: return "UNKNOWN";
     }
 }
 
@@ -192,6 +247,27 @@ static void fmt_bytes(char *buf, int bufsz, uint64_t bytes) {
         snprintf(buf, bufsz, "%lu KB", (unsigned long)(bytes / 1024));
 }
 
+// ---------------------------------------------------------------------------
+// Cover art path cache — avoids up to 3 f_stat calls per image per HTML render
+// ---------------------------------------------------------------------------
+// Populated on demand and invalidated when the disc list changes.
+// Sentinel: s_cover_cache[i][0] == '\1' means checked and not found.
+#define WS_MAX_IMAGES 32
+static char s_cover_cache[WS_MAX_IMAGES][256];
+static bool s_cover_cache_valid = false;
+
+static void refresh_cover_cache(void) {
+    uint32_t n = s_image_count < WS_MAX_IMAGES ? s_image_count : WS_MAX_IMAGES;
+    for (uint32_t i = 0; i < n; i++) {
+        char path[256] = "";
+        if (cover_exists(s_image_paths[i], path, sizeof(path)))
+            strncpy(s_cover_cache[i], path, sizeof(s_cover_cache[i]) - 1);
+        else
+            s_cover_cache[i][0] = '\1';  // sentinel: checked, not found
+    }
+    s_cover_cache_valid = true;
+}
+
 // Generate the main HTML page into a dynamically allocated string.
 // Caller must free() the returned pointer.
 static char *build_html_page(void) {
@@ -199,8 +275,16 @@ static char *build_html_page(void) {
     static char html[32768];
     int pos = 0;
 
-#define HCAT(fmt, ...) \
-    pos += snprintf(html + pos, sizeof(html) - pos, fmt, ##__VA_ARGS__)
+// Guard against pos going negative or past the buffer end before each write.
+// Without this, sizeof(html)-pos underflows to a huge size_t when pos>=32768,
+// causing snprintf to write well past the array boundary.
+#define HCAT(fmt, ...) do { \
+    int _rem = (int)sizeof(html) - pos - 1; \
+    if (_rem > 0) { \
+        int _n = snprintf(html + pos, (size_t)(_rem + 1), fmt, ##__VA_ARGS__); \
+        if (_n > 0) pos += (_n < _rem ? _n : _rem); \
+    } \
+} while (0)
 
     HCAT("HTTP/1.1 200 OK\r\n"
          "Content-Type: text/html; charset=utf-8\r\n"
@@ -252,6 +336,14 @@ static char *build_html_page(void) {
          ".load-btn.active{background:#2ecc71;color:#000;border-color:#2ecc71}"
          "@media(max-width:400px){.grid{grid-template-columns:repeat(2,1fr)}"
                                  ".disc-cover,.disc-cover-svg{width:120px;height:120px}}"
+         ".pager{display:flex;align-items:center;justify-content:center;"
+                "gap:16px;margin-top:24px;padding:12px}"
+         ".pager-btn{background:#0f3460;color:#c8a000;border:1px solid #c8a000;"
+                    "border-radius:6px;padding:8px 18px;cursor:pointer;font-size:.9rem;"
+                    "transition:.15s}"
+         ".pager-btn:hover:not(:disabled){background:#c8a000;color:#000}"
+         ".pager-btn:disabled{opacity:.3;cursor:not-allowed}"
+         ".pager-info{color:#888;font-size:.85rem}"
          "</style></head><body>");
 
     HCAT("<h1>💿 Nebula32, a CD32 Optical Drive Emulator</h1>"
@@ -260,6 +352,11 @@ static char *build_html_page(void) {
          s_host, s_ip_str);
 
     // Status bar
+    uint32_t page_num   = s_ws_page_offset / 64 + 1;
+    uint32_t page_total = s_ws_total_count ? (s_ws_total_count + 63) / 64 : 1;
+    bool     has_prev   = (s_ws_page_offset > 0);
+    bool     has_next   = (s_ws_page_offset + s_ws_page_count < s_ws_total_count);
+
     HCAT("<div class='status'>"
          "<div class='status-item'>"
          "<span class='status-label'>Drive State</span>"
@@ -267,7 +364,7 @@ static char *build_html_page(void) {
          state_name(commo_bridge_get_drive_state()));
 
     if (s_loaded_index < s_image_count) {
-        char base[128];
+        char base[MAX_PATH_LEN];
         const char *loaded_name = s_image_paths[s_loaded_index];
         const char *sl = strrchr(loaded_name, '/');
         strncpy(base, sl ? sl + 1 : loaded_name, sizeof(base) - 1);
@@ -277,9 +374,16 @@ static char *build_html_page(void) {
     }
 
     HCAT("<div class='status-item'>"
-         "<span class='status-label'>Images Found</span>"
-         "<span class='status-value'>%lu</span></div>",
-         (unsigned long)s_image_count);
+         "<span class='status-label'>Images</span>"
+         "<span class='status-value'>%lu total</span></div>",
+         (unsigned long)s_ws_total_count);
+
+    if (page_total > 1) {
+        HCAT("<div class='status-item'>"
+             "<span class='status-label'>Page</span>"
+             "<span class='status-value'>%lu / %lu</span></div>",
+             (unsigned long)page_num, (unsigned long)page_total);
+    }
 
     uint64_t sd_used = 0, sd_total = 0;
     if (sd_get_space(&sd_used, &sd_total)) {
@@ -294,32 +398,37 @@ static char *build_html_page(void) {
 
     HCAT("</div>");
 
-    // Disc grid
+    // Disc grid — populate cover cache once per render to avoid repeated f_stat
+    if (!s_cover_cache_valid) refresh_cover_cache();
+
     HCAT("<div class='grid'>");
 
     for (uint32_t i = 0; i < s_image_count && i < 99; i++) {
-        char base[128];
+        char base[MAX_PATH_LEN];
         basename_no_ext(s_image_paths[i], base, sizeof(base));
+        // HTML-escape the filename before injecting into HTML/attribute context
+        char base_esc[512];
+        html_escape(base_esc, sizeof(base_esc), base);
         bool is_loaded = (i == s_loaded_index);
 
-        char cover_path[256] = "";
-        bool has_cover = cover_exists(s_image_paths[i], cover_path, sizeof(cover_path));
+        const char *cover_path  = (i < WS_MAX_IMAGES) ? s_cover_cache[i] : "";
+        bool        has_cover   = cover_path[0] != '\0' && cover_path[0] != '\1';
 
         HCAT("<div class='disc%s' onclick='loadDisc(%lu)'>",
              is_loaded ? " loaded" : "", (unsigned long)i);
         HCAT("<span class='disc-num'>%lu</span>", (unsigned long)(i + 1));
-        if (is_loaded) HCAT("<span class='badge'>▶ Playing</span>");
+        if (is_loaded) HCAT("<span class='badge'>&#9658; Playing</span>");
 
         if (has_cover) {
             // Serve cover via /covers/ API endpoint
             HCAT("<img class='disc-cover' src='/covers/%s' "
                  "onerror=\"this.style.display='none'\" "
-                 "alt='%s cover' loading='lazy'>", base, base);
+                 "alt='%s cover' loading='lazy'>", base_esc, base_esc);
         } else {
-            HCAT("<div class='disc-cover-svg'>📀</div>");
+            HCAT("<div class='disc-cover-svg'>&#128192;</div>");
         }
 
-        HCAT("<div class='disc-name'>%s</div>", base);
+        HCAT("<div class='disc-name'>%s</div>", base_esc);
         HCAT("<button class='load-btn%s' onclick='event.stopPropagation();loadDisc(%lu)'>"
              "%s</button>",
              is_loaded ? " active" : "",
@@ -330,8 +439,27 @@ static char *build_html_page(void) {
 
     HCAT("</div>");  // .grid
 
+    // Pager (only shown when there is more than one page)
+    if (page_total > 1) {
+        HCAT("<div class='pager'>"
+             "<button class='pager-btn' onclick='changePage(-1)' %s>&#8592; Prev</button>"
+             "<span class='pager-info'>Showing %lu&ndash;%lu of %lu images</span>"
+             "<button class='pager-btn' onclick='changePage(1)' %s>Next &#8594;</button>"
+             "</div>",
+             has_prev ? "" : "disabled",
+             (unsigned long)(s_ws_page_offset + 1),
+             (unsigned long)(s_ws_page_offset + s_ws_page_count),
+             (unsigned long)s_ws_total_count,
+             has_next ? "" : "disabled");
+    }
+
     // JavaScript
     HCAT("<script>"
+         "function changePage(delta){"
+         "  fetch('/api/page/'+(delta>0?'next':'prev'),{method:'POST'})"
+         "  .then(r=>r.json()).then(d=>{if(d.ok)location.reload();})"
+         "  .catch(e=>console.error(e));"
+         "}"
          "function loadDisc(idx){"
          "  fetch('/api/load/'+idx,{method:'POST'})"
          "  .then(r=>r.json())"
@@ -406,6 +534,9 @@ static void build_json_status(char *buf, int bufsz) {
         strncpy(loaded_name, sl ? sl + 1 : p, sizeof(loaded_name) - 1);
     }
 
+    char loaded_esc[128];
+    json_escape(loaded_esc, sizeof(loaded_esc), loaded_name);
+
     int pos = snprintf(buf, bufsz,
         "HTTP/1.1 200 OK\r\n"
         "Content-Type: application/json\r\n"
@@ -414,17 +545,25 @@ static void build_json_status(char *buf, int bufsz) {
         "\"loaded_index\":%lu,\"loaded_name\":\"%s\","
         "\"image_count\":%lu,\"ip\":\"%s\"",
         state_name(commo_bridge_get_drive_state()), commo_bridge_get_drive_state(),
-        (unsigned long)s_loaded_index, loaded_name,
+        (unsigned long)s_loaded_index, loaded_esc,
         (unsigned long)s_image_count, s_ip_str);
 
     uint64_t sd_used = 0, sd_total = 0;
     if (sd_get_space(&sd_used, &sd_total)) {
         snprintf(buf + pos, bufsz - pos,
-            ",\"sd_used_mb\":%lu,\"sd_total_mb\":%lu}",
+            ",\"sd_used_mb\":%lu,\"sd_total_mb\":%lu"
+            ",\"page_offset\":%lu,\"page_count\":%lu,\"total_count\":%lu}",
             (unsigned long)(sd_used  / (1024 * 1024)),
-            (unsigned long)(sd_total / (1024 * 1024)));
+            (unsigned long)(sd_total / (1024 * 1024)),
+            (unsigned long)s_ws_page_offset,
+            (unsigned long)s_ws_page_count,
+            (unsigned long)s_ws_total_count);
     } else {
-        snprintf(buf + pos, bufsz - pos, "}");
+        snprintf(buf + pos, bufsz - pos,
+            ",\"page_offset\":%lu,\"page_count\":%lu,\"total_count\":%lu}",
+            (unsigned long)s_ws_page_offset,
+            (unsigned long)s_ws_page_count,
+            (unsigned long)s_ws_total_count);
     }
 }
 
@@ -476,13 +615,14 @@ static void handle_request(struct tcp_pcb *pcb, http_conn_t *conn) {
             "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
             "Connection: close\r\n\r\n[");
         for (uint32_t j = 0; j < s_image_count && j < 99; j++) {
-            char base[128], cp[256] = "";
+            char base[MAX_PATH_LEN], base_esc[256], cp[256] = "";
             basename_no_ext(s_image_paths[j], base, sizeof(base));
+            json_escape(base_esc, sizeof(base_esc), base);
             bool hc = cover_exists(s_image_paths[j], cp, sizeof(cp));
             pos += snprintf(s_resp_buf + pos, sizeof(s_resp_buf) - pos,
                 "%s{\"index\":%lu,\"name\":\"%s\",\"has_cover\":%s,\"loaded\":%s}",
                 j > 0 ? "," : "",
-                (unsigned long)j, base,
+                (unsigned long)j, base_esc,
                 hc ? "true" : "false",
                 (j == s_loaded_index) ? "true" : "false");
         }
@@ -509,6 +649,28 @@ static void handle_request(struct tcp_pcb *pcb, http_conn_t *conn) {
                 "Connection: close\r\n\r\n"
                 "{\"ok\":false,\"error\":\"index out of range\"}");
         }
+        tcp_write(pcb, s_resp_buf, strlen(s_resp_buf), TCP_WRITE_FLAG_COPY);
+        tcp_output(pcb);
+        return;
+    }
+
+    // ── POST /api/page/next or /api/page/prev ── Paginate image list
+    if (is_post && strcmp(path, "/api/page/next") == 0) {
+        s_page_delta   = +1;
+        s_page_request = true;
+        snprintf(s_resp_buf, sizeof(s_resp_buf),
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+            "Connection: close\r\n\r\n{\"ok\":true,\"direction\":\"next\"}");
+        tcp_write(pcb, s_resp_buf, strlen(s_resp_buf), TCP_WRITE_FLAG_COPY);
+        tcp_output(pcb);
+        return;
+    }
+    if (is_post && strcmp(path, "/api/page/prev") == 0) {
+        s_page_delta   = -1;
+        s_page_request = true;
+        snprintf(s_resp_buf, sizeof(s_resp_buf),
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+            "Connection: close\r\n\r\n{\"ok\":true,\"direction\":\"prev\"}");
         tcp_write(pcb, s_resp_buf, strlen(s_resp_buf), TCP_WRITE_FLAG_COPY);
         tcp_output(pcb);
         return;
@@ -554,12 +716,15 @@ static void handle_request(struct tcp_pcb *pcb, http_conn_t *conn) {
                 (unsigned long)fsize);
             tcp_write(pcb, s_resp_buf, hlen, TCP_WRITE_FLAG_COPY);
 
-            // Stream file in 512-byte chunks
+            // Stream file in 512-byte chunks; retry on ERR_MEM (send buffer full)
             static uint8_t chunk[512];
             UINT br;
             while (f_read(&cover_file, chunk, sizeof(chunk), &br) == FR_OK && br > 0) {
-                // Wait if TCP send buffer is full
-                err_t e = tcp_write(pcb, chunk, br, TCP_WRITE_FLAG_COPY);
+                err_t e = ERR_MEM;
+                for (int retries = 0; retries < 20 && e == ERR_MEM; retries++) {
+                    e = tcp_write(pcb, chunk, br, TCP_WRITE_FLAG_COPY);
+                    if (e == ERR_MEM) cyw43_arch_poll();
+                }
                 if (e != ERR_OK) break;
             }
             f_close(&cover_file);
@@ -602,7 +767,7 @@ static err_t tcp_recv_cb(void *arg, struct tcp_pcb *pcb,
 
     if (!p || err != ERR_OK) {
         tcp_close(pcb);
-        if (conn) free(conn);
+        conn_free(conn);
         return ERR_OK;
     }
 
@@ -617,17 +782,20 @@ static err_t tcp_recv_cb(void *arg, struct tcp_pcb *pcb,
         q = q->next;
     }
     conn->request[conn->req_len] = '\0';
+    uint16_t tot = p->tot_len;   // save before pbuf_free invalidates p
     pbuf_free(p);
+
+    // Acknowledge received bytes BEFORE tcp_close — after close the pcb is freed
+    // and calling tcp_recved on it is undefined behaviour in lwIP's NO_SYS mode.
+    tcp_recved(pcb, tot);
 
     // Check if we have a complete HTTP header (ends with \r\n\r\n)
     if (strstr(conn->request, "\r\n\r\n")) {
         handle_request(pcb, conn);
         tcp_close(pcb);
-        free(conn);
+        conn_free(conn);
         tcp_arg(pcb, NULL);
     }
-
-    tcp_recved(pcb, p ? p->tot_len : 0);
     return ERR_OK;
 }
 
@@ -635,12 +803,11 @@ static err_t tcp_accept_cb(void *arg, struct tcp_pcb *new_pcb, err_t err) {
     (void)arg;
     if (err != ERR_OK || !new_pcb) return ERR_VAL;
 
-    http_conn_t *conn = (http_conn_t *)malloc(sizeof(http_conn_t));
+    http_conn_t *conn = conn_alloc();
     if (!conn) {
         tcp_close(new_pcb);
         return ERR_MEM;
     }
-    memset(conn, 0, sizeof(*conn));
 
     tcp_arg(new_pcb, conn);
     tcp_recv(new_pcb, tcp_recv_cb);
@@ -715,8 +882,7 @@ void webserver_poll(void) {
 }
 
 void webserver_notify_state_change(void) {
-    // No persistent state to invalidate in our simple implementation —
-    // the HTML page is always rebuilt fresh from current globals.
+    s_cover_cache_valid = false;  // disc list may have changed; rebuild on next render
 }
 
 bool webserver_is_running(void) { return s_running; }
@@ -737,6 +903,20 @@ void webserver_set_loaded_index(uint32_t index) {
     s_loaded_index = index;
 }
 
+void webserver_set_page_info(uint32_t page_offset, uint32_t page_count,
+                             uint32_t total_count) {
+    s_ws_page_offset = page_offset;
+    s_ws_page_count  = page_count;
+    s_ws_total_count = total_count;
+}
+
+bool webserver_has_page_request(void) {
+    if (s_page_request) { s_page_request = false; return true; }
+    return false;
+}
+
+int webserver_get_page_delta(void) { return s_page_delta; }
+
 #else // !PICO_CYW43_SUPPORTED — stub out the entire webserver for non-W builds
 
 bool webserver_init(void) { return false; }
@@ -747,5 +927,8 @@ const char *webserver_get_ip(void) { return ""; }
 bool webserver_has_load_request(void) { return false; }
 uint32_t webserver_get_load_index(void) { return 0; }
 void webserver_set_loaded_index(uint32_t index) { (void)index; }
+void webserver_set_page_info(uint32_t a, uint32_t b, uint32_t c) { (void)a;(void)b;(void)c; }
+bool webserver_has_page_request(void) { return false; }
+int  webserver_get_page_delta(void)   { return 0; }
 
 #endif // PICO_CYW43_SUPPORTED

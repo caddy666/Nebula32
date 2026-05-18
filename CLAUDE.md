@@ -91,33 +91,38 @@ Data transitions on the **falling** BCLK edge; Akiko samples on the **rising** e
 
 | File | Status | Notes |
 |------|--------|-------|
-| `upstream/core/commo.c` | ✅ Correct | COMMO command/status protocol; last_command cleared on CMD_ERROR |
+| `upstream/core/commo.c` | ✅ Correct | COMMO command/status protocol; last_command cleared on CMD_ERROR; vestigial commo_data_is_low() during TX documented |
 | `upstream/core/dispatcher.c` | ✅ Correct | Packet routing |
 | `upstream/core/cmd_hndl.c` | ✅ Correct | Opcode dispatch |
 | `upstream/core/sts_q_id.c` | ✅ Correct | Status/Q-channel buffer |
 | `upstream/utils/maths.c` | ✅ Correct | BCD/time arithmetic; tracks_calc() widened to uint64_t |
-| `upstream/utils/timer.c` | ✅ Correct | 8 ms software timer; delay() zero-entry guard |
-| `upstream/pio/commo.pio` | ✅ Correct | COMMO PIO |
-| `src/disc_image.c` | ✅ Correct | ISO/BIN/NRG/MDF parsers; CUE PREGAP+INDEX00 fix; NRG lead-out skip fix; NRG chunk_size=0/DAOX-too-short guards; MDF sector_size=0 guard; CUE/MDF track-length underflow clamp; NRG uint64_t aligned memcpy |
-| `src/sector_cache.c` | ✅ Correct | SD prefetch ring buffer + flush_gen race fix; hard_assert null-cache guard in prefetch_tick; __atomic_acquire/release builtins replace volatile+__dmb() |
-| `src/subcode.c` | ✅ Correct | Q-channel generation |
-| `pio/subcode_encoder.pio` | ✅ Correct | SUB signal output on GPIO 5-8 |
-| `src/sd_card.c` | ✅ Correct | SDIO mount/scan |
-| `src/hw_config.c` | ✅ Correct | FatFS hardware config |
-| `src/ecc.c` | ✅ Correct | EDC/ECC computation |
-| `src/logger.c` | ✅ Correct | SD activity log |
-| `src/config.c` | ✅ Correct | Flash-backed settings |
+| `upstream/utils/timer.c` | ✅ Correct | 8 ms software timer; delay() zero-entry guard; SCOR IRQ guarded by #if !BUILD_WITH_COMMO (F25) |
+| `upstream/pio/commo.pio` | ✅ Correct | COMMO PIO; RX acknowledge pulse extended to [31] delay ≈ 237 ns (F21) |
+| `src/disc_image.c` | ✅ Correct | ISO/BIN/NRG/MDF parsers; CUE PREGAP+INDEX00 fix; NRG lead-out skip fix; NRG chunk_size=0/DAOX-too-short guards; MDF sector_size=0 guard; CUE/MDF track-length underflow clamp; NRG uint64_t aligned memcpy; NRG v1 unaligned reads use memcpy; disc_find_track includes pregap LBAs; NRG v1 file_off uses idx1_lba (F11); disc_build_toc_response emits 4-byte entries [track,min,sec,frame] (F15); file_offset widened to uint64_t (F29+F30) |
+| `src/sector_cache.c` | ✅ Correct | SD prefetch ring buffer + flush_gen race fix; hard_assert null-cache guard in prefetch_tick; __atomic_acquire/release builtins; SD read error retries once before skipping; sector_cache_is_full() added; error slots marked valid with valid_bytes=0 (permanent miss sentinel) |
+| `src/subcode.c` | ✅ Correct | Q-channel generation; dead ORIG function comment removed |
+| `pio/subcode_encoder.pio` | ✅ Correct | SUB signal output on GPIO 5-8; .side_set 1 drives SUB_CLK (FINDING-20); WFCLK/SCOR pulsed by subcode_pulse_sector_clocks() |
+| `src/sd_card.c` | ✅ Correct | SDIO mount/scan; sd_scan_images offset param; sd_count_images for total count; qsort alphabetical order for stable indices (F24) |
+| `src/hw_config.c` | ✅ Correct | FatFS hardware config; VolToPart[] maps "0:/"→partition 1, "1:/"→partition 2 |
+| `src/virtual_disc.c` | ✅ Correct | ISO 9660 synthesis from SD partition 2; BFS scan → LBA assignment → per-sector dispatch (PVD/VDST/path tables/dir records/file data) |
+| `include/virtual_disc.h` | ✅ Correct | vdisc_t / vdisc_entry_t types; vdisc_mount / vdisc_read_sector API |
+| `include/ffconf.h` | ✅ Correct | Project-owned FatFS config; FF_MULTI_PARTITION=1 enables two-partition support; shadows vendor copy in libs/ |
+| `src/ecc.c` | ✅ Correct | EDC/ECC computation; P-parity fixed to 24 rows; Q-parity uses correct ECMA-130 diagonal interleave (stride 44 mod 2236) |
+| `src/logger.c` | ✅ Correct | SD activity log; WiFi fields (ssid/password/hostname) added to logger_config_t; log_max_kb negative guard; dead cmd_name/_log_cmd/_log_cmd_resp/_log_irq removed; state_names[] offset corrected (RESET removed, bounds ≤7) (F7+F18) |
+| `src/config.c` | ✅ Correct | Flash-backed settings; multicore_lockout_start/end_blocking() wraps flash erase/program (BUG-1) |
 | `src/display.cpp` | ✅ Correct | ST7789 240×240 cover art + scanline API |
 | `src/ui.c` | ✅ Correct | UI event handler |
-| `src/webserver.c` | ✅ Correct | WiFi web interface |
-| `src/da_output.c` | ✅ Correct | DA DMA engine — 24-bit I2S expand, DRQ flag, FIFO drain on stop, M17SINE clkdiv trim; hard_assert on DMA ch claims |
+| `src/webserver.c` | ✅ Correct | WiFi web interface; use-after-free fixed; HCAT overflow guard; html_escape + json_escape; static conn pool; tcp_recved before tcp_close (BUG-3); JPEG ERR_MEM retry; cover path cache (≤3 f_stat/render); pagination (page offset/count/total, prev/next buttons, /api/page/*); cover_exists base[] widened to MAX_PATH_LEN (F22) |
+| `src/da_output.c` | ✅ Correct | DA DMA engine — 24-bit I2S expand, DRQ flag, FIFO drain on stop/pause, M17SINE clkdiv trim; hard_assert on DMA ch claims; s_drq_pending __atomic_*; s_audio_mode __atomic_*; dma_channel_abort in end-of-disc ISR (BUG-2); resume_lba from min(buf_lba) (SMELL-5); NULL s_cache guard in IRQ (F23); subcode PIO clkdiv updated on 2× change (F14); da_get_resume_lba() added (F12); spin-wait after seek in da_resume() (F9) |
 | `src/rotary_mcp.cpp` | ✅ Correct | MCP23017 encoder + logger toggle button (GPB0) |
-| `src/commo_bridge.c` | ✅ Correct | PLAY_TRACK_OPC BCD decode, TRAY_IN seek, audio mode set, DRQ packet |
+| `src/commo_bridge.c` | ✅ Correct | PLAY_TRACK_OPC BCD decode, TRAY_IN seek, audio mode set, DRQ packet; _send_toc_packets guards first_track==0; PIN_RESET init+poll; send_status/qchannel pkt stack-allocated; _wait_commo_ready 5 ms timeout; FAKE_TIMING enabled + 1.8s spinup (F2); TOC 0xA1 uses ctrl_first (F5); _wait_commo_ready removed from _send_toc_packets (F10); da_get_resume_lba in PAUSE_OFF (F12); Dispatcher/cmd_hndl called only when Path A idle (F13) |
 | `src/upstream_player_shim.c` | ✅ Correct | Linkage shim — provides player_interface globals and no-op player() for upstream cmd_hndl.c |
 | `src/fft.c` | ✅ Correct | 256-point Q15 radix-2 FFT with Hann window |
 | `src/effects.c` | ✅ Correct | 5 demoscene visualiser effects (SPECTRUM/SCOPE/RASTER/COMBO/SPACEBALLS) |
 | `src/vis_audio.c` | ✅ Correct | DA DMA snoop — SPSC ring, left-channel extraction |
-| `pio/da_output.pio` | ✅ Correct | 24-bit I2S frames, clkdiv=32 (2.12 MHz), 96 SM cycles/pair → 44.1 kHz |
+| `pio/da_output.pio` | ✅ Correct | 24-bit I2S frames, clkdiv=32 (2.12 MHz), 96 SM cycles/pair → 44.1 kHz; LRCLK polarity corrected (low=L, high=R) (F3) |
+| `include/subcode.h` | ✅ Correct | subcode_push_to_pio() clears FIFO on partial push to prevent orphaned words (F8) |
+| `include/disc_image.h` | ✅ Correct | track_t.file_offset widened to uint64_t for >4 GB images (F29+F30) |
 | `tests/host/test_csv_replay_pon_poff.cpp` | ✅ Correct | CsvReplayPonPoff: 10 windowed tests against pon-poff-idle.csv |
 | `tests/host/test_csv_replay_zool2.cpp` | ✅ Correct | CsvReplayZool2: 10 windowed tests against zool2.csv |
 | `tests/host/test_csv_replay_pinball.cpp` | ✅ Correct | CsvReplayPinball: 10 windowed tests against pinball.csv |
@@ -125,6 +130,15 @@ Data transitions on the **falling** BCLK edge; Akiko samples on the **rising** e
 | `tests/host/test_opc_responses.cpp` | ✅ Correct | OpcResponses: 34-case table test — every COMMO opcode → status + state (incl. SEEK from PLAYING, SEEK invalid BCD) |
 | `tests/host/test_motor_sled_fake.cpp` | ✅ Correct | MotorSledFake: 10 tests — motor active states, BCD→LBA, virtual sled seek |
 | `tests/host/test_webserver_html.cpp` | ✅ Correct | WebserverHtml: 10 tests — compiles real build_html_page() via WEBSERVER_TEST_BUILD; verifies buffer, title, starfield, SD space, CSS escaping, disc grid, drive state label |
+
+---
+
+## Vendor libraries (`libs/`)
+
+**Do not modify any file under `libs/`.** All subdirectories are third-party libraries
+tracked as git submodules or vendored snapshots. Project-specific configuration that
+would otherwise require editing a vendor file (e.g. FatFS `ffconf.h`) must instead be
+provided by a shadowing copy in `include/`, which appears earlier on every include path.
 
 ---
 
@@ -146,8 +160,9 @@ All four PIO programs are always loaded. The upstream servo PIO programs
 
 **Location:** `tests/host/`  
 **Run:** `make && ./cd32_tests -v`  
-**Result:** 443 tests, 0 failures  
+**Result:** 449 tests, 0 failures  
 **Parser tests:** `make parser_tests && ./parser_tests -v` → 28 tests, 0 failures (separate binary; uses FatFS injectable sim)
+**Virtual disc tests:** `make vdisc_tests && ./vdisc_tests -v` → 53 tests, 0 failures (separate binary; uses vdisc_sim with directory traversal support)
 **Stress tests:** `make stress_sector_cache && ./stress_sector_cache` → 5 tests, 0 failures (TSan binary; concurrent producer/consumer)
 **Sanitizer:** `-fsanitize=undefined -fno-sanitize-recover=all` active on all C and C++ objects and the link step
 
@@ -157,6 +172,7 @@ All four PIO programs are always loaded. The upstream servo PIO programs
 | `Ecc` | 13 | EDC round-trip, single-bit flip detection, MSF header flip, last-data-byte flip, sync pattern inside payload passes EDC |
 | `Subcode` | 14 | CRC-16, CONAD byte, BCD track, absolute MSF |
 | `SubcodePio` | 3 | subcode_push_to_pio() PIO TX FIFO back-pressure: all 3 words pushed (never-full), first word rejected (full before push), 3rd word blocked (full after 2) |
+| `SubcodeClk` | 6 | subcode_pulse_sector_clocks(): SCOR+WFCLK idle low after pulse, both return to low from HIGH, DATA/CLK pins unaffected, pin numbers distinct, pulse+push integration |
 | `Fft` | 7 | Init, zero input, range, peak hold/decay |
 | `VisAudio` | 6 | SPSC ring, left-channel extraction, FIFO order |
 | `SectorCache` | 12 | Slot injection, seek/flush, flush_gen counter, partial-sector valid_bytes |
@@ -192,6 +208,20 @@ All four PIO programs are always loaded. The upstream servo PIO programs
 | `SubchannelMath` | 15 | Q-channel relative time: index 01 zero at track start, index 00 countdown 1 frame/1 second, pregap boundary no uint32_t underflow, absolute time 2-second lead-in offset, index BCD 0x00/0x01 flip, data/audio CTRL nibble (0x41/0x01), two-digit track BCD, 1-minute relative time, CRC self-consistency; multiple indices: index 2 BCD, index 10 double-digit BCD, relative time from index 2 uses track_start_lba |
 | `HostReset` | 7 | /RESET pin (GPIO 14) contract: PLAYING/SEEKING/SPINUP → IDLE, ThenTrayIn restarts spinup, multiple resets idempotent, door GPIO snapshot preserved across reset, DRIVE_ERROR fault cleared |
 | `WebserverHtml` | 10 | Compiles and runs the real build_html_page() via WEBSERVER_TEST_BUILD hook; checks: fits 32 KB, DOCTYPE present, Nebula32 title, starfield script, SD card status label, GB space output, loadDisc JS, CSS %% escaping, disc names in grid, Drive State label |
+
+**vdisc_tests groups (separate binary — `make vdisc_tests`):**
+
+| Group | Tests | What it covers |
+|-------|-------|----------------|
+| `VdiscMount` | 7 | Empty dir, single file, nested subdirs, max-entry limit, max-depth skip, filename uppercasing, illegal-char replacement |
+| `VdiscLbaLayout` | 8 | System area zeros, PVD at LBA 16, VDST at LBA 17, path tables at 18/19, root dir at LBA 20, file LBAs after all dir LBAs, no overlapping LBA ranges |
+| `VdiscPvd` | 7 | Magic "CD001", type byte 0x01, version 0x01, logical block size 2048 LE+BE, volume space size matches total_sectors, root dir record LBA=20, volume identifier "NEBULA32" |
+| `VdiscVdst` | 2 | Type byte 0xFF, magic "CD001" |
+| `VdiscPathTable` | 5 | L-table root LBA=20 LE, M-table root LBA=20 BE, root identifier byte 0x00, parent number=1, subdir entry present |
+| `VdiscDirSector` | 8 | Self-ref first (id=\x00), parent-ref second (id=\x01), file flags=0x00, dir flags=0x02, file version suffix ";1", dir no version suffix, file size field matches, all record lengths even |
+| `VdiscFileData` | 6 | First sector content matches SD data, second sector of large file, last sector zero-padded, system area zeros, LBA beyond total → zeros, nested file path reconstruction |
+| `VdiscToc` | 5 | One data track, TRACK_TYPE_DATA, start LBA=0, lead-out LBA matches total_sectors, TOC response encodes correctly |
+| `VdiscIntegration` | 5 | disc_open_vdir sets DISC_FORMAT_VDIR, LBA 16 read via disc_read_sector returns PVD magic in payload, LBA 0 has Mode 1 sync pattern, file data round-trip through disc_read_sector, disc_close clears vdisc pointer |
 
 **stress_sector_cache groups (TSan binary — `make stress_sector_cache`):**
 
@@ -304,4 +334,4 @@ All four captures share the same 10 test names (W0–W9) and assertion threshold
 
 ## Remaining work
 
-_All items complete._
+_All items complete (including first-impressions review fixes 1-28, 2026-05-17)._

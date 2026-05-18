@@ -21,6 +21,7 @@
 #include <stdbool.h>
 #include "ff.h"           // FatFS file handle
 #include "cd_types.h"     // msf_t, drive_state_t, sector_mode_t
+#include "virtual_disc.h" // On-the-fly ISO 9660 synthesiser for partition 2
 
 // ---------------------------------------------------------------------------
 // Limits
@@ -48,6 +49,7 @@ typedef enum {
     DISC_FORMAT_BIN,    // Raw binary image — 2352 bytes/sector
     DISC_FORMAT_NRG,    // Nero Burning ROM
     DISC_FORMAT_MDF,    // Alcohol 120% MDF
+    DISC_FORMAT_VDIR,   // Virtual directory — on-the-fly ISO 9660 from partition 2
 } disc_format_t;
 
 // ---------------------------------------------------------------------------
@@ -59,8 +61,8 @@ typedef struct {
     uint32_t      start_lba;     // First sector LBA (after pregap)
     uint32_t      pregap_lba;    // First sector of pregap (index 0)
     uint32_t      length_sectors;// Track length in sectors
-    uint32_t      file_offset;   // Byte offset in the image file where this
-                                 // track's sector 0 is stored
+    uint64_t      file_offset;   // Byte offset in the image file where this
+                                 // track's sector 0 is stored (uint64 for >4 GB images)
     uint32_t      sector_size;   // Raw bytes per sector in the file
                                  // (2048 for ISO, 2352 for BIN/NRG/MDF)
     uint32_t      data_offset;   // Byte offset WITHIN a raw sector where
@@ -88,6 +90,10 @@ typedef struct {
 
     // Cached last-read sector LBA to detect sequential reads
     uint32_t       last_read_lba;
+
+    // Virtual-directory disc (DISC_FORMAT_VDIR only).
+    // Points to a caller-owned vdisc_t (static or heap).
+    vdisc_t       *vdisc;
 
 } disc_image_t;
 
@@ -259,4 +265,8 @@ bool disc_parse_iso (disc_image_t *disc);
 bool disc_parse_bin (disc_image_t *disc, const char *cue_path);
 bool disc_parse_nrg (disc_image_t *disc);
 bool disc_parse_mdf (disc_image_t *disc, const char *mds_path);
+
+// Open partition 2 ("1:/") as a virtual ISO 9660 disc.
+// vd must be caller-allocated (static or heap); disc_image_t holds a pointer to it.
+bool disc_open_vdir(disc_image_t *disc, vdisc_t *vd);
 

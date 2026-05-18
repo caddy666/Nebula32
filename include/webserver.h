@@ -46,9 +46,11 @@
 //
 // REST API:
 //   GET  /api/status        — JSON: current drive state, loaded disc, list
-//   GET  /api/images        — JSON: array of {index, name, has_cover}
-//   POST /api/load/{index}  — Load disc at index; returns JSON status
+//   GET  /api/images        — JSON: array of {index, name, has_cover} (current page)
+//   POST /api/load/{index}  — Load disc at page-local index; returns JSON status
 //   POST /api/eject         — Eject current disc
+//   POST /api/page/next     — Advance to next page of images
+//   POST /api/page/prev     — Go back to previous page of images
 //   GET  /covers/{name}.jpg — Serve cover art from SD card
 //   GET  /                  — Main HTML page
 // =============================================================================
@@ -113,4 +115,19 @@ uint32_t webserver_get_load_index(void);
 
 // Notify the web server which disc index is currently loaded (for the badge).
 void webserver_set_loaded_index(uint32_t index);
+
+// Update the web server's view of the current page position.
+// page_offset — absolute index of the first image on this page
+// page_count  — number of images on this page (1-PAGE_SIZE)
+// total_count — total images on the SD card across all pages
+void webserver_set_page_info(uint32_t page_offset, uint32_t page_count,
+                             uint32_t total_count);
+
+// Return true if the web interface requested a page change.
+// Clears the flag on return.  Call webserver_get_page_delta() to get direction.
+bool webserver_has_page_request(void);
+
+// Return the page direction: +1 = next page, -1 = previous page.
+// Only valid immediately after webserver_has_page_request() returns true.
+int webserver_get_page_delta(void);
 

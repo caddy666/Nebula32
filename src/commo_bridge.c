@@ -115,9 +115,9 @@ static void    _send_toc_packets(void);
 // compiles either way — with FAKE_TIMING off the drive advances states
 // instantly (current behaviour); with it on the deadlines are enforced.
 //
-// #define FAKE_TIMING
+#define FAKE_TIMING
 
-#define SPINUP_DELAY_US         1500000u  // 1.5 s  — disc accelerate + lead-in read
+#define SPINUP_DELAY_US         1800000u  // 1.8 s  — disc accelerate + lead-in read
 #define SEEK_DELAY_MIN_US         50000u  // 50 ms  — head settle + track buffer
 #define SEEK_DELAY_MAX_US        500000u  // 500 ms — full-disc crossing
 #define SEEK_DELAY_US_PER_TRACK     700u  // ~0.7 ms per track of travel
@@ -178,7 +178,7 @@ static void _update_active_pin(void) {
 // _wait_commo_ready — spin until COMMO TX bus is free (or timeout)
 // ---------------------------------------------------------------------------
 static void _wait_commo_ready(void) {
-    const uint32_t timeout_us = 20000;   // 20 ms per packet — generous
+    const uint32_t timeout_us = 5000;    // 5 ms — still >> 1.2 ms at 100 kbps
     uint32_t waited = 0;
     while (SEND_STRING_READY() == COMMO_BUSY && waited < timeout_us) {
         sleep_us(10);
@@ -200,6 +200,11 @@ static void _wait_commo_ready(void) {
 //   Byte 10-11:      — CRC (set to 0; Akiko does not check it)
 // ---------------------------------------------------------------------------
 static void _send_toc_packets(void) {
+    if (!g_disc.file_open || g_disc.first_track == 0) {
+        commo_bridge_send_status(_build_status());
+        return;
+    }
+
     uint8_t qbuf[12];
 
     // Determine CTRL nibble for the first track — used for 0xA0 and 0xA2 CONAD.
@@ -218,18 +223,16 @@ static void _send_toc_packets(void) {
     // a_time.min = first track BCD, .sec = disc type (0x00=CD-DA, 0x10=Mode1)
     qbuf[7] = TO_BCD(g_disc.first_track);
     qbuf[8] = (ctrl_first & 0x04u) ? 0x10u : 0x00u;   // disc type
-    _wait_commo_ready();
     commo_bridge_send_qchannel(qbuf);
 
     // ---- 0xA1 — last track number ----
     memset(qbuf, 0, sizeof(qbuf));
     const track_t *trkL = &g_disc.tracks[g_disc.last_track - 1];
-    uint8_t ctrl_last  = (trkL->type != TRACK_TYPE_AUDIO) ? 0x04u : 0x00u;
-    qbuf[0] = (uint8_t)((ctrl_last << 4) | 0x01u);
+    (void)trkL;  // ctrl nibble for 0xA1 matches 0xA0 per Red Book
+    qbuf[0] = (uint8_t)((ctrl_first << 4) | 0x01u);
     qbuf[1] = 0x00;
     qbuf[2] = 0xA1;    // POINT: last track info
     qbuf[7] = TO_BCD(g_disc.last_track);
-    _wait_commo_ready();
     commo_bridge_send_qchannel(qbuf);
 
     // ---- 0xA2 — lead-out start time ----
@@ -241,7 +244,6 @@ static void _send_toc_packets(void) {
     qbuf[7] = lo_msf.minute;
     qbuf[8] = lo_msf.second;
     qbuf[9] = lo_msf.frame;
-    _wait_commo_ready();
     commo_bridge_send_qchannel(qbuf);
 
     // ---- One entry per track (POINT = track number BCD) ----
@@ -257,7 +259,6 @@ static void _send_toc_packets(void) {
         qbuf[7] = start.minute;
         qbuf[8] = start.second;
         qbuf[9] = start.frame;
-        _wait_commo_ready();
         commo_bridge_send_qchannel(qbuf);
     }
 
@@ -302,6 +303,13 @@ void commo_bridge_init(void) {
     gpio_init(PIN_ACTIVE);
     gpio_set_dir(PIN_ACTIVE, GPIO_OUT);
     gpio_put(PIN_ACTIVE, 0);
+
+    // RESET (conn 7, GPIO 14): active-low /RESET input from CD32.
+    // The pin idles high (no reset); pulling it low by the host means the CD32
+    // is resetting — we must return the drive to IDLE and halt playback.
+    gpio_init(PIN_RESET);
+    gpio_set_dir(PIN_RESET, GPIO_IN);
+    gpio_pull_up(PIN_RESET);
 
     // Snapshot the door pin so the first poll doesn't fire a false eject event
     // if the door happens to be open at boot.
@@ -349,6 +357,20 @@ bool commo_bridge_poll(void) {
     // the drive holds BUSY until the simulated mechanical delay expires.
     _maybe_advance_state();
 
+    // ---- /RESET pin monitor — active-low; clear drive state while asserted ----
+    // NOTE: this logic is replicated in tests/host/test_door_tray.cpp
+    // (HostReset test group).  Update that replica whenever this block changes.
+    if (!gpio_get(PIN_RESET)) {
+        if (s_drive_state != DRIVE_IDLE) {
+            printf("[COMMO] /RESET asserted — stopping drive\n");
+            LOG_INFO_MSG("COMMO", "/RESET asserted");
+            da_stop();
+            s_drive_state = DRIVE_IDLE;
+            _update_active_pin();
+        }
+        return false;   // suppress normal command processing while reset is held
+    }
+
     // ---- Door pin monitor — rising edge (LOW→HIGH) means door opened ----
     // PIN_DOOR is active-low with a pull-up: door closed = LOW, door open = HIGH.
     // On the rising edge we stop playback and send the 0x00 eject status so
@@ -369,16 +391,14 @@ bool commo_bridge_poll(void) {
     s_door_prev = door_now;
 
     // ---- Step upstream modules ----
-    // Step the dispatcher (routes commands and status packets)
-    Dispatcher();
-    // Step the command handler (writes validated commands into player_interface)
-    command_handler();
     // Step the COMMO state machine (serial RX/TX)
     COMMO_INTERFACE();
 
     // ---- Path A: COMMO bus new command received ----
+    bool handled_new_cmd = false;
     uint8_t cmd_status = NEW_CMD_RECEIVED();
     if (cmd_status == COMMO_NEW_COMMAND || cmd_status == COMMO_SAME_COMMAND) {
+        handled_new_cmd = true;
         uint8_t raw_opc = GET_BUFFER(0);
         uint8_t opc     = raw_opc & COMMO_OPCODE_MASK;
         uint8_t p1 = GET_BUFFER(1);
@@ -397,6 +417,13 @@ bool commo_bridge_poll(void) {
         FREE_CMD_BUFFER();
         commo_bridge_send_status(status);
         return true;
+    }
+
+    // Step the dispatcher and command handler only if Path A did not just
+    // handle a new command — avoids double-processing the same opcode.
+    if (!handled_new_cmd) {
+        Dispatcher();
+        command_handler();
     }
 
     // ---- Path B: DRQ — sector delivered, notify host data is ready ----
@@ -445,11 +472,11 @@ static uint8_t _handle_opc(uint8_t opc, uint8_t p1, uint8_t p2, uint8_t p3) {
             LOG_INFO_MSG("COMMO", "TRAY_IN");
             sector_cache_seek(&g_cache, 0);  // reset prefetch to lead-in
             s_drive_state = DRIVE_SPINUP;
-            // #ifdef FAKE_TIMING
-            //     s_state_deadline_us = time_us_32() + SPINUP_DELAY_US;
-            // #else
-            s_state_deadline_us = 0;  // instant — uncomment FAKE_TIMING to delay
-            // #endif
+#ifdef FAKE_TIMING
+            s_state_deadline_us = time_us_32() + SPINUP_DELAY_US;
+#else
+            s_state_deadline_us = 0;
+#endif
             _update_active_pin();
             return _build_status();
 
@@ -501,7 +528,7 @@ static uint8_t _handle_opc(uint8_t opc, uint8_t p1, uint8_t p2, uint8_t p3) {
         case PAUSE_OFF_OPC: {
             printf("[COMMO] RESUME\n");
             LOG_INFO_MSG("COMMO", "RESUME");
-            const track_t *rtrk = disc_find_track(&g_disc, da_get_current_lba());
+            const track_t *rtrk = disc_find_track(&g_disc, da_get_resume_lba());
             da_set_audio_mode(rtrk && rtrk->type == TRACK_TYPE_AUDIO);
             da_resume();
             s_drive_state = DRIVE_PLAYING;
@@ -618,7 +645,7 @@ void commo_bridge_send_status(uint8_t status_byte) {
     // Bytes 4-13: zeros
     // Byte 14: XOR checksum of bytes 0-13
 
-    static uint8_t pkt[STATUS_PACKET_LENGTH];
+    uint8_t pkt[STATUS_PACKET_LENGTH];
     memset(pkt, 0, sizeof(pkt));
 
     pkt[0] = 0x00;   // Status packet type
@@ -656,7 +683,7 @@ void commo_bridge_send_qchannel(const uint8_t *qbuf_12bytes) {
     // Check COMMO TX is free
     if (SEND_STRING_READY() == COMMO_BUSY) return;
 
-    static uint8_t pkt[Q_PACKET_LENGTH];
+    uint8_t pkt[Q_PACKET_LENGTH];
     memset(pkt, 0, sizeof(pkt));
 
     pkt[0] = 0x01;  // Q-channel packet type

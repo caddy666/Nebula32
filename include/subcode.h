@@ -111,15 +111,37 @@ static inline void subcode_append_crc(uint8_t *buf) {
 // 'pio' and 'sm' identify the subcode encoder state machine.
 // Returns false if the FIFO was full and data could not be pushed.
 #include "hardware/pio.h"
+#include "hardware/gpio.h"
+#include "gpio_map.h"   // PIN_SUB_SCOR, PIN_SUB_WFCLK
+
+// Pulse SUB_SCOR (GPIO 8) then SUB_WFCLK (GPIO 7) high-then-low.
+// Call once per sector before pushing Q-channel data into the PIO FIFO.
+// These signals tell Akiko that a new Q-channel block is starting; without
+// them Akiko cannot frame-synchronise the subcode serial stream and will
+// not decode any track-position or time data.
+static inline void subcode_pulse_sector_clocks(void) {
+    gpio_put(PIN_SUB_SCOR,  1);
+    gpio_put(PIN_SUB_WFCLK, 1);
+    gpio_put(PIN_SUB_SCOR,  0);
+    gpio_put(PIN_SUB_WFCLK, 0);
+}
+
 static inline bool subcode_push_to_pio(PIO pio, uint sm, const uint8_t *buf) {
-    // Push as three 32-bit words (12 bytes = 96 bits)
-    for (int word = 0; word < 3; word++) {
-        uint32_t w = ((uint32_t)buf[word*4 + 0] << 24) |
-                     ((uint32_t)buf[word*4 + 1] << 16) |
-                     ((uint32_t)buf[word*4 + 2] <<  8) |
-                     ((uint32_t)buf[word*4 + 3]      );
-        if (pio_sm_is_tx_fifo_full(pio, sm)) return false;
-        pio_sm_put(pio, sm, w);
+    // Pack all 3 words first
+    uint32_t words[3];
+    for (int i = 0; i < 3; i++) {
+        words[i] = ((uint32_t)buf[i*4 + 0] << 24) |
+                   ((uint32_t)buf[i*4 + 1] << 16) |
+                   ((uint32_t)buf[i*4 + 2] <<  8) |
+                   ((uint32_t)buf[i*4 + 3]      );
+    }
+    // If any slot would be full, clear the FIFO to avoid a partial/garbled block
+    for (int i = 0; i < 3; i++) {
+        if (pio_sm_is_tx_fifo_full(pio, sm)) {
+            pio_sm_clear_fifos(pio, sm);
+            return false;
+        }
+        pio_sm_put(pio, sm, words[i]);
     }
     return true;
 }

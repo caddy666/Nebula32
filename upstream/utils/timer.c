@@ -72,13 +72,18 @@ void timer_init(void)
     add_repeating_timer_us(-8000, timer_callback, NULL, &s_hw_timer);
 
     /* Set up the SCOR falling-edge interrupt.
-     * The GPIO direction and pull-up are configured in driver_init(). */
+     * The GPIO direction and pull-up are configured in driver_init().
+     * In the ODE build (BUILD_WITH_COMMO) PIN_SCOR is driven as an output
+     * by the subcode encoder PIO; registering an IRQ on an output pin is
+     * both useless and potentially harmful, so skip it. */
+#if !BUILD_WITH_COMMO
     gpio_set_irq_enabled_with_callback(
         PIN_SCOR,
         GPIO_IRQ_EDGE_FALL,
         true,
         &scor_gpio_callback
     );
+#endif
 }
 
 /**

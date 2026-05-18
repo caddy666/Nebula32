@@ -5,6 +5,7 @@
 *.uf2
 *.hex
 *.dis
+*.o
 
 # CMake build system
 CMakeCache.txt

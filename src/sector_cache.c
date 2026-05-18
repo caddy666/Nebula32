@@ -48,6 +48,17 @@ void sector_cache_init(sector_cache_t *cache, disc_image_t *disc) {
 }
 
 // ---------------------------------------------------------------------------
+// sector_cache_is_full  (Core 1, called before deciding to sleep)
+// ---------------------------------------------------------------------------
+bool sector_cache_is_full(sector_cache_t *cache) {
+    for (int i = 0; i < SECTOR_BUFFER_COUNT; i++) {
+        if (!__atomic_load_n(&cache->slots[i].valid, __ATOMIC_ACQUIRE))
+            return false;
+    }
+    return true;
+}
+
+// ---------------------------------------------------------------------------
 // sector_cache_flush
 // ---------------------------------------------------------------------------
 // Immediately discard all buffered sectors.
@@ -170,9 +181,14 @@ void sector_cache_prefetch_tick(sector_cache_t *cache) {
     // will increment and we must NOT mark the slot valid — the LBA is stale.
     uint32_t my_gen = __atomic_load_n(&cache->flush_gen, __ATOMIC_ACQUIRE);
 
-    // ---- Read from SD card via disc_image layer ----
+    // ---- Read from SD card via disc_image layer (retry once on transient error) ----
     uint32_t bytes = disc_read_sector(cache->disc, fetch_lba, slot->data,
                                       SECTOR_MODE_RAW);
+    if (bytes == 0) {
+        // SD cards exhibit ~1% transient error rates (CRC, wake-up latency).
+        // A single retry recovers the vast majority without adding perceptible delay.
+        bytes = disc_read_sector(cache->disc, fetch_lba, slot->data, SECTOR_MODE_RAW);
+    }
     if (bytes > 0) {
         slot->valid_bytes = bytes;
         // Only commit if Core 0 hasn't flushed since we started.
@@ -185,8 +201,13 @@ void sector_cache_prefetch_tick(sector_cache_t *cache) {
         /* If gen mismatched, Core 0 already set next_fetch_lba via seek —
          * do not advance it or the first sector of the new seek is skipped. */
     } else {
-        slot->error = true;
-        LOG_ERROR_MSG("cache prefetch SD read fail at LBA=%lu",
+        slot->error       = true;
+        slot->valid_bytes = 0;
+        // Mark the slot valid so sector_cache_get() returns true with bytes=0,
+        // distinguishing a permanent read error from "not yet prefetched" (false).
+        // The caller is responsible for treating bytes=0 as an error sentinel.
+        __atomic_store_n(&slot->valid, true, __ATOMIC_RELEASE);
+        LOG_ERROR_MSG("cache prefetch SD read fail at LBA=%lu (after retry)",
                       (unsigned long)fetch_lba);
         printf("[CACHE] Read error at LBA %u\n", (unsigned)fetch_lba);
         __atomic_store_n(&cache->next_fetch_lba, fetch_lba + 1, __ATOMIC_RELEASE);

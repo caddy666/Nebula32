@@ -86,10 +86,15 @@ disc_image_t   g_disc;   // Currently open disc image
 sector_cache_t g_cache;  // Read-ahead sector ring buffer
 
 // Image list (extern'd by ui.c and webserver.c)
-#define MAX_IMAGES  32
-char     s_image_paths[MAX_IMAGES][MAX_PATH_LEN];
-uint32_t s_image_count    = 0;
-static uint32_t s_selected_image = 0;
+// s_image_paths holds one page of up to PAGE_SIZE paths.
+// s_page_offset is the absolute index of the first entry in that page.
+// s_total_count is the full count across all pages (from sd_count_images at boot).
+#define PAGE_SIZE   64
+char     s_image_paths[PAGE_SIZE][MAX_PATH_LEN];
+uint32_t s_image_count    = 0;   // entries in current page (≤ PAGE_SIZE)
+static uint32_t s_page_offset   = 0;   // absolute index of s_image_paths[0]
+static uint32_t s_total_count   = 0;   // total images on SD card
+static uint32_t s_selected_image = 0;  // page-local selected index
 
 // Persistent configuration
 static ode_config_t g_config;
@@ -110,6 +115,42 @@ static uint s_sm_subcode = 1;
 static PIO  s_sub_pio    = pio1;   // Subcode on PIO1 SM0 (PIO0 SM0 = DA output)
 static uint s_sm_subcode = 0;
 #endif
+
+// ---------------------------------------------------------------------------
+// load_image_page — fill s_image_paths from the SD card at the given offset
+// ---------------------------------------------------------------------------
+static void load_image_page(uint32_t offset) {
+    s_page_offset = offset;
+    s_image_count = sd_scan_images(s_image_paths, PAGE_SIZE,
+                                   logger_get_config()->sdcard_base, offset);
+    webserver_notify_state_change();  // invalidates cover cache in webserver.c
+    webserver_set_page_info(s_page_offset, s_image_count, s_total_count);
+    printf("[MAIN] Page offset=%lu count=%lu/%lu\n",
+           (unsigned long)s_page_offset,
+           (unsigned long)s_image_count,
+           (unsigned long)s_total_count);
+}
+
+// ---------------------------------------------------------------------------
+// navigate_page — advance or retreat one page
+// ---------------------------------------------------------------------------
+static void navigate_page(int delta) {
+    if (delta > 0) {
+        if (s_page_offset + PAGE_SIZE >= s_total_count) {
+            printf("[MAIN] Already on last page\n");
+            return;
+        }
+        load_image_page(s_page_offset + PAGE_SIZE);
+    } else {
+        if (s_page_offset == 0) {
+            printf("[MAIN] Already on first page\n");
+            return;
+        }
+        load_image_page(s_page_offset >= PAGE_SIZE ? s_page_offset - PAGE_SIZE : 0);
+    }
+    s_selected_image = 0;
+    ui_init(s_image_count, 0);
+}
 
 // ---------------------------------------------------------------------------
 // load_disc_image — switch to a different disc image
@@ -150,8 +191,11 @@ static bool load_disc_image(uint32_t index) {
     sector_cache_init(&g_cache, &g_disc);
     s_selected_image = index;
 
-    g_config.last_image_index = (uint8_t)(index & 0xFF);
-    config_save(&g_config);
+    uint16_t abs_index = (uint16_t)(s_page_offset + index);
+    if (g_config.last_image_index != abs_index) {
+        g_config.last_image_index = abs_index;
+        config_save(&g_config);
+    }
 
     display_show_cover(s_image_paths[index]);
     ui_on_disc_loaded(index);
@@ -171,10 +215,17 @@ static bool load_disc_image(uint32_t index) {
 // Core 1 — sector prefetch loop
 // =============================================================================
 static void core1_main(void) {
+    multicore_lockout_victim_init();   // park in SRAM when Core 0 writes flash
     printf("[CORE1] Sector prefetch loop started\n");
     while (true) {
         sector_cache_prefetch_tick(&g_cache);
-        tight_loop_contents();
+        // If all slots are full, sector_cache_prefetch_tick() returns immediately.
+        // Sleep briefly instead of spinning at 100% CPU — Core 1 will be woken
+        // within one sector period (6.7 ms at 2× speed) when Core 0 releases a slot.
+        if (sector_cache_is_full(&g_cache))
+            sleep_us(100);
+        else
+            tight_loop_contents();
     }
 }
 
@@ -214,14 +265,27 @@ static void handle_console(void) {
         if (idx < s_image_count) {
             load_disc_image(idx);
         } else {
-            printf("[MAIN] No image %lu (only %lu found)\n",
+            printf("[MAIN] No image %lu on this page (page has %lu)\n",
                    idx + 1, (unsigned long)s_image_count);
         }
     }
+    else if (c == '[') {
+        navigate_page(-1);
+    }
+    else if (c == ']') {
+        navigate_page(+1);
+    }
     else if (c == 'l' || c == 'L') {
-        printf("\n[MAIN] Disc images on SD card:\n");
+        uint32_t page_num   = s_page_offset / PAGE_SIZE + 1;
+        uint32_t page_total = (s_total_count + PAGE_SIZE - 1) / PAGE_SIZE;
+        printf("\n[MAIN] Page %lu/%lu  (images %lu-%lu of %lu)\n",
+               (unsigned long)page_num, (unsigned long)page_total,
+               (unsigned long)(s_page_offset + 1),
+               (unsigned long)(s_page_offset + s_image_count),
+               (unsigned long)s_total_count);
         for (uint32_t i = 0; i < s_image_count; i++) {
-            printf("  %lu: %s%s\n", (unsigned long)(i + 1), s_image_paths[i],
+            printf("  %lu: %s%s\n",
+                   (unsigned long)(s_page_offset + i + 1), s_image_paths[i],
                    (i == s_selected_image) ? "  <- current" : "");
         }
     }
@@ -290,8 +354,9 @@ static void handle_console(void) {
     }
     else if (c == 'h' || c == 'H' || c == '?') {
         printf("\nCD32 ODE Console Commands:\n");
-        printf("  1-9  — switch disc image\n");
-        printf("  L    — list disc images\n");
+        printf("  1-9  — load disc image 1-9 on current page\n");
+        printf("  [/]  — previous / next page of images\n");
+        printf("  L    — list current page\n");
         printf("  S    — show status\n");
         printf("  T    — show disc TOC\n");
         printf("  X    — toggle DA speed (1x / 2x)\n");
@@ -344,9 +409,8 @@ int main(void) {
     // scan so that sd_scan_images() uses the configured directory.
     logger_init();
 
-    s_image_count = sd_scan_images(s_image_paths, MAX_IMAGES,
-                                   logger_get_config()->sdcard_base);
-    if (s_image_count == 0) {
+    s_total_count = sd_count_images(logger_get_config()->sdcard_base);
+    if (s_total_count == 0) {
         printf("[MAIN] No disc images found in %s\n",
                logger_get_config()->sdcard_base);
         while (true) tight_loop_contents();
@@ -354,12 +418,19 @@ int main(void) {
 
     if (logger_is_enabled()) {
         logger_write(LOG_INFO, "BOOT", "%lu image(s) found in %s",
-                     (unsigned long)s_image_count,
+                     (unsigned long)s_total_count,
                      logger_get_config()->sdcard_base);
     }
 
+    // Load the page that contains the last-used image.
+    // Boot with page 0 if the saved index is out of range.
+    uint32_t abs_start = g_config.last_image_index;
+    if (abs_start >= s_total_count) abs_start = 0;
+    uint32_t start_page = (abs_start / PAGE_SIZE) * PAGE_SIZE;
+    load_image_page(start_page);
+
     // ---- Open starting disc image ----
-    s_selected_image = g_config.last_image_index;
+    s_selected_image = abs_start - start_page;  // page-local
     if (s_selected_image >= s_image_count) s_selected_image = 0;
 
     printf("[MAIN] Opening: %s\n", s_image_paths[s_selected_image]);
@@ -391,35 +462,39 @@ int main(void) {
     printf("[PIO] subcode_encoder on PIO%d SM%d offset=%d\n",
            (s_sub_pio == pio0) ? 0 : 1, s_sm_subcode, sub_off);
 
-    // ---- M17SINE — slave clk_peri to Sony 16.9344 MHz on GPIO 9 (GPIN0) ----
-    // GPIO 9 carries the CD32 mainboard's 16.9344 MHz master reference (GPIN0).
-    // We slave clk_peri to it so that UART/SPI/I2C are referenced to the same
-    // crystal as Akiko — stable even if the Pico's own XOSC drifts slightly.
+    // ---- M17SINE — conditionally slave clk_peri to Sony 16.9344 MHz (GPIN0) ----
+    // GPIO 9 carries the CD32 mainboard's 16.9344 MHz master reference.
+    // Slaving clk_peri to it locks UART/SPI/I2C to the same crystal as Akiko and
+    // the LC78835M DAC — mandatory for a CD32-installed drive (both chips derive
+    // all timing from this oscillator).
     //
-    // GPIO_FUNC_GPCK routes the pin directly into the RP2350 clock subsystem —
-    // no PIO is involved and no debouncing is applied (nor should it be: M17SINE
-    // is a continuous analogue sine wave, not a switch signal).
+    // On bench (no CD32 attached), GPIO 9 is floating; frequency_count_khz returns
+    // 0 or a garbage value.  Calling clock_configure with an absent GPIN0 source
+    // freezes clk_peri and hangs all peripherals.  The check below guards this:
+    // if M17SINE is outside its expected range we leave clk_peri on its default
+    // PLL source so UART/I2C/SPI remain usable for development.
     //
     // PCB NOTE: the sine from the CD32 connector must swing cleanly past the
-    // RP2350 GPIO input thresholds (~0.8 V / 2.0 V at 3.3 V supply).  A slow or
-    // low-amplitude sine that lingers near the threshold will cause multiple edge
-    // transitions per cycle and corrupt clk_peri.  The board design should include
-    // a series resistor (e.g. 33 Ω) and ideally a Schmitt-trigger buffer between
-    // the 26-pin connector and GPIO 9 to condition the signal before it enters
-    // the GPCK input.
-    //
-    // The DA PIO (clk_sys = 135,475,200 Hz = 16.9344 MHz × 8) is not
-    // hard-locked to M17SINE, but da_nudge_clkdiv_to_m17sine() trims the
-    // PIO clkdiv every 2 s during playback using the RP2350 frequency counter,
-    // keeping BCLK within ~0.5% of the true M17SINE reference.
+    // RP2350 GPIO thresholds (~0.8 V / 2.0 V).  A low-amplitude or slow-slewing
+    // sine near the threshold causes multiple edge transitions per cycle and
+    // corrupts clk_peri.  A series resistor (33 Ω) and Schmitt-trigger buffer
+    // between the 26-pin connector and GPIO 9 is strongly recommended.
     gpio_init(M17SINE_PIN);
     gpio_set_dir(M17SINE_PIN, GPIO_IN);
     gpio_set_function(M17SINE_PIN, GPIO_FUNC_GPCK);
-    clock_configure(clk_peri, 0,
-                    CLOCKS_CLK_PERI_CTRL_AUXSRC_VALUE_CLKSRC_GPIN0,
-                    16934400, 16934400);
-    printf("[MAIN] clk_peri slaved to M17SINE on GPIO%d (16.9344 MHz)\n",
-           M17SINE_PIN);
+    {
+        uint32_t m17_khz = frequency_count_khz(CLOCKS_FC0_SRC_VALUE_CLKSRC_GPIN0);
+        if (m17_khz >= 16800 && m17_khz <= 17100) {
+            clock_configure(clk_peri, 0,
+                            CLOCKS_CLK_PERI_CTRL_AUXSRC_VALUE_CLKSRC_GPIN0,
+                            16934400, 16934400);
+            printf("[MAIN] clk_peri slaved to M17SINE on GPIO%d (%lu kHz)\n",
+                   M17SINE_PIN, (unsigned long)m17_khz);
+        } else {
+            printf("[MAIN] M17SINE not detected on GPIO%d (bench mode — clk_peri unchanged)\n",
+                   M17SINE_PIN);
+        }
+    }
 
     // ---- Self-test prompt ----
     printf("[MAIN] Press '#' within 3 seconds for self-test mode...\n");
@@ -466,6 +541,7 @@ int main(void) {
     // ---- HTTP web server (Pico 2 W) ----
     webserver_init();
     webserver_set_loaded_index(s_selected_image);
+    webserver_set_page_info(s_page_offset, s_image_count, s_total_count);
     if (webserver_is_running()) {
         logger_write(LOG_INFO, "WEB ", "http://%s/", webserver_get_ip());
     }
@@ -477,9 +553,12 @@ int main(void) {
     multicore_launch_core1(core1_main);
     printf("[MAIN] Core 1 started (sector prefetch)\n");
 
-    // ---- 1 ms repeating timer for logger flush ----
+    // ---- 500 ms repeating timer for logger flush ----
+    // logger_flush_if_due() only does work every 2000 ms, so 1 ms was 2000×
+    // wasted wakeups per useful operation.  500 ms keeps the flush timely
+    // without meaningless interrupts.
     struct repeating_timer update_timer;
-    add_repeating_timer_us(-1000, periodic_update_cb, NULL, &update_timer);
+    add_repeating_timer_us(-500000, periodic_update_cb, NULL, &update_timer);
 
     printf("[MAIN] System ready — CD32 can now access the drive\n");
     printf("[MAIN] DA: %s speed  |  BCLK: %lu Hz\n",
@@ -507,7 +586,7 @@ int main(void) {
             s_vis_active = false;
         }
 
-        commo_bridge_poll();
+        bool commo_active = commo_bridge_poll();
         webserver_poll();
 
         if (webserver_has_load_request()) {
@@ -516,6 +595,10 @@ int main(void) {
             ui_init(s_image_count,
                     web_index < s_image_count ? web_index : 0);
             s_vis_active = false;
+        }
+
+        if (webserver_has_page_request()) {
+            navigate_page(webserver_get_page_delta());
         }
 
         // ---- Visualiser tick ----
@@ -539,7 +622,10 @@ int main(void) {
             display_show_cover(s_image_paths[s_selected_image]);
         }
 
-        sleep_us(200);
+        // Only sleep when COMMO was idle this tick — avoids adding 200 µs of
+        // latency when Akiko sends back-to-back commands.
+        if (!commo_active)
+            sleep_us(200);
     }
 
     return 0;

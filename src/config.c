@@ -18,6 +18,7 @@
 
 #include "config.h"
 #include "pico/stdlib.h"
+#include "pico/multicore.h"  // multicore_lockout_start/end_blocking
 #include "hardware/flash.h"
 #include "hardware/sync.h"   // save_and_disable_interrupts / restore_interrupts
 
@@ -111,21 +112,20 @@ bool config_save(const ode_config_t *cfg_in) {
 
     printf("[CFG] Saving config to flash offset 0x%X...\n", CONFIG_FLASH_OFFSET);
 
-    // Disable interrupts for the duration of the flash operation
-    uint32_t irq_state = save_and_disable_interrupts();
-
-    // Erase the 4 KB sector (one flash_sector_size block)
-    flash_range_erase(CONFIG_FLASH_OFFSET, FLASH_SECTOR_SIZE);
-
-    // Program the new data (must be in multiples of FLASH_PAGE_SIZE = 256 bytes)
-    // sizeof(ode_config_t) <= 64 bytes; round up to one page (256 bytes)
     static uint8_t page_buf[FLASH_PAGE_SIZE] __attribute__((aligned(4)));
-    memset(page_buf, 0xFF, FLASH_PAGE_SIZE);  // 0xFF = erased flash value
+    memset(page_buf, 0xFF, FLASH_PAGE_SIZE);
     memcpy(page_buf, &write_buf, sizeof(ode_config_t));
 
+    // Park Core 1 in SRAM before disabling XIP cache; flash ops must not race
+    // with Core 1 fetching instructions from flash.
+    multicore_lockout_start_blocking();
+    uint32_t irq_state = save_and_disable_interrupts();
+
+    flash_range_erase(CONFIG_FLASH_OFFSET, FLASH_SECTOR_SIZE);
     flash_range_program(CONFIG_FLASH_OFFSET, page_buf, FLASH_PAGE_SIZE);
 
     restore_interrupts(irq_state);
+    multicore_lockout_end_blocking();
 
     // Verify the write by reading back through XIP
     const ode_config_t *readback = (const ode_config_t *)CONFIG_FLASH_ADDR;

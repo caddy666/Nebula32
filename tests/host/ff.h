@@ -36,6 +36,24 @@ typedef struct {
 extern FATFS g_stub_fatfs;
 extern DWORD g_stub_ff_fre_clust;
 
+// Directory support (used by virtual_disc.c)
+#define AM_DIR  0x10   // Directory attribute
+#define AM_ARC  0x20   // Normal file attribute
+
+typedef struct {
+    FSIZE_t fsize;
+    uint8_t fattrib;
+    char    fname[256];
+} FILINFO;
+
+typedef struct {
+    int _sim_dir_idx;   // Index into sim's open-directory pool (-1 if unused)
+} DIR;
+
+FRESULT f_opendir (DIR *dp, const TCHAR *path);
+FRESULT f_readdir (DIR *dp, FILINFO *fno);
+FRESULT f_closedir(DIR *dp);
+
 FRESULT  f_open  (FIL *fp, const char *path, int mode);
 FRESULT  f_close (FIL *fp);
 FSIZE_t  f_size  (FIL *fp);

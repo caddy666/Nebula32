@@ -133,7 +133,7 @@ TEST(WebserverHtml, DiscNamesAppearInGrid)
 }
 
 // The "Drive State" label must appear in the status bar regardless of state value.
-// Note: state_name(0) == "RESET" because DRIVE_IDLE=0 maps to case 0 in state_name().
+// state_name(0) == "IDLE" (DRIVE_IDLE=0 maps to case 0 in state_name()).
 TEST(WebserverHtml, DriveStateInStatusBar)
 {
     CHECK_TRUE(strstr(get_html(), "Drive State") != NULL);

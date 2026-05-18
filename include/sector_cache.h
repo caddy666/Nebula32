@@ -15,7 +15,6 @@
 
 #include <stdint.h>
 #include <stdbool.h>
-#include "pico/util/queue.h"
 #include "disc_image.h"
 
 #define SECTOR_BUFFER_COUNT  8      // Ring buffer depth
@@ -36,8 +35,6 @@ typedef struct {
 
 typedef struct {
     sector_slot_t  slots[SECTOR_BUFFER_COUNT];
-    int            head;           // reserved; implementation uses linear scan
-    int            tail;           // reserved; implementation uses linear scan
     uint32_t       next_fetch_lba; // LBA the prefetch thread will fetch next
     uint32_t       flush_gen;      // Incremented on flush; Core 1 discards stale reads
     disc_image_t  *disc;           // Pointer to the open disc image
@@ -48,6 +45,7 @@ void     sector_cache_init   (sector_cache_t *cache, disc_image_t *disc);
 void     sector_cache_flush  (sector_cache_t *cache);
 void     sector_cache_seek   (sector_cache_t *cache, uint32_t lba);
 bool     sector_cache_ready  (sector_cache_t *cache, uint32_t lba);
+bool     sector_cache_is_full(sector_cache_t *cache);  // true when all slots valid
 bool     sector_cache_get    (sector_cache_t *cache, uint32_t lba,
                               uint8_t *buf_out, uint32_t *bytes_out);
 void     sector_cache_prefetch_tick(sector_cache_t *cache);  // call from Core 1

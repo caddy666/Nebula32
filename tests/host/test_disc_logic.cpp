@@ -144,13 +144,13 @@ TEST(DiscFindTrack, TrackType_IsPreserved)
  * ======================================================================= */
 TEST_GROUP(TocResponse) {};
 
-TEST(TocResponse, TwoTracks_LengthIs9Bytes)
+TEST(TocResponse, TwoTracks_LengthIs12Bytes)
 {
     disc_image_t d = make_two_track_disc();
     uint8_t buf[32];
     uint32_t n = disc_build_toc_response(&d, buf, sizeof(buf));
-    /* 2 tracks × 3 bytes + 3 bytes lead-out = 9 bytes */
-    LONGS_EQUAL(9, n);
+    /* 2 tracks × 4 bytes + 4 bytes lead-out = 12 bytes */
+    LONGS_EQUAL(12, n);
 }
 
 TEST(TocResponse, Track1Number_IsBcd01)
@@ -176,7 +176,8 @@ TEST(TocResponse, Track2Number_IsBcd02)
     disc_image_t d = make_two_track_disc();
     uint8_t buf[32];
     disc_build_toc_response(&d, buf, sizeof(buf));
-    BYTES_EQUAL(0x02, buf[3]);
+    /* Each entry is now 4 bytes: [track_no, min, sec, frame] */
+    BYTES_EQUAL(0x02, buf[4]);
 }
 
 TEST(TocResponse, LeadOutByte_Is0xAA)
@@ -184,7 +185,8 @@ TEST(TocResponse, LeadOutByte_Is0xAA)
     disc_image_t d = make_two_track_disc();
     uint8_t buf[32];
     uint32_t n = disc_build_toc_response(&d, buf, sizeof(buf));
-    BYTES_EQUAL(0xAA, buf[n - 3]);
+    /* Lead-out entry is 4 bytes: [0xAA, min, sec, frame] */
+    BYTES_EQUAL(0xAA, buf[n - 4]);
 }
 
 TEST(TocResponse, TruncatedBuffer_NoOverrun)
@@ -476,10 +478,10 @@ TEST(IsoLayout, TocLeadOut_MatchesTotalSectors)
     disc_image_t d = make_iso_disc(10000);
     uint8_t buf[32];
     uint32_t n = disc_build_toc_response(&d, buf, sizeof(buf));
-    /* 1 track × 3 bytes + 3 lead-out = 6 bytes */
-    LONGS_EQUAL(6, n);
-    /* Lead-out track number is 0xAA */
-    BYTES_EQUAL(0xAA, buf[3]);
+    /* 1 track × 4 bytes + 4 lead-out = 8 bytes */
+    LONGS_EQUAL(8, n);
+    /* Lead-out track number is 0xAA (at start of lead-out entry) */
+    BYTES_EQUAL(0xAA, buf[4]);
 }
 
 /* =========================================================================
