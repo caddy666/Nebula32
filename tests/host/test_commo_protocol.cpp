@@ -575,6 +575,127 @@ TEST(CommoFuzz, SuccessiveErrors_RetryIsNewCommand)
     BYTES_EQUAL(COMMO_NEW_COMMAND, NEW_CMD_RECEIVED());
 }
 
+/* =========================================================================
+ * CommoPowerOn — wire-level byte sequences from the real power-on handshake
+ *
+ * Real logic-analyzer captures (pon-poff-idle.csv / zool2.csv) show:
+ *   HOST → DRIVE:  15 00 EA          (SPINDLE_MOTOR_OFF_OPC, param=0x00)
+ *   HOST → DRIVE:  12 ED             (FOCUS_ON_OPC, no param)
+ *   DRIVE → HOST:  27 D8 …           (Chinon frame-header + focus-error)
+ *
+ * Tests 1-3: HOST→DRIVE byte sequences are accepted by the COMMO SM.
+ * Tests 4-5: A 15-byte STATUS packet (SEND_STRING_COMPLETE) produces 16 wire
+ *            bytes with a valid COMMO additive checksum.
+ * Test 6:    0x27+0xD8=0xFF shows why the SM cannot distinguish a Chinon
+ *            frame-header/status pair from a valid Pico ODE one-byte exchange.
+ * ======================================================================= */
+
+TEST_GROUP(CommoPowerOn)
+{
+    void setup() override
+    {
+        COMMO_INIT();
+        s_rx_head      = 0;
+        s_rx_tail      = 0;
+        s_data_is_low  = 0;
+        s_tx_log_count = 0;
+        memset(s_rx_queue, 0, sizeof(s_rx_queue));
+        memset(s_tx_log,   0, sizeof(s_tx_log));
+    }
+};
+
+// SPINDLE_MOTOR_OFF_OPC=0x15: lower nibble 5, command_length_table[5]=2 →
+// opcode + 1 param byte on the wire.  Checksum = ~(0x15+0x00)&0xFF = 0xEA.
+TEST(CommoPowerOn, SpindleMotorOff_ParsesAsNewCommand)
+{
+    uint8_t pkt[3] = { 0x15, 0x00, 0xEA };
+    drive_packet(pkt, 3);
+    BYTES_EQUAL(COMMO_NEW_COMMAND, NEW_CMD_RECEIVED());
+    BYTES_EQUAL(0x15, GET_BUFFER(0));
+    BYTES_EQUAL(0x00, GET_BUFFER(1));
+}
+
+// Verify the checksum byte for SPINDLE_MOTOR_OFF(param=0) at compile time.
+TEST(CommoPowerOn, SpindleMotorOff_ChecksumIs0xEA)
+{
+    BYTES_EQUAL(0xEA, (uint8_t)(~(0x15u + 0x00u)));
+}
+
+// FOCUS_ON_OPC=0x12: lower nibble 2, command_length_table[2]=1 → opcode only.
+// Checksum = ~0x12 & 0xFF = 0xED.
+TEST(CommoPowerOn, FocusOn_ParsesAsNewCommand)
+{
+    uint8_t pkt[2] = { 0x12, 0xED };
+    drive_packet(pkt, 2);
+    BYTES_EQUAL(COMMO_NEW_COMMAND, NEW_CMD_RECEIVED());
+    BYTES_EQUAL(0x12, GET_BUFFER(0));
+}
+
+// A STATUS packet (15 data bytes + SEND_STRING_COMPLETE) must produce exactly
+// 16 wire bytes: 15 data bytes then 1 COMMO additive checksum.
+TEST(CommoPowerOn, StatusPacket_Produces16WireBytes)
+{
+    uint8_t pkt[15];
+    memset(pkt, 0, sizeof(pkt));
+    pkt[0] = 0x00;   // status packet type
+    pkt[2] = 0x04;   // DRIVE_STATUS_DISC — disc present
+
+    SEND_STRING(SEND_STRING_COMPLETE, pkt, 15);
+    s_data_is_low = 0;
+    COMMO_INTERFACE();
+    for (int i = 0; i < 15; i++) COMMO_INTERFACE();
+    COMMO_INTERFACE();
+    LONGS_EQUAL(16, s_tx_log_count);
+}
+
+// The 16th wire byte must satisfy the COMMO additive checksum invariant:
+// (sum of all 16 transmitted bytes) & 0xFF == 0xFF.
+TEST(CommoPowerOn, StatusPacket_AdditiveChecksumValid)
+{
+    uint8_t pkt[15];
+    memset(pkt, 0, sizeof(pkt));
+    pkt[0] = 0x00;
+    pkt[2] = 0x04;   // DRIVE_STATUS_DISC
+
+    SEND_STRING(SEND_STRING_COMPLETE, pkt, 15);
+    s_data_is_low = 0;
+    COMMO_INTERFACE();
+    for (int i = 0; i < 15; i++) COMMO_INTERFACE();
+    COMMO_INTERFACE();
+
+    uint8_t sum = 0;
+    for (int i = 0; i < 16; i++) sum += s_tx_log[i];
+    BYTES_EQUAL(0xFF, sum);
+}
+
+// 0x27 (Chinon frame header) + 0xD8 (focus-error status) = 0xFF in 8-bit
+// arithmetic — a valid COMMO additive checksum pair.  This is why the decoder
+// cannot classify Chinon drive responses as errors: they look like a
+// one-data-byte Pico ODE packet with a correct checksum.
+TEST(CommoPowerOn, ChinonFrameHeader_PlusFocusError_IsValidChecksumPair)
+{
+    BYTES_EQUAL(0xFF, (uint8_t)(0x27u + 0xD8u));
+}
+
+// A data-phase noise spike corrupts the param byte of a 2-byte command.
+// opcode=0x15 (SPINDLE_MOTOR_OFF) arrives cleanly; param=0xAA arrives (glitched;
+// should be 0x00); stale checksum 0xEA (~(0x15+0x00)) then arrives.
+// Accumulated checksum = 0x15+0xAA = 0xBF; ~0xEA = 0x15 ≠ 0xBF → CMD_ERROR.
+// last_command must be cleared; clean retry must return NEW_COMMAND.
+TEST(CommoFuzz, GlitchedParamByte_CmdError_ThenRecovery)
+{
+    uint8_t glitched[3] = { 0x15, 0xAA, 0xEA };
+    drive_packet(glitched, 3);
+    BYTES_EQUAL(COMMO_CMD_ERROR, NEW_CMD_RECEIVED());
+    FREE_CMD_BUFFER();
+
+    uint8_t good[3] = { 0x15, 0x00, 0xEA };
+    drive_packet(good, 3);
+    BYTES_EQUAL(COMMO_NEW_COMMAND, NEW_CMD_RECEIVED());
+    BYTES_EQUAL(0x15, GET_BUFFER(0));
+    BYTES_EQUAL(0x00, GET_BUFFER(1));
+}
+
 // Scenario 1: Amiga game engine bug — rapid-fire PAUSE then PLAY without the
 // host calling FREE_CMD_BUFFER between them.  The state machine has no buffer-
 // free guard in IDLE, so the second command silently overwrites the first.

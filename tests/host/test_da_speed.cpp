@@ -25,7 +25,8 @@
 // Stub — captures pio_sm_set_clkdiv() calls (not linked in host build)
 // ---------------------------------------------------------------------------
 
-static float g_stub_last_clkdiv = 0.0f;
+static float g_stub_last_clkdiv     = 0.0f;
+static float g_stub_last_sub_clkdiv = 0.0f;
 
 // ---------------------------------------------------------------------------
 // State machine replicated from src/da_output.c
@@ -51,8 +52,9 @@ static void da_set_double_speed(bool double_speed)
 {
     if (!s_initialised)                  return;
     if (s_double_speed == double_speed)  return;  // idempotency guard
-    s_double_speed     = double_speed;
-    g_stub_last_clkdiv = _clkdiv(double_speed);   // would call pio_sm_set_clkdiv
+    s_double_speed         = double_speed;
+    g_stub_last_clkdiv     = _clkdiv(double_speed);   // DA PIO clkdiv
+    g_stub_last_sub_clkdiv = _clkdiv(double_speed);   // subcode PIO clkdiv (F14)
 }
 
 static bool da_is_double_speed(void) { return s_double_speed; }
@@ -97,7 +99,8 @@ TEST_GROUP(DaSpeed)
         s_paused       = false;
         s_double_speed = false;
         s_initialised  = false;
-        g_stub_last_clkdiv = 0.0f;
+        g_stub_last_clkdiv     = 0.0f;
+        g_stub_last_sub_clkdiv = 0.0f;
     }
 };
 
@@ -251,4 +254,35 @@ TEST(DaSpeed, SpeedChange_WhilePlaying_ClkdivUpdated)
     g_stub_last_clkdiv = 0.0f;
     da_set_double_speed(false);
     DOUBLES_EQUAL(32.0, g_stub_last_clkdiv, 0.001);
+}
+
+/* -------------------------------------------------------------------------
+ * Subcode PIO clkdiv updated in sync with DA PIO clkdiv (F14)
+ *
+ * da_output.c calls pio_sm_set_clkdiv() twice on a speed change: once for
+ * the DA PIO SM and once for the subcode encoder SM.  The replicated
+ * g_stub_last_sub_clkdiv captures the second write.
+ * ---------------------------------------------------------------------- */
+
+TEST(DaSpeed, SpeedChange_1xTo2x_SubcodeClkdivAlsoUpdated)
+{
+    da_output_init(false);
+    da_set_double_speed(true);
+    DOUBLES_EQUAL(16.0, g_stub_last_sub_clkdiv, 0.001);
+}
+
+TEST(DaSpeed, SpeedChange_2xTo1x_SubcodeClkdivAlsoUpdated)
+{
+    da_output_init(true);
+    da_set_double_speed(false);
+    DOUBLES_EQUAL(32.0, g_stub_last_sub_clkdiv, 0.001);
+}
+
+TEST(DaSpeed, SpeedChange_Idempotent_SubcodeClkdivNotWritten)
+{
+    da_output_init(false);
+    da_set_double_speed(true);       // 1× → 2×: both clkdivs written
+    g_stub_last_sub_clkdiv = 0.0f;
+    da_set_double_speed(true);       // same value: idempotency guard fires
+    DOUBLES_EQUAL(0.0, g_stub_last_sub_clkdiv, 0.001);
 }

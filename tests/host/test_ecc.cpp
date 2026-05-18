@@ -10,7 +10,9 @@
 //   - Single-bit corruption anywhere in bytes 0-2063 must cause verify to fail.
 //   - Sectors built with the standard 12-byte sync header + MSF header +
 //     mode byte are accepted; the EDC covers bytes 0-2063 (header + user data).
-//   - ecc_verify_edc() returns false for a zeroed (unwritten) sector.
+//   - The EDC uses init=0 with polynomial 0xD8018001 (no final XOR); an
+//     all-zero sector yields EDC=0, so ecc_verify_edc() returns TRUE — zero
+//     is a fixed point of this CRC variant.
 // =============================================================================
 
 #include <CppUTest/TestHarness.h>
@@ -269,4 +271,70 @@ TEST(SectorLayout, DataPayload_CopiedCorrectly)
     memset(data, 0xA5, sizeof(data));
     disc_synthesise_sector(sector, 0, data);
     CHECK(memcmp(sector + 16, data, 2048) == 0);
+}
+
+/* ---------------------------------------------------------------------------
+ * Additional Ecc invariants (Gaps 1–5 from test-gap audit)
+ * -------------------------------------------------------------------------- */
+
+/* The EDC init value is 0 (not 0xFFFFFFFF), so an all-zero sector has
+   computed EDC = 0 = stored EDC → verify returns TRUE.  Changing the sector
+   payload then recomputing must produce a non-zero EDC (non-trivial input). */
+TEST(Ecc, AllZeroSector_VerifyReturnsTrue)
+{
+    uint8_t sector[2352] = {0};
+    CHECK_TRUE(ecc_verify_edc(sector));
+}
+
+/* Gap 1: Q-parity region [2248..2351] must be non-zero after
+   ecc_sector_complete().  Only P-parity was previously checked. */
+TEST(Ecc, QParityPopulatedByComplete)
+{
+    uint8_t sector[2352];
+    make_sector(sector, 0, 0xA5);
+    ecc_sector_complete(sector);
+    bool qparity_nonzero = false;
+    for (int i = 2248; i < 2352; i++) {
+        if (sector[i]) { qparity_nonzero = true; break; }
+    }
+    CHECK_TRUE(qparity_nonzero);
+}
+
+/* Gap 3: ecc_sector_complete() must produce a sector that passes ecc_verify_edc().
+   The existing suite tests ecc_write_edc + verify, but not the full complete path. */
+TEST(Ecc, SectorComplete_ThenVerify_Passes)
+{
+    uint8_t sector[2352];
+    make_sector(sector, 42, 0xA5);
+    ecc_sector_complete(sector);
+    CHECK_TRUE(ecc_verify_edc(sector));
+}
+
+/* Gap 4: intermediate field must still be zero after ecc_sector_complete()
+   because ecc_generate() touches nearby ECC bytes and could theoretically
+   corrupt the eight zeroed bytes at [2068..2075]. */
+TEST(Ecc, IntermediateFieldZeroedByComplete)
+{
+    uint8_t sector[2352];
+    make_sector(sector, 0, 0xFF);
+    ecc_sector_complete(sector);
+    for (int i = 2068; i < 2076; i++) {
+        BYTES_EQUAL(0x00, sector[i]);
+    }
+}
+
+/* Gap 5: calling ecc_generate() twice on the same sector must produce identical
+   P/Q parity — the GF table initialisation is guarded by gf_tables_ready and
+   must be idempotent. */
+TEST(Ecc, DoubleGenerate_SameParityOutput)
+{
+    uint8_t sector[2352];
+    make_sector(sector, 10, 0xCC);
+    ecc_sector_complete(sector);
+
+    uint8_t parity_first[276];  /* P(172) + Q(104) bytes at [2076..2351] */
+    memcpy(parity_first, sector + 2076, 276);
+
+    ecc_generate(sector);  /* second call — GF tables already initialised */
+    CHECK(memcmp(parity_first, sector + 2076, 276) == 0);
 }

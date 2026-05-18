@@ -234,3 +234,54 @@ TEST(EffectsColor, SampleToY_PositiveSample_LowerYThanCentre)
 {
     CHECK_TRUE(sample_to_y(10000) < sample_to_y(0));
 }
+
+/* -------------------------------------------------------------------------
+ * Gap 22: all six HSV hue sectors produce distinct colours at full saturation
+ * and value.  The six sector boundaries (h = 0, 43, 86, 129, 172, 215) each
+ * map to a different primary or secondary hue; duplicates would indicate a
+ * switch-case fall-through or wrong sector boundary constant.
+ * ---------------------------------------------------------------------- */
+TEST(EffectsColor, Hsv_SixSectors_AllDistinct)
+{
+    uint16_t c[6];
+    /* One sample per sector: h = 0, 43, 86, 129, 172, 215 */
+    c[0] = hsv(  0, 255, 255);
+    c[1] = hsv( 43, 255, 255);
+    c[2] = hsv( 86, 255, 255);
+    c[3] = hsv(129, 255, 255);
+    c[4] = hsv(172, 255, 255);
+    c[5] = hsv(215, 255, 255);
+    for (int i = 0; i < 6; i++) {
+        for (int j = i + 1; j < 6; j++) {
+            CHECK_TRUE(c[i] != c[j]);
+        }
+    }
+}
+
+/* -------------------------------------------------------------------------
+ * Gap 23: copper gradient red channel must increase monotonically across the
+ * table.  The COP_R[] entries are strictly increasing, so comparing sampled
+ * fractions at even intervals must always produce a non-decreasing sequence.
+ *
+ * We extract the red channel from the byte-swapped RGB565 word:
+ *   native565 = bswap(bswapped) = (word & 0xFF)<<8 | (word>>8)
+ *   red5      = (native565 >> 11) & 0x1F
+ * ---------------------------------------------------------------------- */
+static uint8_t red5_channel(uint16_t bswapped_rgb565)
+{
+    uint16_t native = (uint16_t)(((bswapped_rgb565 & 0xFF) << 8) |
+                                 ((bswapped_rgb565 >> 8) & 0xFF));
+    return (uint8_t)((native >> 11) & 0x1F);
+}
+
+TEST(EffectsColor, Copper_RedChannelMonotonicallyIncreases)
+{
+    /* Sample at 5 evenly spaced fractions; red must be non-decreasing. */
+    uint8_t fracs[] = { 0, 50, 100, 150, 200, 255 };
+    uint8_t prev = red5_channel(copper_color(fracs[0]));
+    for (size_t i = 1; i < sizeof(fracs)/sizeof(fracs[0]); i++) {
+        uint8_t curr = red5_channel(copper_color(fracs[i]));
+        CHECK_TRUE(curr >= prev);
+        prev = curr;
+    }
+}

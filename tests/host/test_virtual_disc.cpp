@@ -753,3 +753,325 @@ TEST(VdiscIntegration, DiscCloseClearsVdiscPointer) {
     disc_close(&disc);
     CHECK(disc.vdisc == NULL);
 }
+
+/* ============================================================================
+ * Additional gap-filling tests
+ * ============================================================================ */
+
+/* Gap 1: sanitise_name() passes hyphen and comma through unchanged. */
+TEST(VdiscMount, SanitiseName_HyphenAndCommaPreserved) {
+    vdisc_sim_register_dir("1:/");
+    static const uint8_t d[1] = {0};
+    vdisc_sim_register_file("1:/track-01,2.bin", d, 1);
+    vdisc_mount(&vd);
+    bool found = false;
+    for (uint32_t i = 0; i < vd.entry_count; i++) {
+        if (!vd.table[i].is_dir) {
+            STRCMP_EQUAL("TRACK-01,2.BIN", vd.table[i].name);
+            found = true;
+        }
+    }
+    CHECK(found);
+}
+
+/* Gap 2: sanitise_name() stops at VDISC_NAME_LEN-1 = 31 output chars. */
+TEST(VdiscMount, SanitiseName_LongNameTruncated) {
+    vdisc_sim_register_dir("1:/");
+    static const uint8_t d[1] = {0};
+    vdisc_sim_register_file("1:/ABCDEFGHIJKLMNOPQRSTUVWXYZ_EXTRA.TXT", d, 1);
+    vdisc_mount(&vd);
+    bool found = false;
+    for (uint32_t i = 0; i < vd.entry_count; i++) {
+        if (!vd.table[i].is_dir) {
+            CHECK(strlen(vd.table[i].name) <= 31u);
+            found = true;
+        }
+    }
+    CHECK(found);
+}
+
+/* Gap 3: zero-size file mounts successfully and takes no file-data sectors. */
+TEST(VdiscMount, ZeroSizeFile_MountsOk) {
+    vdisc_sim_register_dir("1:/");
+    static const uint8_t dummy[1] = {0};
+    vdisc_sim_register_file("1:/EMPTY.BIN", dummy, 0);
+    bool ok = vdisc_mount(&vd);
+    CHECK(ok);
+    /* 20 (system+headers+root) + 0 file sectors = 21 */
+    LONGS_EQUAL(21, (long)vd.total_sectors);
+}
+
+/* Gap 4: PVD file structure version byte at offset 883 must be 0x01. */
+TEST(VdiscPvd, PvdFileStructureVersionByte) {
+    CHECK_EQUAL(0x01, buf[883]);
+}
+
+/* Gap 5: PVD L-path table location [140..143] = LE32(18). */
+TEST(VdiscPvd, PvdLPathTableLocation) {
+    CHECK_EQUAL(18u, read_le32(buf, 140));
+}
+
+/* Gap 6: PVD M-path table location [148..151] = BE32(19) via put_be32. */
+TEST(VdiscPvd, PvdMPathTableLocation) {
+    CHECK_EQUAL(19u, read_be32(buf, 148));
+}
+
+/* Gap 7: VDST version byte at offset 6 must be 0x01. */
+TEST(VdiscVdst, VdstVersionByte) {
+    CHECK_EQUAL(0x01, buf[6]);
+}
+
+/* Gap 8: L-path table subdirectory entry: parent number = 1 (root is #1). */
+TEST(VdiscPathTable, PathTableSubdir_ParentNumber) {
+    vdisc_sim_reset();
+    vdisc_sim_register_dir("1:/");
+    vdisc_sim_register_dir("1:/SUBDIR");
+    vdisc_mount(&vd);
+    vdisc_read_sector(&vd, 18, lbuf);
+
+    int id_len0  = lbuf[0];
+    int entry0sz = 8 + id_len0 + (id_len0 & 1);
+    int off      = entry0sz;
+
+    uint16_t parent_num = (uint16_t)(lbuf[off + 6] | (lbuf[off + 7] << 8));
+    CHECK_EQUAL(1u, (unsigned)parent_num);
+}
+
+/* Gap 9: L-path table subdirectory LBA matches the entry table value. */
+TEST(VdiscPathTable, PathTableSubdir_LbaMatchesEntry) {
+    vdisc_sim_reset();
+    vdisc_sim_register_dir("1:/");
+    vdisc_sim_register_dir("1:/SUBDIR");
+    vdisc_mount(&vd);
+    vdisc_read_sector(&vd, 18, lbuf);
+
+    uint32_t expected_lba = 0;
+    for (uint32_t i = 0; i < vd.entry_count; i++) {
+        if (vd.table[i].is_dir && strcmp(vd.table[i].name, "SUBDIR") == 0) {
+            expected_lba = vd.table[i].lba;
+            break;
+        }
+    }
+    CHECK(expected_lba != 0u);
+
+    int id_len0  = lbuf[0];
+    int entry0sz = 8 + id_len0 + (id_len0 & 1);
+    int off      = entry0sz;
+
+    uint32_t pt_lba = read_le32(lbuf, off + 2);
+    CHECK_EQUAL(expected_lba, pt_lba);
+}
+
+/* Gap 10: root directory's ".." record (second record) must point to LBA 20. */
+TEST(VdiscDirSector, RootDotDot_LbaIs20) {
+    int off          = buf[0];   /* skip first record (self-ref, rec_len=34) */
+    uint32_t par_lba = read_le32(buf, off + 2);
+    CHECK_EQUAL(20u, par_lba);
+}
+
+// =============================================================================
+// VdiscExtended — supplemental tests (tests.md Section 4, Tests 31-40)
+// =============================================================================
+
+TEST_GROUP(VdiscExtended) {
+    vdisc_t  vd;
+    uint8_t  buf[2048];
+    void setup()    { vdisc_sim_reset(); memset(buf, 0xFF, sizeof(buf)); }
+    void teardown() { vdisc_sim_reset(); }
+};
+
+// Test 31: Nested tree deeper than 8 levels must not crash; entries past
+// depth 8 are skipped cleanly and the mount still succeeds.
+TEST(VdiscExtended, Vdisc_MaxDirectoryDepth) {
+    vdisc_sim_register_dir("1:/");
+    vdisc_sim_register_dir("1:/L1");
+    vdisc_sim_register_dir("1:/L1/L2");
+    vdisc_sim_register_dir("1:/L1/L2/L3");
+    vdisc_sim_register_dir("1:/L1/L2/L3/L4");
+    vdisc_sim_register_dir("1:/L1/L2/L3/L4/L5");
+    vdisc_sim_register_dir("1:/L1/L2/L3/L4/L5/L6");
+    vdisc_sim_register_dir("1:/L1/L2/L3/L4/L5/L6/L7");
+    vdisc_sim_register_dir("1:/L1/L2/L3/L4/L5/L6/L7/L8");
+    // Depth 9 — must be skipped, not crash
+    vdisc_sim_register_dir("1:/L1/L2/L3/L4/L5/L6/L7/L8/L9TOOMANY");
+    bool ok = vdisc_mount(&vd);
+    CHECK(ok);
+    // Max depth 8 means the L8 directory is included; L9TOOMANY is skipped.
+    // entry_count must be ≥ 9 (root + L1..L8) and sane (< VDISC_MAX_ENTRIES).
+    CHECK(vd.entry_count >= 9u);
+    CHECK(vd.total_sectors > 20u);
+}
+
+// Test 32: Two files whose names are identical after sanitisation and
+// truncation both appear in the entry table (no silent drop, no crash).
+// virtual_disc.c does NOT add numeric suffixes; same-name entries coexist.
+TEST(VdiscExtended, Vdisc_FilenameTruncationAndClash) {
+    static const uint8_t data[50] = {0};
+    vdisc_sim_register_dir("1:/");
+    // Both files sanitise to the same 8.3 name "FILE.TXT" (case-fold only)
+    vdisc_sim_register_file("1:/file.txt",  data, 50);
+    vdisc_sim_register_file("1:/FILE.TXT",  data, 50);
+    bool ok = vdisc_mount(&vd);
+    CHECK(ok);
+    // Both entries must be present (no silent deduplication)
+    int file_count = 0;
+    for (uint32_t i = 0; i < vd.entry_count; i++) {
+        if (!vd.table[i].is_dir) file_count++;
+    }
+    CHECK_EQUAL(2, file_count);
+}
+
+// Test 33: Zero-size file gets a valid directory entry with size=0.
+TEST(VdiscExtended, Vdisc_ZeroSizeFileHandling) {
+    vdisc_sim_register_dir("1:/");
+    vdisc_sim_register_file("1:/EMPTY.TXT", NULL, 0);
+    bool ok = vdisc_mount(&vd);
+    CHECK(ok);
+    bool found = false;
+    for (uint32_t i = 0; i < vd.entry_count; i++) {
+        if (!vd.table[i].is_dir) {
+            CHECK_EQUAL(0u, vd.table[i].size);
+            found = true;
+        }
+    }
+    CHECK(found);
+}
+
+// Test 34: L-path table must store directory LBAs in LE32; M-path table in BE32.
+TEST(VdiscExtended, Vdisc_PathTableEndianness) {
+    vdisc_sim_register_dir("1:/");
+    vdisc_mount(&vd);
+    uint8_t l_buf[2048], m_buf[2048];
+    vdisc_read_sector(&vd, 18, l_buf);   // L-path table
+    vdisc_read_sector(&vd, 19, m_buf);   // M-path table
+
+    // Root entry: LE LBA at [2..5], BE LBA at [2..5] in their respective tables
+    uint32_t l_lba = read_le32(l_buf, 2);
+    uint32_t m_lba = read_be32(m_buf, 2);
+    CHECK_EQUAL(20u, l_lba);   // root dir at LBA 20 (LE)
+    CHECK_EQUAL(20u, m_lba);   // root dir at LBA 20 (BE)
+}
+
+// Test 35: A directory with enough file records to nearly fill a 2048-byte
+// sector must have the unused tail bytes zero-padded.  Entries that would
+// overflow the sector boundary are skipped, not partially written.
+TEST(VdiscExtended, Vdisc_DirectorySectorPadding) {
+    vdisc_sim_register_dir("1:/");
+    static const uint8_t data[10] = {0};
+    // Register 50 files — more than enough to fill a 2048-byte directory sector.
+    // Each entry: "FILExx.BIN;1" = 12 chars (even) → rec_len = 33+12 = 45 (odd) → 46 bytes.
+    // Self + parent = 34+34 = 68 bytes; (2048-68)/46 ≈ 43 entries fit.
+    char path[32];
+    for (int i = 0; i < 50; i++) {
+        snprintf(path, sizeof(path), "1:/FILE%02d.BIN", i);
+        vdisc_sim_register_file(path, data, 10);
+    }
+    bool ok = vdisc_mount(&vd);
+    CHECK(ok);
+
+    // Read the root directory sector (LBA 20)
+    vdisc_read_sector(&vd, 20, buf);
+
+    // The last byte of the sector must always be zero (memset before writing)
+    CHECK_EQUAL(0, buf[2047]);
+
+    // Walk records to find where entries end; beyond that point must be zeros
+    int offset = 0;
+    int last_end = 0;
+    while (offset < 2048) {
+        int rec_len = buf[offset];
+        if (rec_len == 0) break;
+        last_end = offset + rec_len;
+        offset  += rec_len;
+    }
+    // All bytes from last_end to 2047 must be zero
+    for (int i = last_end; i < 2048; i++) {
+        CHECK_EQUAL(0, buf[i]);
+    }
+}
+
+// Test 36: Reading any LBA in the system area [0..15] returns an all-zeros sector.
+TEST(VdiscExtended, Vdisc_SystemAreaZeros) {
+    vdisc_sim_register_dir("1:/");
+    vdisc_mount(&vd);
+    for (uint32_t lba = 0; lba < 16; lba++) {
+        vdisc_read_sector(&vd, lba, buf);
+        for (int i = 0; i < 2048; i++) {
+            CHECK_EQUAL(0, buf[i]);
+        }
+    }
+}
+
+// Test 37: Filenames with illegal ISO 9660 characters are replaced with '_'.
+TEST(VdiscExtended, Vdisc_IllegalCharSubstitution) {
+    vdisc_sim_register_dir("1:/");
+    static const uint8_t data[1] = {0};
+    vdisc_sim_register_file("1:/my#file@2024.txt", data, 1);
+    bool ok = vdisc_mount(&vd);
+    CHECK(ok);
+    bool found = false;
+    for (uint32_t i = 0; i < vd.entry_count; i++) {
+        if (!vd.table[i].is_dir) {
+            // '#' and '@' must be replaced with '_'; letters uppercased
+            const char *n = vd.table[i].name;
+            CHECK(strstr(n, "#") == NULL);
+            CHECK(strstr(n, "@") == NULL);
+            CHECK(strstr(n, "_") != NULL);
+            found = true;
+        }
+    }
+    CHECK(found);
+}
+
+// Test 38: LBA 16 must contain a valid PVD with "CD001" magic, type=0x01, and
+// volume identifier "NEBULA32".
+TEST(VdiscExtended, Vdisc_PvdValidation) {
+    vdisc_sim_register_dir("1:/");
+    vdisc_mount(&vd);
+    vdisc_read_sector(&vd, 16, buf);
+    CHECK_EQUAL(0x01, buf[0]);
+    CHECK_EQUAL(0, memcmp(buf + 1, "CD001", 5));
+    CHECK_EQUAL(0x01, buf[6]);
+    CHECK_EQUAL(0, memcmp(buf + 40, "NEBULA32", 8));
+}
+
+// Test 39: A file larger than 2048 bytes spans multiple consecutive LBAs.
+TEST(VdiscExtended, Vdisc_LargeFileMultiSector) {
+    static uint8_t large[3000];
+    for (int i = 0; i < 3000; i++) large[i] = (uint8_t)(i & 0xFF);
+    vdisc_sim_register_dir("1:/");
+    vdisc_sim_register_file("1:/BIG.BIN", large, 3000);
+    bool ok = vdisc_mount(&vd);
+    CHECK(ok);
+
+    uint32_t file_lba = 0;
+    for (uint32_t i = 0; i < vd.entry_count; i++) {
+        if (!vd.table[i].is_dir) { file_lba = vd.table[i].lba; break; }
+    }
+    CHECK(file_lba != 0u);
+
+    // First sector: bytes 0-2047 of the file
+    vdisc_read_sector(&vd, file_lba, buf);
+    CHECK_EQUAL(large[0],    buf[0]);
+    CHECK_EQUAL(large[2047], buf[2047]);
+
+    // Second sector: bytes 2048-2999 of the file (+ zero-pad)
+    vdisc_read_sector(&vd, file_lba + 1, buf);
+    CHECK_EQUAL(large[2048], buf[0]);
+    CHECK_EQUAL(large[2999], buf[951]);
+    CHECK_EQUAL(0,           buf[952]);   // zero-padded beyond file end
+}
+
+// Test 40: disc_close clears vdisc pointer and resets the disc context.
+TEST(VdiscExtended, Vdisc_IntegrationClose) {
+    vdisc_sim_register_dir("1:/");
+    vdisc_mount(&vd);
+
+    disc_image_t disc;
+    disc_open_vdir(&disc, &vd);
+    CHECK(disc.vdisc != NULL);
+    CHECK_EQUAL(DISC_FORMAT_VDIR, (int)disc.format);
+
+    disc_close(&disc);
+    CHECK(disc.vdisc == NULL);
+}

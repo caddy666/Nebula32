@@ -418,3 +418,80 @@ TEST(SubcodeClk, PulseBeforePush_AllThreeWordsDelivered)
     CHECK_TRUE(subcode_push_to_pio(pio0, 0, qbuf));
     LONGS_EQUAL(3, g_stub_pio_put_count);
 }
+
+/* =========================================================================
+ * Additional Subcode invariants (Gaps 6–10 from test-gap audit)
+ * ======================================================================= */
+
+/* Gap 6: MCN digit packing — "1234567890123" packs into bytes 1-7 as paired
+ * BCD nibbles MSB-first; the 13th digit occupies the high nibble of byte 7
+ * with the low nibble zero-padded. */
+TEST(Subcode, McnDigitPacking_ByteValues)
+{
+    uint8_t buf[QCHANNEL_SIZE];
+    subcode_build_q_mcn("1234567890123", buf);
+    BYTES_EQUAL(0x12, buf[1]);   /* digits  1+2  */
+    BYTES_EQUAL(0x34, buf[2]);   /* digits  3+4  */
+    BYTES_EQUAL(0x56, buf[3]);   /* digits  5+6  */
+    BYTES_EQUAL(0x78, buf[4]);   /* digits  7+8  */
+    BYTES_EQUAL(0x90, buf[5]);   /* digits  9+0  */
+    BYTES_EQUAL(0x12, buf[6]);   /* digits  1+2  */
+    BYTES_EQUAL(0x30, buf[7]);   /* digit   3 hi nibble, zero lo nibble */
+}
+
+/* Gap 7: MCN byte 0 — CTRL nibble = Q_CTRL_DATA (0x4), ADR = Q_ADR_MCN (0x2)
+ * → combined byte must be 0x42.  Previously only the ADR nibble was checked. */
+TEST(Subcode, McnCtrlAdrByte_Is0x42)
+{
+    uint8_t buf[QCHANNEL_SIZE];
+    subcode_build_q_mcn("1234567890123", buf);
+    BYTES_EQUAL(0x42, buf[0]);
+}
+
+/* Gap 8: ISRC null pointer → bytes 1-9 must all be zero. */
+TEST(Subcode, IsrcNull_BytesOneToNineAreZero)
+{
+    uint8_t buf[QCHANNEL_SIZE];
+    subcode_build_q_isrc(1, false, NULL, buf);
+    for (int i = 1; i <= 9; i++) {
+        BYTES_EQUAL(0x00, buf[i]);
+    }
+}
+
+/* Gap 9: ISRC byte 0 CTRL/ADR format.
+ * Data track:  (Q_CTRL_DATA  << 4) | Q_ADR_ISRC = 0x43
+ * Audio track: (Q_CTRL_AUDIO << 4) | Q_ADR_ISRC = 0x03 */
+TEST(Subcode, IsrcCtrlAdrByte_DataTrack_Is0x43)
+{
+    uint8_t buf[QCHANNEL_SIZE];
+    subcode_build_q_isrc(1, true, NULL, buf);
+    BYTES_EQUAL(0x43, buf[0]);
+}
+
+TEST(Subcode, IsrcCtrlAdrByte_AudioTrack_Is0x03)
+{
+    uint8_t buf[QCHANNEL_SIZE];
+    subcode_build_q_isrc(1, false, NULL, buf);
+    BYTES_EQUAL(0x03, buf[0]);
+}
+
+/* Gap 10: relative time at the second rollover boundary.
+ * frame 74 stays within the same second (0m 0s 74f → BCD 0x74 in buf[5]).
+ * frame 75 increments the second counter    (0m 1s 0f  → BCD 0x01 in buf[4]). */
+TEST(Subcode, RelTime_Frame74_Is0m0s74f)
+{
+    uint8_t buf[QCHANNEL_SIZE];
+    subcode_build_q_position(1, 1, false, 0, 74, buf);
+    BYTES_EQUAL(0x00, buf[3]);   /* 0 minutes */
+    BYTES_EQUAL(0x00, buf[4]);   /* 0 seconds */
+    BYTES_EQUAL(0x74, buf[5]);   /* 74 frames BCD */
+}
+
+TEST(Subcode, RelTime_Frame75_Is0m1s0f)
+{
+    uint8_t buf[QCHANNEL_SIZE];
+    subcode_build_q_position(1, 1, false, 0, 75, buf);
+    BYTES_EQUAL(0x00, buf[3]);   /* 0 minutes */
+    BYTES_EQUAL(0x01, buf[4]);   /* 1 second  */
+    BYTES_EQUAL(0x00, buf[5]);   /* 0 frames  */
+}

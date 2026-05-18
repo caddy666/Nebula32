@@ -744,6 +744,97 @@ TEST(FormatDetect, NonAsciiNoExtension_NotMatched)
 }
 
 /* =========================================================================
+ * Gap 25 — Be32Be64
+ *
+ * The NRG and MDF parsers in disc_image.c read big-endian fields from the
+ * file and convert them with static inline be32() / be64().  These helpers
+ * are replicated here so regressions in the byte-swap formula are caught
+ * without building the embedded target.
+ *
+ * be32/be64 are involutions: be32(be32(x)) == x.  That property makes the
+ * round-trip tests self-verifying without needing external reference values.
+ * ======================================================================= */
+
+static uint32_t be32_rep(uint32_t v)
+{
+    return ((v & 0xFF000000u) >> 24) |
+           ((v & 0x00FF0000u) >>  8) |
+           ((v & 0x0000FF00u) <<  8) |
+           ((v & 0x000000FFu) << 24);
+}
+
+static uint64_t be64_rep(uint64_t v)
+{
+    return ((uint64_t)be32_rep((uint32_t)(v >> 32))) |
+           ((uint64_t)be32_rep((uint32_t)(v & 0xFFFFFFFFu)) << 32);
+}
+
+TEST_GROUP(Be32Be64) {};
+
+/* Canonical 4-distinct-byte test: 0x12345678 → 0x78563412 */
+TEST(Be32Be64, Be32_KnownValue)
+{
+    LONGS_EQUAL(0x78563412ul, (unsigned long)be32_rep(0x12345678u));
+}
+
+/* All-zero and all-ones are fixed points. */
+TEST(Be32Be64, Be32_FixedPoints)
+{
+    LONGS_EQUAL(0x00000000ul, (unsigned long)be32_rep(0x00000000u));
+    LONGS_EQUAL(0xFFFFFFFFul, (unsigned long)be32_rep(0xFFFFFFFFu));
+}
+
+/* NRG v2 magic "NER5" (0x4E455235 big-endian in file) → little-endian host word */
+TEST(Be32Be64, Be32_NrgV2Magic)
+{
+    LONGS_EQUAL(0x3552454Eul, (unsigned long)be32_rep(0x4E455235u));
+}
+
+/* Round-trip: be32(be32(x)) == x — be32 is its own inverse. */
+TEST(Be32Be64, Be32_Involution)
+{
+    const uint32_t values[] = { 0xDEADBEEFu, 0x01020304u, 0xAABBCCDDu };
+    for (size_t i = 0; i < sizeof(values)/sizeof(values[0]); i++) {
+        LONGS_EQUAL((long)values[i], (long)be32_rep(be32_rep(values[i])));
+    }
+}
+
+/* be64 known value: bytes 01 02 03 04 05 06 07 08 in file → host 0x0807060504030201 */
+TEST(Be32Be64, Be64_KnownValue)
+{
+    uint64_t input  = 0x0102030405060708ULL;  /* as read from big-endian file */
+    uint64_t expect = 0x0807060504030201ULL;
+    CHECK((be64_rep(input) == expect));
+}
+
+/* Round-trip: be64(be64(x)) == x */
+TEST(Be32Be64, Be64_Involution)
+{
+    uint64_t x = 0xDEADBEEFCAFEBABEULL;
+    CHECK((be64_rep(be64_rep(x)) == x));
+}
+
+/* =========================================================================
+ * Gap 26 — DiscFindTrack with zero tracks
+ *
+ * A disc_image_t where first_track=1 and last_track=0 (no valid tracks) must
+ * not crash and must return NULL for every LBA.  The loop in disc_find_track
+ * uses `for (i=first_track; i<=last_track; i++)`, so 1<=0 is immediately
+ * false and the body never executes.
+ * ======================================================================= */
+TEST(DiscFindTrack, ZeroTrackDisc_AlwaysReturnsNull)
+{
+    disc_image_t d;
+    memset(&d, 0, sizeof(d));
+    d.first_track   = 1;
+    d.last_track    = 0;   /* loop never entered */
+    d.total_sectors = 0;
+    POINTERS_EQUAL(NULL, disc_find_track(&d, 0));
+    POINTERS_EQUAL(NULL, disc_find_track(&d, 1000));
+    POINTERS_EQUAL(NULL, disc_find_track(&d, 0xFFFFFFFFu));
+}
+
+/* =========================================================================
  * LbaFileOffset — LBA-to-byte-offset seek formula
  *
  * Verifies the formula applied by disc_read_sector() when seeking into the

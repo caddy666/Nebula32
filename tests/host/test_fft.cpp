@@ -179,3 +179,60 @@ TEST(Fft, DcSignalEnergeyInLowBars)
     /* The lowest-frequency bar (index 0) should be non-zero for a DC input. */
     CHECK_TRUE(spectrum[0] > 0);
 }
+
+/* Gap 20: non-zero input must populate the waveform output buffer.
+ * fft_process() writes the (possibly windowed) samples into waveform[] for
+ * the oscilloscope display effect.  At least one element must be non-zero
+ * for a full-amplitude input. */
+TEST(Fft, NonZeroInput_WaveformPopulated)
+{
+    int16_t samples[FFT_SIZE];
+    uint8_t spectrum[NUM_BARS] = {0};
+    uint8_t peaks[NUM_BARS]    = {0};
+    int16_t waveform[FFT_SIZE] = {0};
+
+    for (int i = 0; i < FFT_SIZE; i++) {
+        samples[i] = 16000;
+    }
+    fft_process(samples, spectrum, peaks, waveform);
+
+    bool any_nonzero = false;
+    for (int i = 0; i < FFT_SIZE; i++) {
+        if (waveform[i] != 0) { any_nonzero = true; break; }
+    }
+    CHECK_TRUE(any_nonzero);
+}
+
+/* Gap 21: one zero-signal frame must reduce each peak by exactly PEAK_DECAY.
+ * PEAK_DECAY=2, so if peaks_before[i] > 2 then peaks_after[i] == peaks_before[i]-2.
+ * This pins the decay rate constant so a change in fft.c is caught immediately. */
+TEST(Fft, PeakDecayOneFrame_DecreasesByPeakDecay)
+{
+    int16_t samples[FFT_SIZE];
+    uint8_t spectrum[NUM_BARS] = {0};
+    uint8_t peaks[NUM_BARS]    = {0};
+    int16_t waveform[FFT_SIZE] = {0};
+
+    /* Drive peaks up with a strong DC signal. */
+    for (int i = 0; i < FFT_SIZE; i++) {
+        samples[i] = 32767;
+    }
+    fft_process(samples, spectrum, peaks, waveform);
+
+    uint8_t peaks_before[NUM_BARS];
+    memcpy(peaks_before, peaks, NUM_BARS);
+
+    /* Single zero-signal frame. */
+    int16_t zeros[FFT_SIZE] = {0};
+    fft_process(zeros, spectrum, peaks, waveform);
+
+    /* Every bar with peak_before > PEAK_DECAY must have decayed by exactly PEAK_DECAY. */
+    bool any_checked = false;
+    for (int i = 0; i < NUM_BARS; i++) {
+        if (peaks_before[i] > PEAK_DECAY) {
+            LONGS_EQUAL((long)(peaks_before[i] - PEAK_DECAY), (long)peaks[i]);
+            any_checked = true;
+        }
+    }
+    CHECK_TRUE(any_checked);
+}

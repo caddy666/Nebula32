@@ -195,3 +195,51 @@ TEST(DaExpand, Clkdiv_DoubleSpeed_Is16)
 {
     DOUBLES_EQUAL(16.0, clkdiv(true), 0.001);
 }
+
+/* -------------------------------------------------------------------------
+ * Gap 16: full 588-pair sweep — every stereo pair maps to the correct words.
+ *
+ * Uses a walking pattern where pair i carries L=i*2, R=i*2+1.  This catches
+ * any indexing bug that only manifests at non-boundary pairs (e.g. pair 300).
+ * ---------------------------------------------------------------------- */
+TEST(DaExpand, FullSweep_AllPairsCorrect)
+{
+    uint8_t raw[SECTOR_RAW_SIZE];
+    for (int i = 0; i < 588; i++) {
+        uint16_t l = (uint16_t)(i * 2);
+        uint16_t r = (uint16_t)(i * 2 + 1);
+        raw[i * 4 + 0] = (uint8_t)(l & 0xFF);
+        raw[i * 4 + 1] = (uint8_t)(l >> 8);
+        raw[i * 4 + 2] = (uint8_t)(r & 0xFF);
+        raw[i * 4 + 3] = (uint8_t)(r >> 8);
+    }
+    uint32_t out[SECTOR_DMA_WORDS];
+    expand_to_i2s24(raw, out);
+
+    bool all_ok = true;
+    for (int i = 0; i < 588 && all_ok; i++) {
+        uint16_t l = (uint16_t)(i * 2);
+        uint16_t r = (uint16_t)(i * 2 + 1);
+        if (out[i * 2 + 0] != ((uint32_t)l << 16)) all_ok = false;
+        if (out[i * 2 + 1] != ((uint32_t)r << 16)) all_ok = false;
+    }
+    CHECK_TRUE(all_ok);
+}
+
+/* -------------------------------------------------------------------------
+ * Gap 17: explicit little-endian byte order.
+ *
+ * The raw CD audio stream is little-endian: low byte at even offset, high
+ * byte at odd offset.  0x01 (low) + 0x80 (high) must decode to 0x8001, not
+ * 0x0180.  This test pins that contract so a byte-order reversal is caught
+ * immediately rather than producing subtle audio distortion on Akiko.
+ * ---------------------------------------------------------------------- */
+TEST(DaExpand, LittleEndianByteOrder)
+{
+    uint8_t raw[SECTOR_RAW_SIZE] = {0};
+    raw[0] = 0x01;  /* L low byte */
+    raw[1] = 0x80;  /* L high byte → uint16_t 0x8001 */
+    uint32_t out[SECTOR_DMA_WORDS] = {0};
+    expand_to_i2s24(raw, out);
+    LONGS_EQUAL((long)0x80010000ul, (long)out[0]);
+}

@@ -249,3 +249,23 @@ TEST(Config, Flags_SetAndClearDoNotBleed)
     CHECK_TRUE(flags  & CFG_FLAG_AUDIO_ENABLED);
     CHECK_FALSE(flags & CFG_FLAG_VERIFY_EDC);
 }
+
+/* Gap 11: every reserved byte must be zero after config_defaults(). */
+TEST(Config, Defaults_ReservedBytesAllZero)
+{
+    ode_config_t cfg;
+    config_defaults(&cfg);
+    for (int i = 0; i < 57; i++) {
+        BYTES_EQUAL(0x00, cfg.reserved[i]);
+    }
+}
+
+/* Gap 12: changing last_image_index must produce a different CRC. */
+TEST(Config, Crc_ChangesWhenLastImageIndexChanges)
+{
+    ode_config_t a, b;
+    config_defaults(&a);
+    config_defaults(&b);
+    b.last_image_index = 5;
+    CHECK_TRUE(config_crc32(&a) != config_crc32(&b));
+}

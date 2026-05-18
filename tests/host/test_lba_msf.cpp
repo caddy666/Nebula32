@@ -116,3 +116,24 @@ TEST(LbaMsf, MsfToLbaBeforeLeadIn)
     m.frame  = 0x00;
     LONGS_EQUAL(0, (long)msf_to_lba(m));
 }
+
+/* Gap 27: MSF 00:00:00 is before the lead-in (total=0 < 150) → must clamp to 0,
+ * not wrap around to a huge LBA via unsigned subtraction. */
+TEST(LbaMsf, MsfToLba_AllZero_ClampsToZero)
+{
+    msf_t m;
+    m.minute = 0x00;
+    m.second = 0x00;
+    m.frame  = 0x00;
+    LONGS_EQUAL(0, (long)msf_to_lba(m));
+}
+
+/* Gap 28: LBA 332850 = 74 minutes exactly.
+ * total = 332850 + 150 = 333000 = 74 × 60 × 75 → BCD 74:00:00. */
+TEST(LbaMsf, Lba332850_Is74Minutes)
+{
+    msf_t m = lba_to_msf(332850);
+    BYTES_EQUAL(0x74, m.minute);
+    BYTES_EQUAL(0x00, m.second);
+    BYTES_EQUAL(0x00, m.frame);
+}

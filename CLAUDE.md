@@ -160,22 +160,22 @@ All four PIO programs are always loaded. The upstream servo PIO programs
 
 **Location:** `tests/host/`  
 **Run:** `make && ./cd32_tests -v`  
-**Result:** 449 tests, 0 failures  
-**Parser tests:** `make parser_tests && ./parser_tests -v` → 28 tests, 0 failures (separate binary; uses FatFS injectable sim)
-**Virtual disc tests:** `make vdisc_tests && ./vdisc_tests -v` → 53 tests, 0 failures (separate binary; uses vdisc_sim with directory traversal support)
+**Result:** 502 tests, 0 failures  
+**Parser tests:** `make parser_tests && ./parser_tests -v` → 30 tests, 0 failures (separate binary; uses FatFS injectable sim)
+**Virtual disc tests:** `make vdisc_tests && ./vdisc_tests -v` → 63 tests, 0 failures (separate binary; uses vdisc_sim with directory traversal support)
 **Stress tests:** `make stress_sector_cache && ./stress_sector_cache` → 5 tests, 0 failures (TSan binary; concurrent producer/consumer)
 **Sanitizer:** `-fsanitize=undefined -fno-sanitize-recover=all` active on all C and C++ objects and the link step
 
 | Group | Tests | What it covers |
 |-------|-------|----------------|
-| `LbaMsf` | 11 | LBA↔MSF conversion, BCD encoding, round-trips |
-| `Ecc` | 13 | EDC round-trip, single-bit flip detection, MSF header flip, last-data-byte flip, sync pattern inside payload passes EDC |
+| `LbaMsf` | 13 | LBA↔MSF conversion, BCD encoding, round-trips, 00:00:00 clamp, 74-minute boundary |
+| `Ecc` | 13 | EDC round-trip, single-bit flip detection, MSF header flip, last-data-byte flip, sync pattern inside payload passes EDC; all-zero sector passes (init=0 fixed point); Q-parity, sector_complete+verify, intermediate-field zero, double-generate idempotent |
 | `Subcode` | 14 | CRC-16, CONAD byte, BCD track, absolute MSF |
 | `SubcodePio` | 3 | subcode_push_to_pio() PIO TX FIFO back-pressure: all 3 words pushed (never-full), first word rejected (full before push), 3rd word blocked (full after 2) |
 | `SubcodeClk` | 6 | subcode_pulse_sector_clocks(): SCOR+WFCLK idle low after pulse, both return to low from HIGH, DATA/CLK pins unaffected, pin numbers distinct, pulse+push integration |
-| `Fft` | 7 | Init, zero input, range, peak hold/decay |
+| `Fft` | 9 | Init, zero input, range, peak hold/decay, waveform populated for non-zero input, single-frame decay by PEAK_DECAY |
 | `VisAudio` | 6 | SPSC ring, left-channel extraction, FIFO order |
-| `SectorCache` | 12 | Slot injection, seek/flush, flush_gen counter, partial-sector valid_bytes |
+| `SectorCache` | 15 | Slot injection, seek/flush, flush_gen counter, partial-sector valid_bytes, sector_cache_is_full() (all-valid/post-seek/one-hole) |
 | `Maths` | 30 | BCD↔hex, add/subtract time, compare, calc_tracks |
 | `CsvReplay` | 10 | Real hardware signal validation (digital.csv, 4.9 GB, 100M rows) |
 | `CsvReplayPonPoff` | 10 | Power-on/power-off idle capture (pon-poff-idle.csv, 5.2 GB) |
@@ -185,25 +185,28 @@ All four PIO programs are always loaded. The upstream servo PIO programs
 | `DoorPin` | 8 | GPIO door-pin edge detection: rising edge ejects, stable/falling silent, boot snapshot, motor/LED state |
 | `OpcResponses` | 1 | All 34 COMMO opcodes → correct status byte + drive state (table-driven; incl. SEEK from PLAYING, SEEK invalid BCD) |
 | `MotorSledFake` | 10 | Motor active states, BCD MSF→LBA, seek LBA, virtual sled positioning |
-| `DiscFindTrack` | 8 | disc_find_track boundaries, single/multi-track, track type |
+| `DiscFindTrack` | 9 | disc_find_track boundaries, single/multi-track, track type, zero-track disc returns NULL |
+| `Be32Be64` | 6 | be32/be64 byte-swap: known value, fixed points (0/0xFFFFFFFF), NRG magic, involution round-trip, be64 known value and round-trip |
 | `TocResponse` | 6 | disc_build_toc_response BCD encoding, lead-out 0xAA, truncation |
 | `ConfigCrc` | 5 | CRC-32 known values, determinism, single-bit sensitivity |
 | `CueMsfArith` | 6 | CUE decimal→BCD→LBA conversion, PREGAP file-offset arithmetic |
 | `NrgTrackCalc` | 6 | NRG track length, lead-out/lead-in skip conditions |
 | `IsoLayout` | 6 | ISO parser output structure, disc_find_track, TOC lead-out |
 | `LbaFileOffset` | 3 | LBA→byte-offset formula: ISO (×2048), raw BIN (×2352), multi-track non-zero start_lba |
-| `Webserver` | 19 | basename_no_ext, state_name, config key=val parser, ".." traversal guard, load-index bounds |
+| `Webserver` | 21 | basename_no_ext (incl. multiple-dots), state_name, config key=val parser (incl. value-contains-equals), ".." traversal guard, load-index bounds |
+| `HtmlEscape` | 8 | html_escape() replica: plain text pass-through, &amp; &lt; &gt; &quot; &#39; individual escapes, empty input, buffer truncation |
 | `Logger` | 22 | parse_bool truthy/falsy set, trim all whitespace variants, cmd_name known/unknown, ring buffer append/wrap/overflow, status byte flag decode |
-| `Config` | 17 | struct size, defaults field values, CRC validity after defaults, CRC excludes crc32 field, magic/version/CRC guard, flag bit orthogonality |
-| `DaExpand` | 10 | I2S word packing: zero sector, L/R separation, max/min int16_t, lower-half always zero, pair-N addressing, last pair, clkdiv 32/16 |
-| `DaSpeed` | 16 | DA playback state machine: init 1×/2×, start/pause/resume/stop transitions, da_set_double_speed idempotency, clkdiv write capture, speed change while playing |
+| `Config` | 19 | struct size, defaults field values, CRC validity after defaults, CRC excludes crc32 field, magic/version/CRC guard, flag bit orthogonality, reserved bytes all zero, CRC changes on last_image_index |
+| `DaExpand` | 12 | I2S word packing: zero sector, L/R separation, max/min int16_t, lower-half always zero, pair-N addressing, last pair, clkdiv 32/16, full 588-pair sweep, explicit little-endian byte order |
+| `DaSpeed` | 19 | DA playback state machine: init 1×/2×, start/pause/resume/stop transitions, da_set_double_speed idempotency, clkdiv write capture, speed change while playing; subcode PIO clkdiv updated atomically with DA clkdiv on speed change (F14), idempotent on same-value call |
 | `CommoProtocol` | 13 | COMMO state machine: single-byte opcode, opcode+param, bad checksum, same-command detection, zero opcode ERR_SEND countdown, free-buffer clear, max-param opcode, A→B→A sequence, CMD_ERROR clears last_command (fixed), TX data+checksum byte capture, BUSY/READY states |
-| `CommoFuzz` | 6 | Adversarial COMMO paths: aborted command (param byte consumed as checksum → CMD_ERROR + recovery), 50-tick rapid poll stays IDLE, TX blocked by spurious data strobe without corruption, TXD_CHECKSUM state also blocks on data_is_low, successive errors keep last_command=0 so retry is NEW_COMMAND, rapid-fire second command overwrites first (Amiga game engine bug) |
-| `EffectsColor` | 18 | rgb() RGB565 bswap packing, hsv() grey/red/black/distinct hues, copper_color() darkest/brightest/monotone, sample_to_y() centre/top/bottom/bounds |
+| `CommoFuzz` | 7 | Adversarial COMMO paths: aborted command (param byte consumed as checksum → CMD_ERROR + recovery), 50-tick rapid poll stays IDLE, TX blocked by spurious data strobe without corruption, TXD_CHECKSUM state also blocks on data_is_low, successive errors keep last_command=0 so retry is NEW_COMMAND, rapid-fire second command overwrites first (Amiga game engine bug), glitched data-phase param byte produces CMD_ERROR + clean retry |
+| `CommoPowerOn` | 6 | Wire-level power-on handshake: SPINDLE_MOTOR_OFF (0x15 0x00 0xEA) parses as NEW_COMMAND, checksum byte 0xEA verified, FOCUS_ON (0x12 0xED) parses as NEW_COMMAND, 15-byte STATUS packet produces 16 wire bytes, additive checksum invariant (sum=0xFF), Chinon 0x27+0xD8=0xFF explains why frame-header pairs look like valid Pico ODE checksum pairs |
+| `EffectsColor` | 20 | rgb() RGB565 bswap packing, hsv() grey/red/black/distinct hues/all-6-sectors-distinct, copper_color() darkest/brightest/monotone/red-channel-monotonic, sample_to_y() centre/top/bottom/bounds |
 | `CoverDir` | 6 | display.cpp and webserver.c agree on cover-art directory; FatFS volume prefix; trailing slash; default path starts in covers dir |
 | `SectorLayout` | 5 | disc_synthesise_sector() sync pattern, MSF header bytes, mode byte 0x01, data payload copy |
 | `FormatDetect` | 29 | ext_match() case-insensitive extension detection for .iso/.bin/.nrg/.mdf; uppercase; unknown format rejected; Unix slash path; Windows backslash path; space in filename; dot-in-directory-component not confused; Swedish/Danish/Norwegian (Ä Ö Å Ø Æ); German umlauts + ß; French accents; Spanish Ñ; Czech/Slovak carons (Š Č Ž); Polish (Ł Ź Ą); Hungarian double-acute (Ő Ű); Icelandic Þ/Ð; Portuguese Ã/Ç; multi-script Latin paths; Japanese katakana (3-byte); Japanese path; Chinese simplified hanzi; Korean hangul; mixed Latin+CJK paths; uppercase ASCII ext still folds over non-ASCII stems; non-ASCII filename with no extension never matches |
-| `AkikoDma` | 8 | Fake Akiko DMA engine (REPLICA pattern): ping-pong sequence, interrupt mid-transfer, cache-miss abort, next_lba tracking, card-yank exact delivery count, post-reset buf/lba zeroing, silence-pad UINT32_MAX never delivered, I2S word-packing data integrity (left/right channel expand) |
+| `AkikoDma` | 9 | Fake Akiko DMA engine (REPLICA pattern): ping-pong sequence, interrupt mid-transfer, cache-miss abort, next_lba tracking, card-yank exact delivery count, post-reset buf/lba zeroing, silence-pad UINT32_MAX never delivered, I2S word-packing data integrity (left/right channel expand), mid-session /RESET + restart byte-content correct (not stale) |
 | `CoreIpcDesync` | 5 | Dual-core IPC boundary: Core 1 stall → graceful stop, tick-after-stop no-op, all-slots-full prefetch_tick blocked safely, fill/drain/fill second batch correct, single-sector silence-pad buf_lba[1]=UINT32_MAX never received |
 | `SubchannelMath` | 15 | Q-channel relative time: index 01 zero at track start, index 00 countdown 1 frame/1 second, pregap boundary no uint32_t underflow, absolute time 2-second lead-in offset, index BCD 0x00/0x01 flip, data/audio CTRL nibble (0x41/0x01), two-digit track BCD, 1-minute relative time, CRC self-consistency; multiple indices: index 2 BCD, index 10 double-digit BCD, relative time from index 2 uses track_start_lba |
 | `HostReset` | 7 | /RESET pin (GPIO 14) contract: PLAYING/SEEKING/SPINUP → IDLE, ThenTrayIn restarts spinup, multiple resets idempotent, door GPIO snapshot preserved across reset, DRIVE_ERROR fault cleared |
@@ -219,12 +222,12 @@ All four PIO programs are always loaded. The upstream servo PIO programs
 
 | Group | Tests | What it covers |
 |-------|-------|----------------|
-| `VdiscMount` | 7 | Empty dir, single file, nested subdirs, max-entry limit, max-depth skip, filename uppercasing, illegal-char replacement |
+| `VdiscMount` | 10 | Empty dir, single file, nested subdirs, max-entry limit, max-depth skip, filename uppercasing, illegal-char replacement, hyphen/comma preserved, long name truncated at 31 chars, zero-size file |
 | `VdiscLbaLayout` | 8 | System area zeros, PVD at LBA 16, VDST at LBA 17, path tables at 18/19, root dir at LBA 20, file LBAs after all dir LBAs, no overlapping LBA ranges |
-| `VdiscPvd` | 7 | Magic "CD001", type byte 0x01, version 0x01, logical block size 2048 LE+BE, volume space size matches total_sectors, root dir record LBA=20, volume identifier "NEBULA32" |
-| `VdiscVdst` | 2 | Type byte 0xFF, magic "CD001" |
-| `VdiscPathTable` | 5 | L-table root LBA=20 LE, M-table root LBA=20 BE, root identifier byte 0x00, parent number=1, subdir entry present |
-| `VdiscDirSector` | 8 | Self-ref first (id=\x00), parent-ref second (id=\x01), file flags=0x00, dir flags=0x02, file version suffix ";1", dir no version suffix, file size field matches, all record lengths even |
+| `VdiscPvd` | 10 | Magic "CD001", type byte 0x01, version 0x01, logical block size 2048 LE+BE, volume space size matches total_sectors, root dir record LBA=20, volume identifier "NEBULA32", file structure version [883]=0x01, L-path table location [140]=LE32(18), M-path table location [148]=BE32(19) |
+| `VdiscVdst` | 3 | Type byte 0xFF, magic "CD001", version byte 0x01 |
+| `VdiscPathTable` | 7 | L-table root LBA=20 LE, M-table root LBA=20 BE, root identifier byte 0x00, parent number=1, subdir entry present, subdir parent number=1, subdir LBA matches entry table |
+| `VdiscDirSector` | 9 | Self-ref first (id=\x00), parent-ref second (id=\x01), file flags=0x00, dir flags=0x02, file version suffix ";1", dir no version suffix, file size field matches, all record lengths even, root dotdot LBA=20 |
 | `VdiscFileData` | 6 | First sector content matches SD data, second sector of large file, last sector zero-padded, system area zeros, LBA beyond total → zeros, nested file path reconstruction |
 | `VdiscToc` | 5 | One data track, TRACK_TYPE_DATA, start LBA=0, lead-out LBA matches total_sectors, TOC response encodes correctly |
 | `VdiscIntegration` | 5 | disc_open_vdir sets DISC_FORMAT_VDIR, LBA 16 read via disc_read_sector returns PVD magic in payload, LBA 0 has Mode 1 sync pattern, file data round-trip through disc_read_sector, disc_close clears vdisc pointer |
@@ -245,7 +248,7 @@ All four PIO programs are always loaded. The upstream servo PIO programs
 |-------|-------|----------------|
 | `ParseIso` | 4 | Empty file, exact 1 sector, partial sector, multi-sector count |
 | `ParseBin` | 7 | No CUE fallback, track 0/over-limit skip, INDEX-before-TRACK guard, unknown mode default, pregap underflow clamp, overlapping-track length clamp |
-| `ParseNrg` | 6 | File too small, no magic, chunk_size=0 guard (FIX-1), DAOX too short (FIX-2), lead-out skip, valid track, astronomical end_lba |
+| `ParseNrg` | 8 | File too small, no magic, chunk_size=0 guard (FIX-1), DAOX too short (FIX-2), lead-out skip, valid track, astronomical end_lba, NRG v1 "NERO" footer detected + no crash, unknown chunk type silently skipped before DAOX |
 | `ParseMdf` | 4 | Wrong signature, short header, zero sessions, sector_size=0 guard (FIX-3), lead-in/lead-out skip |
 | `SectorAccess` | 5 | Read LBA 0 on ISO, read LBA 0 on raw BIN, read LBA past total_sectors returns 0, unaligned buffer no UBSan fault, non-sequential backwards read returns correct data per LBA |
 

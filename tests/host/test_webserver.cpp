@@ -320,3 +320,122 @@ TEST(CoverDir, WebserverDir_EndsWithSlash)
     CHECK(len > 0);
     CHECK(WS_COVERS_DIR[len - 1] == '/');
 }
+
+/* -------------------------------------------------------------------------
+ * Gap 14: basename with multiple dots — strrchr finds the LAST dot, so only
+ * the final extension is stripped; earlier dots are preserved.
+ * ---------------------------------------------------------------------- */
+TEST(Webserver, BasenameNoExt_MultipleDots_StripLastOnly)
+{
+    char buf[128];
+    basename_no_ext("0:/game.v1.2.iso", buf, sizeof(buf));
+    STRCMP_EQUAL("game.v1.2", buf);
+}
+
+/* -------------------------------------------------------------------------
+ * Gap 15: value containing '=' — parse_cfg_line uses strchr (first '=') so
+ * any additional '=' characters must pass through verbatim into the value.
+ * ---------------------------------------------------------------------- */
+TEST(Webserver, CfgParse_ValueWithEquals)
+{
+    char key[64], val[64];
+    CHECK_TRUE(parse_cfg_line("token=abc=def", key, sizeof(key), val, sizeof(val)));
+    STRCMP_EQUAL("token", key);
+    STRCMP_EQUAL("abc=def", val);
+}
+
+/* =========================================================================
+ * HtmlEscape — replicated from src/webserver.c (lines 148-172)
+ *
+ * html_escape() is a static helper that escapes the five HTML special chars:
+ *   & → &amp;   < → &lt;   > → &gt;   " → &quot;   ' → &#39;
+ * All other bytes pass through unchanged.  Output is truncated safely when
+ * the output buffer would overflow (never writes past outsz-1).
+ * ======================================================================= */
+
+static int html_escape_r(char *out, int outsz, const char *in)
+{
+    int n = 0;
+    for (const char *p = in; *p; p++) {
+        const char *esc;
+        int elen;
+        switch (*p) {
+            case '&':  esc = "&amp;";  elen = 5; break;
+            case '<':  esc = "&lt;";   elen = 4; break;
+            case '>':  esc = "&gt;";   elen = 4; break;
+            case '"':  esc = "&quot;"; elen = 6; break;
+            case '\'': esc = "&#39;";  elen = 5; break;
+            default:   esc = NULL;     elen = 1; break;
+        }
+        if (esc) {
+            if (n + elen >= outsz - 1) break;
+            memcpy(out + n, esc, elen);
+            n += elen;
+        } else {
+            if (n >= outsz - 1) break;
+            out[n++] = *p;
+        }
+    }
+    out[n] = '\0';
+    return n;
+}
+
+TEST_GROUP(HtmlEscape) {};
+
+TEST(HtmlEscape, PlainText_PassesThrough)
+{
+    char out[64];
+    html_escape_r(out, sizeof(out), "hello world");
+    STRCMP_EQUAL("hello world", out);
+}
+
+TEST(HtmlEscape, Ampersand_Escaped)
+{
+    char out[64];
+    html_escape_r(out, sizeof(out), "a&b");
+    STRCMP_EQUAL("a&amp;b", out);
+}
+
+TEST(HtmlEscape, LessThan_Escaped)
+{
+    char out[64];
+    html_escape_r(out, sizeof(out), "a<b");
+    STRCMP_EQUAL("a&lt;b", out);
+}
+
+TEST(HtmlEscape, GreaterThan_Escaped)
+{
+    char out[64];
+    html_escape_r(out, sizeof(out), "a>b");
+    STRCMP_EQUAL("a&gt;b", out);
+}
+
+TEST(HtmlEscape, DoubleQuote_Escaped)
+{
+    char out[64];
+    html_escape_r(out, sizeof(out), "say \"hi\"");
+    STRCMP_EQUAL("say &quot;hi&quot;", out);
+}
+
+TEST(HtmlEscape, SingleQuote_Escaped)
+{
+    char out[64];
+    html_escape_r(out, sizeof(out), "it's");
+    STRCMP_EQUAL("it&#39;s", out);
+}
+
+TEST(HtmlEscape, EmptyInput_EmptyOutput)
+{
+    char out[64] = {0};
+    html_escape_r(out, sizeof(out), "");
+    STRCMP_EQUAL("", out);
+}
+
+TEST(HtmlEscape, OutputTruncates_WhenBufferFull)
+{
+    char out[8];   /* small buffer — only fits a few bytes */
+    int n = html_escape_r(out, sizeof(out), "a&b&c&d");
+    /* Must not overrun the buffer and must be NUL-terminated. */
+    CHECK_TRUE(n < (int)sizeof(out));
+    BYTES_EQUAL('\0', out[n]);
+}

@@ -207,3 +207,35 @@ TEST(SectorCache, PartialSector_GetReturnsPartialBytes)
     BYTES_EQUAL(0xAB, buf[0]);
     BYTES_EQUAL(0xAB, buf[99]);
 }
+
+/* -------------------------------------------------------------------------
+ * Gap 24: sector_cache_is_full()
+ *
+ * is_full() must return true only when every slot is marked valid.  Three
+ * scenarios: all slots valid, seek clears all (false), and one slot invalid.
+ * ---------------------------------------------------------------------- */
+TEST(SectorCache, IsFull_TrueWhenAllSlotsValid)
+{
+    for (int i = 0; i < SECTOR_BUFFER_COUNT; i++) {
+        inject_sector(&cache, i, (uint32_t)i, 0xAA, SECTOR_RAW_SIZE);
+    }
+    CHECK_TRUE(sector_cache_is_full(&cache));
+}
+
+TEST(SectorCache, IsFull_FalseAfterSeek)
+{
+    for (int i = 0; i < SECTOR_BUFFER_COUNT; i++) {
+        inject_sector(&cache, i, (uint32_t)i, 0xAA, SECTOR_RAW_SIZE);
+    }
+    sector_cache_seek(&cache, 100);
+    CHECK_FALSE(sector_cache_is_full(&cache));
+}
+
+TEST(SectorCache, IsFull_FalseWithOneSlotInvalid)
+{
+    for (int i = 0; i < SECTOR_BUFFER_COUNT; i++) {
+        inject_sector(&cache, i, (uint32_t)i, 0xAA, SECTOR_RAW_SIZE);
+    }
+    cache.slots[3].valid = false;   /* punch a hole */
+    CHECK_FALSE(sector_cache_is_full(&cache));
+}

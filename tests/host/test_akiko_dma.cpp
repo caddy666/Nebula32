@@ -326,6 +326,40 @@ TEST(AkikoDma, SilencePad_SingleSector_UInt32MaxNotDelivered)
 }
 
 // ---------------------------------------------------------------------------
+// ResetMidSession_SecondSessionByteDataClean — stop() mid-session (mirroring
+// an Amiga /RESET assertion) then verify that the second session's DMA buffer
+// contains byte content from the new LBA range, not stale data from the
+// interrupted session.
+//
+// Session 1: LBA 0-7; inject_sector data[i] = (lba+i)&0xFF, so buf[0] after
+// expand has left-word-0 = ((1<<8)|0)<<16 = 0x01000000.
+// Session 2: LBA 50-57; buf[0] left-word-0 = ((51<<8)|50)<<16 = 0x33320000.
+// ---------------------------------------------------------------------------
+TEST(AkikoDma, ResetMidSession_SecondSessionByteDataClean)
+{
+    for (int i = 0; i < SECTOR_BUFFER_COUNT; i++)
+        inject_sector(&cache, i, (uint32_t)i);
+
+    CHECK_TRUE(da.start(&cache, 0, &akiko));
+    da.tick(); da.tick();
+
+    da.stop();
+    sector_cache_seek(&cache, 50);
+
+    for (int i = 0; i < SECTOR_BUFFER_COUNT; i++)
+        inject_sector(&cache, i, (uint32_t)(50 + i));
+
+    akiko.reset();
+    CHECK_TRUE(da.start(&cache, 50, &akiko));
+
+    // LBA 50 data[0..3] = {50,51,52,53} → l=(51<<8|50)=0x3332, r=(53<<8|52)=0x3534
+    UNSIGNED_LONGS_EQUAL(0x33320000u, da.buf[0][0]);
+    UNSIGNED_LONGS_EQUAL(0x35340000u, da.buf[0][1]);
+    // Confirm these differ from session-1 LBA-0 pattern
+    CHECK_TRUE(da.buf[0][0] != 0x01000000u);
+}
+
+// ---------------------------------------------------------------------------
 // DataIntegrity_ExpandedFirstSample — verify the I2S word-packing end-to-end:
 // inject_sector fills data[i] = (lba+i) & 0xFF; _expand shifts each 16-bit
 // PCM sample left 16 bits into the upper half of a uint32_t.
