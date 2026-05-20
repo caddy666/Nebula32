@@ -746,7 +746,7 @@ static void handle_request(struct tcp_pcb *pcb, http_conn_t *conn) {
 
     // ── GET /api/fw/list ── List .uf2 firmware files on SD root
     if (is_get && strcmp(path, "/api/fw/list") == 0) {
-        char fw_paths[8][MAX_PATH_LEN];
+        static char fw_paths[8][MAX_PATH_LEN];  // O1: 2 KB off the lwIP callback stack
         uint32_t n = sd_scan_uf2_files(fw_paths, 8, "0:/", 0);
         int pos = snprintf(s_resp_buf, sizeof(s_resp_buf),
             "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
@@ -769,8 +769,12 @@ static void handle_request(struct tcp_pcb *pcb, http_conn_t *conn) {
     // ── POST /api/fw/flash/{filename} ── Validate + flash UF2 from SD root
     if (is_post && strncmp(path, "/api/fw/flash/", 14) == 0) {
         const char *fname = path + 14;
-        // Reject path traversal
-        if (strstr(fname, "..") || strstr(fname, "/")) {
+        // S1 FIX: also block backslash — FatFS on Windows-adjacent toolchains
+        // treats '\' as a path separator, bypassing the '/' check.
+        // S2 FIX: bound fname length before snprintf path construction to prevent
+        // silent truncation matching a shorter, different filename.
+        if (strstr(fname, "..") || strstr(fname, "/") || strstr(fname, "\\") ||
+            strlen(fname) >= (size_t)(MAX_PATH_LEN - 3)) {
             static const char *bad =
                 "HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\n"
                 "Connection: close\r\n\r\n{\"ok\":false,\"error\":\"invalid filename\"}";

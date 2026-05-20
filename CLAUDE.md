@@ -114,7 +114,7 @@ Data transitions on the **falling** BCLK edge; Akiko samples on the **rising** e
 | `src/ecc.c` | ✅ Correct | EDC/ECC computation; P-parity fixed to 24 rows; Q-parity uses correct ECMA-130 diagonal interleave (stride 44 mod 2236) |
 | `src/logger.c` | ✅ Correct | SD activity log; WiFi fields (ssid/password/hostname) added to logger_config_t; log_max_kb negative guard; dead cmd_name/_log_cmd/_log_cmd_resp/_log_irq removed; state_names[] offset corrected (RESET removed, bounds ≤7) (F7+F18) |
 | `src/config.c` | ✅ Correct | Flash-backed settings; multicore_lockout_start/end_blocking() wraps flash erase/program (BUG-1) |
-| `src/display.cpp` | ✅ Correct | ST7789 240×240 cover art + scanline API |
+| `src/display.cpp` | ✅ Correct | ST7789 240×240 cover art + scanline API; `display_fw_progress()` firmware update overlay; `display_fw_success_animation()` Boing Ball (spherical UV mapped, FPU trig) |
 | `src/ui.c` | ✅ Correct | UI event handler |
 | `src/webserver.c` | ✅ Correct | WiFi web interface; use-after-free fixed; HCAT overflow guard; html_escape + json_escape; static conn pool; tcp_recved before tcp_close (BUG-3); JPEG ERR_MEM retry; cover path cache (≤3 f_stat/render); pagination (page offset/count/total, prev/next buttons, /api/page/*); cover_exists base[] widened to MAX_PATH_LEN (F22) |
 | `src/da_output.c` | ✅ Correct | DA DMA engine — 24-bit I2S expand, DRQ flag, FIFO drain on stop/pause, M17SINE clkdiv trim; hard_assert on DMA ch claims; s_drq_pending __atomic_*; s_audio_mode __atomic_*; dma_channel_abort in end-of-disc ISR (BUG-2); resume_lba from min(buf_lba) (SMELL-5); NULL s_cache guard in IRQ (F23); subcode PIO clkdiv updated on 2× change (F14); da_get_resume_lba() added (F12); spin-wait after seek in da_resume() (F9) |
@@ -122,7 +122,7 @@ Data transitions on the **falling** BCLK edge; Akiko samples on the **rising** e
 | `src/commo_bridge.c` | ✅ Correct | PLAY_TRACK_OPC BCD decode, TRAY_IN seek, audio mode set, DRQ packet; _send_toc_packets guards first_track==0; PIN_RESET init+poll; send_status/qchannel pkt stack-allocated; _wait_commo_ready 5 ms timeout; FAKE_TIMING enabled + 1.8s spinup (F2); TOC 0xA1 uses ctrl_first (F5); _wait_commo_ready removed from _send_toc_packets (F10); da_get_resume_lba in PAUSE_OFF (F12); Dispatcher/cmd_hndl called only when Path A idle (F13) |
 | `src/upstream_player_shim.c` | ✅ Correct | Linkage shim — provides player_interface globals and no-op player() for upstream cmd_hndl.c |
 | `src/fft.c` | ✅ Correct | 256-point Q15 radix-2 FFT with Hann window |
-| `src/effects.c` | ✅ Correct | 5 demoscene visualiser effects (SPECTRUM/SCOPE/RASTER/COMBO/SPACEBALLS) |
+| `src/effects.c` | ✅ Correct | 6 demoscene visualiser effects (SPECTRUM/SCOPE/RASTER/COMBO/SPACEBALLS/JUGGLER); JUGGLER is procedural 3-ball cascade with orbital balls and audio-reactive brightness |
 | `src/vis_audio.c` | ✅ Correct | DA DMA snoop — SPSC ring, left-channel extraction |
 | `pio/da_output.pio` | ✅ Correct | 24-bit I2S frames, clkdiv=32 (2.12 MHz), 96 SM cycles/pair → 44.1 kHz; LRCLK polarity corrected (low=L, high=R) (F3) |
 | `include/subcode.h` | ✅ Correct | subcode_push_to_pio() clears FIFO on partial push to prevent orphaned words (F8) |
@@ -134,6 +134,7 @@ Data transitions on the **falling** BCLK edge; Akiko samples on the **rising** e
 | `tests/host/test_opc_responses.cpp` | ✅ Correct | OpcResponses: 34-case table test — every COMMO opcode → status + state (incl. SEEK from PLAYING, SEEK invalid BCD) |
 | `tests/host/test_motor_sled_fake.cpp` | ✅ Correct | MotorSledFake: 10 tests — motor active states, BCD→LBA, virtual sled seek |
 | `tests/host/test_webserver_html.cpp` | ✅ Correct | WebserverHtml: 10 tests — compiles real build_html_page() via WEBSERVER_TEST_BUILD; verifies buffer, title, starfield, SD space, CSS escaping, disc grid, drive state label |
+| `tests/host/test_fw_update.cpp` | ✅ Correct | 29 host tests (Uf2Parse × 13, Uf2Flash × 6, Uf2SecurityFixes × 10 — B1/B2/B4 regression coverage) |
 
 ---
 
@@ -164,7 +165,7 @@ All four PIO programs are always loaded. The upstream servo PIO programs
 
 **Location:** `tests/host/`  
 **Run:** `make && ./cd32_tests -v`  
-**Result:** 538 tests, 0 failures  
+**Result:** 567 tests, 0 failures  
 **Parser tests:** `make parser_tests && ./parser_tests -v` → 33 tests, 0 failures (separate binary; uses FatFS injectable sim)
 **Virtual disc tests:** `make vdisc_tests && ./vdisc_tests -v` → 73 tests, 0 failures (separate binary; uses vdisc_sim with directory traversal support)
 **Stress tests:** `make stress_sector_cache && ./stress_sector_cache` → 5 tests, 0 failures (TSan binary; concurrent producer/consumer)
@@ -221,6 +222,9 @@ All four PIO programs are always loaded. The upstream servo PIO programs
 | `QSubchannel` | 5 | Q-channel field encoding: relative MSF 75 sectors in, absolute MSF at LBA 225, pregap relative countdown, index byte 0x01 in programme area, index byte 0x00 in pregap |
 | `CommandFuzz` | 5 | Opcode classification exhaustive sweep: all 256 opcodes no UB, status/control/query sets classified correctly, null and 0xFF return unknown |
 | `DmaDoubleBuffer` | 4 | Ping-pong DMA buffer isolation: fill patterns isolated between A/B, swap gives correct active buffer, standby write does not corrupt active, after swap new standby is overwritable |
+| `Uf2Parse` | 13 | UF2 single-block validation: magic, family ID, NOFLASH skip, address limit |
+| `Uf2Flash` | 6 | UF2 erase_map sector-bit construction and Bank 1 address math |
+| `Uf2SecurityFixes` | 10 | B1 (SRAM address guard), B2 (payload_size=0/oversized/unaligned), B4 (NOFLASH block_no sequencing) — regression coverage for fw_update.c safety fixes |
 
 **vdisc_tests groups (separate binary — `make vdisc_tests`):**
 

@@ -31,7 +31,12 @@ typedef enum {
     FW_ERR_NO_BLOCKS,    /* UF2 file has no data blocks */
     FW_ERR_NO_ORIGIN,    /* no block targets flash offset 0 (missing reset vector) */
     FW_ERR_VERIFY,       /* Bank 1 XIP readback mismatch after program */
+    FW_ERR_BAD_PAYLOAD,  /* payload_size is 0, >476, or not page-aligned */
 } fw_result_t;
+
+/* Magic written to watchdog scratch[0] before reboot so main.c can play the
+   firmware-update success animation.  Cleared by main.c after reading. */
+#define FW_UPDATE_MAGIC  0xF1A5B007UL
 
 // Human-readable string for a fw_result_t code.
 const char *fw_result_str(fw_result_t r);

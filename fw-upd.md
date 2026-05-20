@@ -81,7 +81,7 @@ OK (557 tests, 557 ran, 1807016 checks, 0 ignored, 0 filtered out)
 
 ---
 
-## TODO — Bugs, Security Holes, and Optimisations
+## Completed — Bugs, Security Holes, and Optimisations (2026-05-20)
 
 ### Bugs
 

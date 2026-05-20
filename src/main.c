@@ -43,6 +43,7 @@
 #include "hardware/irq.h"
 #include "hardware/clocks.h"
 #include "hardware/i2c.h"
+#include "hardware/watchdog.h"
 
 #include "cd_types.h"
 #include "da_output.h"
@@ -336,7 +337,7 @@ static void handle_console(void) {
     }
     else if (c == 'v' || c == 'V') {
         s_vis_ctx.mode = (uint8_t)((s_vis_ctx.mode + 1) % NUM_EFFECTS);
-        const char *names[] = { "Spectrum", "Scope", "Raster", "Combo", "Spaceballs" };
+        const char *names[] = { "Spectrum", "Scope", "Raster", "Combo", "Spaceballs", "Juggler" };
         printf("[VIS] Effect: %s\n", names[s_vis_ctx.mode]);
     }
     else if (c == 'm' || c == 'M') {
@@ -529,6 +530,14 @@ int main(void) {
 
     // ---- ST7789 240×240 display (SPI1) ----
     display_init();
+
+    // O6: If the device just rebooted after a successful firmware update, play the
+    // Boing Ball animation.  The watchdog scratch register survives a watchdog reboot
+    // but is cleared on a power-cycle, so this fires exactly once after each flash.
+    if (watchdog_hw->scratch[0] == FW_UPDATE_MAGIC) {
+        watchdog_hw->scratch[0] = 0;  // consume — one-shot
+        display_fw_success_animation();
+    }
 
     // ---- Rotary encoder (MCP23017) ----
     rotary_init();

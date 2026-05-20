@@ -55,6 +55,7 @@ typedef enum {
     FW_ERR_NO_BLOCKS,
     FW_ERR_NO_ORIGIN,
     FW_ERR_VERIFY,
+    FW_ERR_BAD_PAYLOAD,
 } fw_result_t;
 
 typedef struct __attribute__((packed)) {
@@ -95,6 +96,15 @@ static fw_result_t validate_block(const uf2_block_t *blk,
     if ((blk->flags & UF2_FLAG_FAMILY_ID) && !uf2_is_rp2350_family(blk->file_size))
         return FW_ERR_FAMILY;
 
+    // B2 FIX: validate payload_size before any arithmetic that uses it
+    if (blk->payload_size == 0 || blk->payload_size > 476 ||
+        blk->payload_size % TEST_FLASH_PAGE_SIZE != 0)
+        return FW_ERR_BAD_PAYLOAD;
+
+    // B1 FIX: reject SRAM addresses before the subtraction that would wrap
+    if (blk->target_addr < TEST_XIP_BASE)
+        return FW_ERR_TOO_LARGE;
+
     uint32_t bank0_off = blk->target_addr - TEST_XIP_BASE;
     if (bank0_off >= TEST_BANK1_OFFSET)
         return FW_ERR_TOO_LARGE;
@@ -129,12 +139,21 @@ static fw_result_t validate_sequence(const uf2_block_t *blocks, uint32_t count,
             blk->magic_start1 != UF2_MAGIC_START1 ||
             blk->magic_end    != UF2_MAGIC_END)
             return FW_ERR_BAD_MAGIC;
+        // B4 FIX: sequence check before NOFLASH skip so NOFLASH blocks consume
+        // their block_no slot
+        if (blk->block_no != expected_next) return FW_ERR_BAD_SEQUENCE;
+        expected_next++;
         if (blk->flags & UF2_FLAG_NOFLASH) continue;
         if ((blk->flags & UF2_FLAG_FAMILY_ID) &&
             !uf2_is_rp2350_family(blk->file_size))
             return FW_ERR_FAMILY;
-        if (blk->block_no != expected_next) return FW_ERR_BAD_SEQUENCE;
-        expected_next++;
+        // B2 FIX: payload_size validation
+        if (blk->payload_size == 0 || blk->payload_size > 476 ||
+            blk->payload_size % TEST_FLASH_PAGE_SIZE != 0)
+            return FW_ERR_BAD_PAYLOAD;
+        // B1 FIX: SRAM address guard
+        if (blk->target_addr < TEST_XIP_BASE)
+            return FW_ERR_TOO_LARGE;
         uint32_t bank0_off = blk->target_addr - TEST_XIP_BASE;
         if (bank0_off >= TEST_BANK1_OFFSET) return FW_ERR_TOO_LARGE;
         uint32_t bank1_off = bank0_off + TEST_BANK1_OFFSET;
@@ -362,4 +381,96 @@ TEST(Uf2Flash, MultipleBlocksAcrossThreeSectors) {
     CHECK(erase_map_get(map, 258));
     CHECK(!erase_map_get(map, 259));
     CHECK(!erase_map_get(map, 255));  // Bank 0 sector — must never be set here
+}
+
+// ---------------------------------------------------------------------------
+// B1 — target_addr below XIP_BASE (SRAM address) must not wrap
+// ---------------------------------------------------------------------------
+TEST_GROUP(Uf2SecurityFixes) {};
+
+TEST(Uf2SecurityFixes, B1_SramAddressRejected) {
+    // SRAM address 0x20000000: without guard, subtracting XIP_BASE wraps to
+    // 0x10000000 = FW_BANK1_OFFSET — equal, not greater, so old check passes.
+    uf2_block_t blk = make_block(0, 0, 1);
+    blk.target_addr = 0x20000000u;
+    CHECK_EQUAL(FW_ERR_TOO_LARGE, validate_block(&blk, 1, nullptr));
+}
+
+TEST(Uf2SecurityFixes, B1_PeripheralAddressRejected) {
+    uf2_block_t blk = make_block(0, 0, 1);
+    blk.target_addr = 0x40000000u;  // APB peripheral base
+    CHECK_EQUAL(FW_ERR_TOO_LARGE, validate_block(&blk, 1, nullptr));
+}
+
+// ---------------------------------------------------------------------------
+// B2 — payload_size validation (zero, oversized, unaligned)
+// ---------------------------------------------------------------------------
+
+TEST(Uf2SecurityFixes, B2_PayloadSizeZeroRejected) {
+    uf2_block_t blk = make_block(0, 0, 1);
+    blk.payload_size = 0;
+    CHECK_EQUAL(FW_ERR_BAD_PAYLOAD, validate_block(&blk, 1, nullptr));
+}
+
+TEST(Uf2SecurityFixes, B2_PayloadSizeOversizedRejected) {
+    // 0xFFFFFFFF would wrap the config-page overflow check and overread blk.data
+    uf2_block_t blk = make_block(0, 0, 1);
+    blk.payload_size = 0xFFFFFFFFu;
+    CHECK_EQUAL(FW_ERR_BAD_PAYLOAD, validate_block(&blk, 1, nullptr));
+}
+
+TEST(Uf2SecurityFixes, B2_PayloadSize477Rejected) {
+    // 477 bytes is one past the blk.data[] array boundary
+    uf2_block_t blk = make_block(0, 0, 1);
+    blk.payload_size = 477u;
+    CHECK_EQUAL(FW_ERR_BAD_PAYLOAD, validate_block(&blk, 1, nullptr));
+}
+
+TEST(Uf2SecurityFixes, B2_PayloadSizeUnalignedRejected) {
+    // 128 bytes — not a multiple of FLASH_PAGE_SIZE (256)
+    uf2_block_t blk = make_block(0, 0, 1);
+    blk.payload_size = 128u;
+    CHECK_EQUAL(FW_ERR_BAD_PAYLOAD, validate_block(&blk, 1, nullptr));
+}
+
+TEST(Uf2SecurityFixes, B2_PayloadSize256Accepted) {
+    // Standard page-aligned payload size must pass
+    uf2_block_t blk = make_block(0, 0, 1);
+    blk.payload_size = 256u;
+    CHECK_EQUAL(FW_OK, validate_block(&blk, 1, nullptr));
+}
+
+// ---------------------------------------------------------------------------
+// B4 — NOFLASH blocks must consume a block_no slot in sequence
+// ---------------------------------------------------------------------------
+
+TEST(Uf2SecurityFixes, B4_NoflashBlockCountsInSequence) {
+    // block_no=0 (NOFLASH), block_no=1 (data) — previously broke with
+    // FW_ERR_BAD_SEQUENCE because NOFLASH was skipped before expected_next++.
+    uf2_block_t b0 = make_block(0, 0, 2);
+    b0.flags        = UF2_FLAG_NOFLASH;
+    b0.target_addr  = 0xDEADBEEFu;  // NOFLASH so address is unchecked
+    uf2_block_t b1 = make_block(0, 1, 2);  // origin block, block_no=1
+    uf2_block_t seq[] = {b0, b1};
+    CHECK_EQUAL(FW_OK, validate_sequence(seq, 2, nullptr));
+}
+
+TEST(Uf2SecurityFixes, B4_DataBlockAfterNoflashHasCorrectNo) {
+    // block_no=0 (data), block_no=1 (NOFLASH), block_no=2 (data) — full sequence
+    uf2_block_t b0 = make_block(0,                      0, 3);
+    uf2_block_t b1 = make_block(TEST_FLASH_SECTOR_SIZE, 1, 3);
+    b1.flags = UF2_FLAG_NOFLASH;
+    uf2_block_t b2 = make_block(TEST_FLASH_SECTOR_SIZE, 2, 3);
+    uf2_block_t seq[] = {b0, b1, b2};
+    CHECK_EQUAL(FW_OK, validate_sequence(seq, 3, nullptr));
+}
+
+TEST(Uf2SecurityFixes, B4_OutOfSequenceAfterNoflashCaughtCorrectly) {
+    // block_no=0 (NOFLASH), block_no=0 (data) — sequence violation: data block
+    // has wrong block_no after NOFLASH consumed slot 0.
+    uf2_block_t b0 = make_block(0, 0, 2);
+    b0.flags = UF2_FLAG_NOFLASH;
+    uf2_block_t b1 = make_block(0, 0, 2);  // block_no=0 again → BAD_SEQUENCE
+    uf2_block_t seq[] = {b0, b1};
+    CHECK_EQUAL(FW_ERR_BAD_SEQUENCE, validate_sequence(seq, 2, nullptr));
 }

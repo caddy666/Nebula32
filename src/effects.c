@@ -451,6 +451,94 @@ static void render_spaceballs(const EffectCtx *ctx) {
 }
 
 /* ------------------------------------------------------------------ */
+/* Effect 5: JUGGLER — procedural 3-ball cascade stick figure          */
+/* ------------------------------------------------------------------ */
+/* Three balls orbit in staggered ellipses; the figure's arm reaches  */
+/* toward whichever ball is at the bottom of its arc (being "caught"). */
+
+static void render_juggler(const EffectCtx *ctx) {
+    ensure_sine();
+
+    // Average spectrum for audio-reactive brightness
+    uint32_t avg = 0;
+    for (int b = 0; b < NUM_BARS; b++) avg += ctx->spectrum[b];
+    avg /= NUM_BARS;
+
+    // Ball orbital positions in canvas space (60×60, CX/CY at centre)
+    float t = (float)ctx->frame * 0.15f;
+    int bx[3], by[3];
+    for (int i = 0; i < 3; i++) {
+        float phase = t + (float)i * 2.0944f;   // 2π/3 offset per ball
+        bx[i] = CX + (int)(11.0f * sinf(phase));
+        by[i] = CY - 22 + (int)(9.0f * cosf(phase));
+    }
+
+    // Find ball at lowest canvas-y (bottom of arc = "hand" position)
+    int lowest = 0;
+    for (int i = 1; i < 3; i++)
+        if (by[i] > by[lowest]) lowest = i;
+
+    // Body landmarks
+    int hy = CY - 38;   // head top
+    int sy = CY - 26;   // shoulder
+    int py = CY - 10;   // pelvis
+
+    // Arm endpoints: one hand reaches to lowest ball, other points upward
+    int lhx, lhy, rhx, rhy;
+    if (bx[lowest] <= CX) {
+        lhx = bx[lowest]; lhy = by[lowest];
+        rhx = CX + 9;     rhy = sy - 6;
+    } else {
+        lhx = CX - 9;     lhy = sy - 6;
+        rhx = bx[lowest]; rhy = by[lowest];
+    }
+
+    memset(sb_canvas, 0, sizeof(sb_canvas));
+
+    // Body (cell value 6 = white in juggler palette)
+    sb_circle(CX, hy, 4, 6);                     // head
+    sb_line(CX, hy + 5, CX, sy, 6);              // neck → shoulder
+    sb_line(CX, sy, CX, py, 6);                  // torso
+    sb_line(CX, sy, lhx, lhy, 3);               // left arm
+    sb_line(CX, sy, rhx, rhy, 4);               // right arm
+    sb_line(CX, py, CX - 7, py + 13, 1);        // left leg
+    sb_line(CX, py, CX + 7, py + 13, 2);        // right leg
+
+    // Balls (cell values 8/9/10 → R/G/B)
+    for (int i = 0; i < 3; i++)
+        sb_circle(bx[i], by[i], 2, (uint8_t)(8 + i));
+
+    // Rasterise canvas → display
+    uint8_t brightness = (uint8_t)(20u + (avg >> 2));
+    uint16_t bg = rgb(brightness >> 2, brightness >> 2, brightness);
+
+    for (int y = 0; y < DISP_H; y++) {
+        int cy_c = y >> 2;
+        for (int x = 0; x < DISP_W; x++) {
+            int cx_c = x >> 2;
+            uint8_t cell = ((unsigned)cy_c < CH && (unsigned)cx_c < CW)
+                           ? sb_canvas[cy_c][cx_c] : 0;
+            if (cell == 0) {
+                line[x] = bg;
+                continue;
+            }
+            uint8_t rv, gv, bv;
+            switch (cell) {
+                case 8:  rv = 230; gv =  40; bv =  40; break;  // red ball
+                case 9:  rv =  40; gv = 230; bv =  40; break;  // green ball
+                case 10: rv =  40; gv = 100; bv = 230; break;  // blue ball
+                default: rv = 210; gv = 210; bv = 210; break;  // body
+            }
+            // Modest audio-reactive highlight
+            uint16_t boost = (uint16_t)(avg >> 3);
+            rv = (rv + boost > 255u) ? 255u : (uint8_t)(rv + boost);
+            line[x] = rgb(rv, gv, bv);
+        }
+        display_hline((uint16_t)y, line);
+    }
+}
+
+/* ------------------------------------------------------------------ */
 /* Public entry point                                                   */
 /* ------------------------------------------------------------------ */
 
@@ -460,6 +548,7 @@ void effects_render(const EffectCtx *ctx) {
         case 1:  render_scope(ctx);      break;
         case 2:  render_raster(ctx);     break;
         case 3:  render_combo(ctx);      break;
-        default: render_spaceballs(ctx); break;
+        case 4:  render_spaceballs(ctx); break;
+        default: render_juggler(ctx);    break;
     }
 }

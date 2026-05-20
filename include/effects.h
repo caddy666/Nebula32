@@ -13,11 +13,12 @@
  *  2 – RASTER     Classic Amiga copper raster bars scrolling sinusoidally
  *  3 – COMBO      Raster bars background + spectrum overlay
  *  4 – SPACEBALLS Chunky 4×4 breakdancer (State of the Art 1992 homage)
+ *  5 – JUGGLER    Procedural Eric-Graham-style juggling stick figure
  */
 
 #define DISP_W     240
 #define DISP_H     240
-#define NUM_EFFECTS 5
+#define NUM_EFFECTS 6
 
 /* Pack R,G,B (0-255 each) into byte-swapped RGB565 (RAMCTRL bswap enabled). */
 static inline uint16_t rgb(uint8_t r, uint8_t g, uint8_t b) {

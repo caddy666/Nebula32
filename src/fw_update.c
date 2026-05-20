@@ -14,6 +14,9 @@
 #include <string.h>
 #include <stdio.h>
 
+#include "display.h"
+#include "logger.h"
+
 // ---------------------------------------------------------------------------
 // UF2 block format (512 bytes per block)
 // ---------------------------------------------------------------------------
@@ -100,6 +103,7 @@ const char *fw_result_str(fw_result_t r) {
         case FW_ERR_NO_BLOCKS:   return "no data blocks in UF2";
         case FW_ERR_NO_ORIGIN:   return "no block at flash offset 0 (wrong binary?)";
         case FW_ERR_VERIFY:      return "Bank 1 verify failed";
+        case FW_ERR_BAD_PAYLOAD: return "payload_size is 0, >476, or not page-aligned";
         default:                 return "unknown error";
     }
 }
@@ -132,7 +136,15 @@ fw_result_t fw_validate(const char *path,
             break;
         }
 
-        // Informational block — skip all further checks
+        // B4 FIX: sequence check applies to ALL blocks (including NOFLASH) so that
+        // a NOFLASH block at position N still consumes its block_no slot.
+        if (blk.block_no != expected_next_block_no) {
+            result = FW_ERR_BAD_SEQUENCE;
+            break;
+        }
+        expected_next_block_no++;
+
+        // Informational block — skip all further checks for this block
         if (blk.flags & UF2_FLAG_NOFLASH)
             continue;
 
@@ -142,12 +154,21 @@ fw_result_t fw_validate(const char *path,
             break;
         }
 
-        // Sequential block_no check: 0, 1, 2, … num_blocks-1
-        if (blk.block_no != expected_next_block_no) {
-            result = FW_ERR_BAD_SEQUENCE;
+        // B2/B3/S3 FIX: reject oversized or unaligned payload_size before any
+        // arithmetic that uses it — prevents wrap-around in the config-page check
+        // and buffer overread in flash_range_program / memcmp.
+        if (blk.payload_size == 0 || blk.payload_size > 476 ||
+            blk.payload_size % FLASH_PAGE_SIZE != 0) {
+            result = FW_ERR_BAD_PAYLOAD;
             break;
         }
-        expected_next_block_no++;
+
+        // B1 FIX: reject SRAM/peripheral addresses (below XIP_BASE); without this
+        // guard the subtraction wraps and bank0_off looks like a valid offset.
+        if (blk.target_addr < XIP_BASE) {
+            result = FW_ERR_TOO_LARGE;
+            break;
+        }
 
         // Address must target Bank 0 XIP space and fit within one bank
         uint32_t bank0_off = blk.target_addr - XIP_BASE;
@@ -214,6 +235,11 @@ fw_result_t fw_flash_and_reboot(const char *path) {
 
     printf("[FW] Validated %lu blocks; starting dual-stage flash\n",
            (unsigned long)num_blocks);
+    LOG_INFO_MSG("FW  ", "validate ok: %lu blocks", (unsigned long)num_blocks);
+    logger_flush();   // drain to SD before Core 1 lockout prevents SDIO access
+
+    // O4: Render firmware-update overlay before locking out Core 1
+    display_fw_progress(0);
 
     // --- Lock out Core 1 for the entire flash operation ---
     // Core 1 spins in SRAM; SDIO DMA on Core 0 continues between flash ops.
@@ -228,6 +254,7 @@ fw_result_t fw_flash_and_reboot(const char *path) {
         flash_range_erase(off, FLASH_SECTOR_SIZE);
         restore_interrupts(ints);
     }
+    display_fw_progress(5);
 
     // ── Stage 1b: Write UF2 blocks to Bank 1 ──
     FIL fil;
@@ -238,8 +265,12 @@ fw_result_t fw_flash_and_reboot(const char *path) {
 
     uf2_block_t blk;
     UINT br;
+    uint32_t blocks_written = 0;
     while (f_read(&fil, &blk, sizeof(blk), &br) == FR_OK && br == sizeof(blk)) {
         if (blk.flags & UF2_FLAG_NOFLASH) continue;
+        // Defense-in-depth guards (already validated, but protect flash_range_program)
+        if (blk.payload_size == 0 || blk.payload_size > 476 ||
+            blk.target_addr < XIP_BASE) continue;
         uint32_t bank0_off = blk.target_addr - XIP_BASE;
         if (bank0_off >= FW_BANK1_OFFSET) continue;
         uint32_t bank1_off = bank0_off + FW_BANK1_OFFSET;
@@ -248,10 +279,14 @@ fw_result_t fw_flash_and_reboot(const char *path) {
         uint32_t ints = save_and_disable_interrupts();
         flash_range_program(bank1_off, blk.data, blk.payload_size);
         restore_interrupts(ints);
+        blocks_written++;
+        if (num_blocks > 0)
+            display_fw_progress((uint8_t)(5u + 65u * blocks_written / num_blocks));
     }
     f_close(&fil);
 
     printf("[FW] Bank 1 write complete; verifying via XIP\n");
+    display_fw_progress(70);
 
     // ── Stage 2: Verify Bank 1 via XIP readback ──
     // If this fails, Bank 0 is untouched — safe to return error.
@@ -263,6 +298,10 @@ fw_result_t fw_flash_and_reboot(const char *path) {
     r = FW_OK;
     while (f_read(&fil, &blk, sizeof(blk), &br) == FR_OK && br == sizeof(blk)) {
         if (blk.flags & UF2_FLAG_NOFLASH) continue;
+        // S3 FIX: same payload_size and address guards as B1/B2 — prevents
+        // memcmp reading past blk.data[476] with an oversized payload_size.
+        if (blk.payload_size == 0 || blk.payload_size > 476 ||
+            blk.target_addr < XIP_BASE) continue;
         uint32_t bank0_off = blk.target_addr - XIP_BASE;
         if (bank0_off >= FW_BANK1_OFFSET) continue;
         uint32_t bank1_off = bank0_off + FW_BANK1_OFFSET;
@@ -278,15 +317,28 @@ fw_result_t fw_flash_and_reboot(const char *path) {
     if (r != FW_OK) {
         multicore_lockout_end_blocking();
         printf("[FW] Verify FAILED — Bank 0 untouched\n");
+        LOG_INFO_MSG("FW  ", "verify FAIL");
         return r;
     }
 
     printf("[FW] Verify OK; copying Bank 1 → Bank 0\n");
+    display_fw_progress(85);
 
     // ── Stage 3: Copy Bank 1 → Bank 0 (commit) ──
     // Uses the erase_map to find which Bank 1 sectors contain new firmware.
     // For each such sector: copy 4 KB via XIP to SRAM, erase Bank 0 sector,
     // then program Bank 0 from SRAM.
+    //
+    // B7 FIX: IRQs are re-enabled between the sector erase and each page-write
+    // (and between page-writes).  The original code held IRQs disabled across
+    // erase (~50 ms) + 16 page-writes (~7.2 ms each) = ~115 ms per sector,
+    // suppressing SDIO, USB, and the watchdog for a 150 KB firmware (~40 s total).
+    uint32_t sectors_to_copy = 0;
+    for (uint32_t s = FW_BANK1_FIRST_SECTOR; s < (uint32_t)FW_TOTAL_SECTORS; s++) {
+        if (erase_map_get(erase_map, s)) sectors_to_copy++;
+    }
+    uint32_t sectors_copied = 0;
+
     for (uint32_t s = FW_BANK1_FIRST_SECTOR; s < (uint32_t)FW_TOTAL_SECTORS; s++) {
         if (!erase_map_get(erase_map, s)) continue;
 
@@ -298,23 +350,46 @@ fw_result_t fw_flash_and_reboot(const char *path) {
         memcpy(s_sector_buf, (const uint8_t *)(XIP_BASE + bank1_sect_off),
                FLASH_SECTOR_SIZE);
 
-        // Erase + program Bank 0 sector from SRAM buffer
+        // Erase Bank 0 sector (own IRQ window)
         uint32_t ints = save_and_disable_interrupts();
         flash_range_erase(bank0_sect_off, FLASH_SECTOR_SIZE);
+        restore_interrupts(ints);
+
+        // Program Bank 0 sector page-by-page (each page gets its own IRQ window)
         for (uint32_t p = 0; p < FLASH_SECTOR_SIZE; p += FLASH_PAGE_SIZE) {
+            ints = save_and_disable_interrupts();
             flash_range_program(bank0_sect_off + p,
                                 s_sector_buf + p,
                                 FLASH_PAGE_SIZE);
+            restore_interrupts(ints);
         }
-        restore_interrupts(ints);
+
+        sectors_copied++;
+        if (sectors_to_copy > 0)
+            display_fw_progress((uint8_t)(85u + 14u * sectors_copied / sectors_to_copy));
     }
 
     multicore_lockout_end_blocking();
 
     printf("[FW] Flash complete; rebooting\n");
+    display_fw_progress(100);
+    LOG_INFO_MSG("FW  ", "commit ok; rebooting");
+    logger_flush();
 
-    // Rename sentinel so boot-time check does not re-flash on next power cycle
-    f_rename(path, "NEBULA32.OLD");
+    // B5 FIX: add "0:/" volume prefix to destination so FF_MULTI_PARTITION=1
+    // builds don't reject the cross-prefix rename.
+    // B6 FIX: check return value — if rename fails, NEBULA32.UF2 stays on SD
+    // and the sentinel fires again on the next power-on (infinite re-flash loop).
+    FRESULT rename_r = f_rename(path, "0:/NEBULA32.OLD");
+    if (rename_r != FR_OK)
+        printf("[FW] WARNING: rename sentinel failed (%d) — remove NEBULA32.UF2 manually\n",
+               (int)rename_r);
+    LOG_INFO_MSG("FW  ", "rename sentinel: %d", (int)rename_r);
+    logger_flush();
+
+    // O6: Signal to main.c that we just did a successful flash.  The scratch
+    // register survives a watchdog reboot but is cleared on power-cycle.
+    watchdog_hw->scratch[0] = FW_UPDATE_MAGIC;
 
     // Stage 4: watchdog reboot — bootrom starts new firmware from offset 0
     watchdog_reboot(0, 0, 0);

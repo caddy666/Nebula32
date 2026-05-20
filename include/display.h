@@ -48,6 +48,20 @@ void display_hline(uint16_t y, const uint16_t *pixels);
 // Fill a rectangle with a single LE-RGB565 colour.
 void display_fill_rect(uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint16_t colour);
 
+// ---------------------------------------------------------------------------
+// Firmware update display
+// ---------------------------------------------------------------------------
+
+// Render a firmware-update progress overlay (pct 0–100).
+// On the first call (pct == 0) draws the full black background and chrome.
+// Subsequent calls only update the progress bar — safe to call between
+// individual flash_range_program calls while Core 1 is locked out.
+void display_fw_progress(uint8_t pct);
+
+// ~2-second Boing Ball celebration animation played on the first boot after a
+// successful firmware update (detected via watchdog scratch register in main.c).
+void display_fw_success_animation(void);
+
 #ifdef __cplusplus
 }
 #endif

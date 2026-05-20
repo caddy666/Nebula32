@@ -382,6 +382,145 @@ extern "C" void display_show_text(const char *line1, const char *line2) {
            line1 ? line1 : "", line2 ? line2 : "");
 }
 
+// ---------------------------------------------------------------------------
+// Firmware update progress overlay
+// ---------------------------------------------------------------------------
+// Renders a minimal progress UI using only direct SPI writes — safe to call
+// while Core 1 is locked out and IRQs are cycling on/off between flash ops.
+// ---------------------------------------------------------------------------
+
+extern "C" void display_fw_progress(uint8_t pct) {
+    static bool bg_drawn = false;
+
+    if (!bg_drawn || pct == 0) {
+        // Black background
+        st7789_fill(rgb(0, 0, 0));
+
+        // Amber header band (40 px tall)
+        display_fill_rect(0, 20, DISPLAY_WIDTH, 40, rgb(220, 130, 0));
+
+        // Bar track (dark grey, 200 × 20 px, centred)
+        display_fill_rect(20, 140, 200, 20, rgb(35, 35, 35));
+
+        bg_drawn = true;
+    }
+
+    // Progress bar fill — green proportional region, dark-grey remainder
+    uint16_t fill_w = (uint16_t)(200u * (uint32_t)pct / 100u);
+    if (fill_w > 0)
+        display_fill_rect(20, 140, fill_w, 20, rgb(30, 200, 60));
+    if (fill_w < 200)
+        display_fill_rect((uint16_t)(20 + fill_w), 140,
+                          (uint16_t)(200 - fill_w), 20, rgb(35, 35, 35));
+}
+
+// ---------------------------------------------------------------------------
+// Firmware update success animation — Amiga Boing Ball (~2 s)
+// ---------------------------------------------------------------------------
+// Rendered entirely on Core 0 using direct SPI.  Uses atan2f/asinf with the
+// RP2350 FPU for per-pixel spherical UV mapping of the checker pattern.
+// ---------------------------------------------------------------------------
+
+#include <math.h>
+
+// Draw the grey grid background into the full framebuffer.
+static void draw_grid_bg(void) {
+    static uint16_t row[DISPLAY_WIDTH];
+    uint16_t light = rgb(210, 210, 210);
+    uint16_t dark  = rgb(140, 140, 140);
+    for (int y = 0; y < DISPLAY_HEIGHT; y++) {
+        bool h_line = ((y % 24) == 0);
+        for (int x = 0; x < DISPLAY_WIDTH; x++) {
+            bool v_line = ((x % 24) == 0);
+            row[x] = (h_line || v_line) ? dark : light;
+        }
+        display_hline((uint16_t)y, row);
+    }
+}
+
+// Render the boing ball at pixel centre (cx, cy), radius r, rotation rot_t.
+// Clears the ball's bounding box to background before drawing.
+static void draw_boing_ball(int cx, int cy, int r, float rot_t) {
+    static uint16_t row[DISPLAY_WIDTH];
+    uint16_t light = rgb(210, 210, 210);
+    uint16_t dark  = rgb(140, 140, 140);
+    float rf = (float)r;
+
+    for (int y = cy - r; y <= cy + r; y++) {
+        if (y < 0 || y >= DISPLAY_HEIGHT) continue;
+        float dy = (float)(y - cy);
+        float dx_maxf = sqrtf(rf * rf - dy * dy);
+        int x0 = cx - (int)dx_maxf;
+        int x1 = cx + (int)dx_maxf;
+        if (x0 < 0) x0 = 0;
+        if (x1 >= DISPLAY_WIDTH) x1 = DISPLAY_WIDTH - 1;
+
+        // Fill the full row with background first (handles partial clipping)
+        for (int x = 0; x < DISPLAY_WIDTH; x++) {
+            bool h_line = ((y % 24) == 0);
+            bool v_line = ((x % 24) == 0);
+            row[x] = (h_line || v_line) ? dark : light;
+        }
+
+        // Overdraw the ball pixels
+        for (int x = x0; x <= x1; x++) {
+            float nx = (float)(x - cx) / rf;
+            float ny = dy / rf;
+            float nz_sq = 1.0f - nx * nx - ny * ny;
+            if (nz_sq < 0.0f) continue;
+            float nz = sqrtf(nz_sq);
+
+            // Spherical UV: theta around equator, phi from south pole
+            float theta = atan2f(ny, nx);            // -π..π
+            float phi   = asinf(nz);                 //  0..π/2
+
+            // 8 sectors around, 6 rows pole-to-pole; XOR gives checker
+            int u = (int)((theta / (float)M_PI + 1.0f + rot_t) * 4.0f);
+            int v = (int)(((phi + (float)(M_PI / 2)) / (float)M_PI) * 6.0f);
+            bool red = ((u ^ v) & 1) != 0;
+
+            // Lambert shading: nz=1 at highlight, nz=0 at silhouette
+            float shade = nz * 0.75f + 0.25f;
+            uint8_t rv = red ? (uint8_t)(205.0f * shade) : (uint8_t)(245.0f * shade);
+            uint8_t gv = red ? (uint8_t)(25.0f  * shade) : (uint8_t)(245.0f * shade);
+            uint8_t bv = red ? (uint8_t)(25.0f  * shade) : (uint8_t)(245.0f * shade);
+            row[x] = rgb(rv, gv, bv);
+        }
+
+        display_hline((uint16_t)y, row);
+    }
+}
+
+extern "C" void display_fw_success_animation(void) {
+    const int BALL_R   = 52;
+    const int FRAMES   = 45;   // ~3 s at ~15 fps
+    const float ROT_STEP = 0.12f;
+
+    // Draw background once
+    draw_grid_bg();
+
+    // Ball starts slightly off-centre; bounces off walls
+    int bx = 90, by = 90;
+    int vx =  5, vy =  4;
+    float rot = 0.0f;
+
+    for (int f = 0; f < FRAMES; f++) {
+        draw_boing_ball(bx, by, BALL_R, rot);
+
+        bx += vx; by += vy;
+        if (bx - BALL_R < 0)              { bx = BALL_R;              vx = -vx; }
+        if (bx + BALL_R >= DISPLAY_WIDTH)  { bx = DISPLAY_WIDTH  - 1 - BALL_R; vx = -vx; }
+        if (by - BALL_R < 0)              { by = BALL_R;              vy = -vy; }
+        if (by + BALL_R >= DISPLAY_HEIGHT) { by = DISPLAY_HEIGHT - 1 - BALL_R; vy = -vy; }
+        rot += ROT_STEP;
+
+        sleep_ms(65);   // ~15 fps
+    }
+
+    // Leave a clean black screen before normal boot continues
+    st7789_fill(rgb(0, 0, 0));
+}
+
 extern "C" void display_show_cover(const char *disc_image_path) {
     if (!disc_image_path || disc_image_path[0] == '\0') {
         show_default();
