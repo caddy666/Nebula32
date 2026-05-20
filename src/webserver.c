@@ -25,6 +25,7 @@
 #include "webserver.h"
 #include "logger.h"
 #include "sd_card_api.h"
+#include "fw_update.h"
 #include "disc_image.h"   // MAX_PATH_LEN
 #include "cd_types.h"
 #include "commo_bridge.h" // commo_bridge_get_drive_state()
@@ -453,6 +454,25 @@ static char *build_html_page(void) {
              has_next ? "" : "disabled");
     }
 
+    // Firmware update section
+    HCAT("<details style='margin:12px 0;padding:10px;background:#16213e;"
+         "border:1px solid #0f3460;border-radius:8px;'>"
+         "<summary style='cursor:pointer;color:#e94560;font-weight:bold;"
+         "user-select:none'>&#128268; Firmware Update</summary>"
+         "<div style='margin-top:10px;display:flex;gap:8px;align-items:center;'>"
+         "<select id='fw-sel' style='flex:1;padding:6px;background:#1a1a2e;"
+         "color:#e0e0e0;border:1px solid #0f3460;border-radius:4px;'>"
+         "<option value=''>-- loading --</option>"
+         "</select>"
+         "<button onclick='flashFw()'"
+         " style='padding:6px 14px;background:#e94560;color:#fff;"
+         "border:none;border-radius:4px;cursor:pointer;'>"
+         "Flash &amp; Reboot"
+         "</button>"
+         "</div>"
+         "<p id='fw-msg' style='margin:6px 0 0;font-size:.85em;color:#aaa;'></p>"
+         "</details>");
+
     // JavaScript
     HCAT("<script>"
          "function changePage(delta){"
@@ -478,6 +498,42 @@ static char *build_html_page(void) {
          "    });"
          "  }})"
          "  .catch(e=>console.error(e));"
+         "}"
+         /* Firmware update helpers — safe DOM, no innerHTML */
+         "(function(){"
+         "var sel=document.getElementById('fw-sel');"
+         "var msg=document.getElementById('fw-msg');"
+         "fetch('/api/fw/list').then(function(r){return r.json();})"
+         ".then(function(d){"
+         "  sel.textContent='';"
+         "  if(!d.files||!d.files.length){"
+         "    var o=document.createElement('option');"
+         "    o.textContent='No .uf2 files found';"
+         "    sel.appendChild(o);return;}"
+         "  d.files.forEach(function(f){"
+         "    var o=document.createElement('option');"
+         "    o.value=f;o.textContent=f;sel.appendChild(o);});"
+         "}).catch(function(){"
+         "  sel.textContent='';"
+         "  var o=document.createElement('option');"
+         "  o.textContent='SD not ready';sel.appendChild(o);});"
+         "})();"
+         "function flashFw(){"
+         "  var name=document.getElementById('fw-sel').value;"
+         "  var msg=document.getElementById('fw-msg');"
+         "  if(!name||name===''||!confirm('Flash '+name+' and reboot?'))return;"
+         "  msg.textContent='Flashing… do not power off.';"
+         "  fetch('/api/fw/flash/'+encodeURIComponent(name),{method:'POST'})"
+         "  .then(function(r){return r.json();})"
+         "  .then(function(d){"
+         "    if(d.ok){"
+         "      var h=document.createElement('h2');"
+         "      h.textContent='Flashing… device will reboot in a few seconds.';"
+         "      document.body.textContent='';"
+         "      document.body.appendChild(h);"
+         "    } else {"
+         "      msg.textContent='Error: '+(d.error||'unknown');}"
+         "  }).catch(function(){msg.textContent='No response — device may be rebooting.';});"
          "}"
          "</script>");
 
@@ -683,6 +739,60 @@ static void handle_request(struct tcp_pcb *pcb, http_conn_t *conn) {
         snprintf(s_resp_buf, sizeof(s_resp_buf),
             "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
             "Connection: close\r\n\r\n{\"ok\":true}");
+        tcp_write(pcb, s_resp_buf, strlen(s_resp_buf), TCP_WRITE_FLAG_COPY);
+        tcp_output(pcb);
+        return;
+    }
+
+    // ── GET /api/fw/list ── List .uf2 firmware files on SD root
+    if (is_get && strcmp(path, "/api/fw/list") == 0) {
+        char fw_paths[8][MAX_PATH_LEN];
+        uint32_t n = sd_scan_uf2_files(fw_paths, 8, "0:/", 0);
+        int pos = snprintf(s_resp_buf, sizeof(s_resp_buf),
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+            "Connection: close\r\n\r\n{\"files\":[");
+        for (uint32_t i = 0; i < n && pos < (int)sizeof(s_resp_buf) - 4; i++) {
+            // Strip the "0:/" prefix for the client
+            const char *name = fw_paths[i];
+            if (name[0] == '0' && name[1] == ':' && name[2] == '/') name += 3;
+            char esc[MAX_PATH_LEN * 2];
+            json_escape(esc, sizeof(esc), name);
+            pos += snprintf(s_resp_buf + pos, sizeof(s_resp_buf) - pos,
+                "%s\"%s\"", i ? "," : "", esc);
+        }
+        snprintf(s_resp_buf + pos, sizeof(s_resp_buf) - pos, "]}");
+        tcp_write(pcb, s_resp_buf, strlen(s_resp_buf), TCP_WRITE_FLAG_COPY);
+        tcp_output(pcb);
+        return;
+    }
+
+    // ── POST /api/fw/flash/{filename} ── Validate + flash UF2 from SD root
+    if (is_post && strncmp(path, "/api/fw/flash/", 14) == 0) {
+        const char *fname = path + 14;
+        // Reject path traversal
+        if (strstr(fname, "..") || strstr(fname, "/")) {
+            static const char *bad =
+                "HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\n"
+                "Connection: close\r\n\r\n{\"ok\":false,\"error\":\"invalid filename\"}";
+            tcp_write(pcb, bad, strlen(bad), TCP_WRITE_FLAG_COPY);
+            tcp_output(pcb);
+            return;
+        }
+        char full_path[MAX_PATH_LEN];
+        snprintf(full_path, sizeof(full_path), "0:/%s", fname);
+        // Acknowledge before the blocking flash operation
+        static const char *ack =
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+            "Connection: close\r\n\r\n{\"ok\":true,\"msg\":\"flashing\"}";
+        tcp_write(pcb, ack, strlen(ack), TCP_WRITE_FLAG_COPY);
+        tcp_output(pcb);
+        // fw_flash_and_reboot never returns on success; returns error code on failure
+        fw_result_t fr = fw_flash_and_reboot(full_path);
+        snprintf(s_resp_buf, sizeof(s_resp_buf),
+            "HTTP/1.1 500 Internal Server Error\r\n"
+            "Content-Type: application/json\r\n"
+            "Connection: close\r\n\r\n{\"ok\":false,\"error\":\"%s\"}",
+            fw_result_str(fr));
         tcp_write(pcb, s_resp_buf, strlen(s_resp_buf), TCP_WRITE_FLAG_COPY);
         tcp_output(pcb);
         return;

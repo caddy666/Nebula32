@@ -166,3 +166,60 @@ uint32_t sd_count_images(const char *base_dir) {
 bool sd_card_is_ready(void) {
     return s_mounted;
 }
+
+// =============================================================================
+// UF2 firmware file scanning
+// =============================================================================
+
+static bool is_uf2_file(const char *name) {
+    size_t len = strlen(name);
+    return len > 4 && strcasecmp(name + len - 4, ".uf2") == 0;
+}
+
+uint32_t sd_scan_uf2_files(char paths[][MAX_PATH_LEN], uint32_t max_count,
+                           const char *base_dir, uint32_t offset) {
+    if (!s_mounted) return 0;
+    if (!base_dir || base_dir[0] == '\0') base_dir = "0:/";
+
+    DIR      dir;
+    FILINFO  fno;
+    uint32_t skipped = 0;
+    uint32_t count   = 0;
+
+    if (f_opendir(&dir, base_dir) != FR_OK) return 0;
+
+    while (count < max_count) {
+        if (f_readdir(&dir, &fno) != FR_OK || fno.fname[0] == '\0') break;
+        if (fno.fattrib & AM_DIR) continue;
+        if (!is_uf2_file(fno.fname)) continue;
+        if (skipped < offset) { skipped++; continue; }
+        snprintf(paths[count], MAX_PATH_LEN, "%s%s", base_dir, fno.fname);
+        count++;
+    }
+
+    f_closedir(&dir);
+
+    if (count > 1)
+        qsort(paths, (size_t)count, sizeof(paths[0]), _path_cmp);
+
+    return count;
+}
+
+uint32_t sd_count_uf2_files(const char *base_dir) {
+    if (!s_mounted) return 0;
+    if (!base_dir || base_dir[0] == '\0') base_dir = "0:/";
+
+    DIR      dir;
+    FILINFO  fno;
+    uint32_t count = 0;
+
+    if (f_opendir(&dir, base_dir) != FR_OK) return 0;
+
+    while (true) {
+        if (f_readdir(&dir, &fno) != FR_OK || fno.fname[0] == '\0') break;
+        if (!(fno.fattrib & AM_DIR) && is_uf2_file(fno.fname)) count++;
+    }
+
+    f_closedir(&dir);
+    return count;
+}

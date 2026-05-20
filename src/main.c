@@ -46,6 +46,7 @@
 
 #include "cd_types.h"
 #include "da_output.h"
+#include "fw_update.h"
 #include "disc_image.h"
 #include "sector_cache.h"
 #include "sd_card_api.h"
@@ -408,6 +409,15 @@ int main(void) {
     // Logger init reads cd32_ode.cfg (including sdcard_base) before the image
     // scan so that sd_scan_images() uses the configured directory.
     logger_init();
+
+    // Boot-time firmware update sentinel: if NEBULA32.UF2 exists in SD root,
+    // flash it to Bank 1, verify, copy to Bank 0, rename to NEBULA32.OLD, reboot.
+    // fw_flash_and_reboot never returns on success; any error falls through.
+    {
+        fw_result_t fw_r = fw_flash_and_reboot("0:/NEBULA32.UF2");
+        if (fw_r != FW_ERR_NOT_FOUND)
+            printf("[FW] Boot update failed: %s\n", fw_result_str(fw_r));
+    }
 
     s_total_count = sd_count_images(logger_get_config()->sdcard_base);
     if (s_total_count == 0) {

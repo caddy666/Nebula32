@@ -1,0 +1,359 @@
+CC      = gcc
+CXX     = g++
+
+UBSAN   = -fsanitize=undefined -fno-sanitize-recover=all
+
+CFLAGS  = -std=c11 -Wall -Wextra -Werror -O2 -D_GNU_SOURCE \
+          -I../stubs \
+          -I../../include \
+          -I../../upstream/include \
+          -DSECTOR_BUFFER_COUNT=8 \
+          -DMAX_TRACKS=99 \
+          -DMAX_PATH_LEN=256 \
+          -DBUILD_WITH_COMMO=0 \
+          $(UBSAN)
+
+CXXFLAGS = -std=c++14 -Wall -Wextra -Werror -O2 -D_GNU_SOURCE \
+           -I../stubs \
+           -I../../include \
+           -I../../upstream/include \
+           -I/usr/include \
+           -DSECTOR_BUFFER_COUNT=8 \
+           -DMAX_TRACKS=99 \
+           -DMAX_PATH_LEN=256 \
+           -DBUILD_WITH_COMMO=0 \
+           $(UBSAN)
+
+# Extended warning flags for the `warn` target — stricter than the default build.
+# Applied only to production C source files (not test files or CppUTest boilerplate).
+WARN_FLAGS = -std=c11 -Wall -Wextra -Werror \
+             -Wshadow -Wformat=2 -Wconversion -Wdouble-promotion \
+             -Wmissing-declarations -Wnull-dereference \
+             -D_GNU_SOURCE \
+             -I../stubs \
+             -I../../include \
+             -I../../upstream/include \
+             -DSECTOR_BUFFER_COUNT=8 \
+             -DMAX_TRACKS=99 \
+             -DMAX_PATH_LEN=256 \
+             -DBUILD_WITH_COMMO=0
+
+# Production C sources scanned by `warn` and `cppcheck` (no test or stub files).
+WARN_SRCS = \
+    ../../src/ecc.c \
+    ../../src/subcode.c \
+    ../../src/fft.c \
+    ../../src/vis_audio.c \
+    ../../src/sector_cache.c \
+    ../../upstream/utils/maths.c \
+    ../../upstream/core/commo.c
+
+SRCS_C = \
+    ../../src/ecc.c \
+    ../../src/subcode.c \
+    ../../src/fft.c \
+    ../../src/vis_audio.c \
+    ../../src/sector_cache.c \
+    ../../upstream/utils/maths.c \
+    ../../upstream/core/commo.c \
+    commo_hal_stub.c \
+    disc_image_stub.c
+
+SRCS_CPP = \
+    main.cpp \
+    test_lba_msf.cpp \
+    test_ecc.cpp \
+    test_subcode.cpp \
+    test_fft.cpp \
+    test_vis_audio.cpp \
+    test_sector_cache.cpp \
+    test_maths.cpp \
+    test_csv_replay.cpp \
+    test_csv_replay_pon_poff.cpp \
+    test_csv_replay_zool2.cpp \
+    test_csv_replay_pinball.cpp \
+    test_door_tray.cpp \
+    test_opc_responses.cpp \
+    test_motor_sled_fake.cpp \
+    test_priority.cpp \
+    test_disc_logic.cpp \
+    test_webserver.cpp \
+    test_logger.cpp \
+    test_config.cpp \
+    test_da_expand.cpp \
+    test_da_speed.cpp \
+    test_commo_protocol.cpp \
+    test_effects_color.cpp \
+    test_akiko_dma.cpp \
+    test_ipc_desync.cpp \
+    test_subchannel_math.cpp \
+    test_webserver_html.cpp \
+    test_supplemental.cpp \
+    test_fw_update.cpp
+
+OBJS_C   = $(SRCS_C:.c=.o)
+OBJS_CPP = $(SRCS_CPP:.cpp=.o)
+
+# webserver.c compiled with Pico W + test stubs active.
+# -Wall/-Wextra/-Werror are omitted because the lwIP/CYW43 stub headers
+# produce unused-function warnings that are intentional.
+WEBSERVER_TEST_CFLAGS = -std=c11 -O2 -D_GNU_SOURCE \
+    -I../stubs \
+    -I../../include \
+    -I../../upstream/include \
+    -DSECTOR_BUFFER_COUNT=8 \
+    -DMAX_TRACKS=99 \
+    -DMAX_PATH_LEN=256 \
+    -DBUILD_WITH_COMMO=0 \
+    -DPICO_CYW43_SUPPORTED \
+    -DWEBSERVER_TEST_BUILD \
+    $(UBSAN)
+
+# Output directory for compiled binaries — override from top-level Makefile.
+# Object files remain in-place (gitignored via *.o).
+OUTDIR ?= .
+
+.PHONY: all test run warn cppcheck check check-srcs clean
+
+all: $(OUTDIR)/cd32_tests
+
+$(OUTDIR)/cd32_tests: $(OBJS_C) $(OBJS_CPP) webserver_html_test.o
+	@mkdir -p $(OUTDIR)
+	$(CXX) $(UBSAN) $^ -o $@ -lCppUTest -lstdc++ -lm
+
+webserver_html_test.o: ../../src/webserver.c
+	$(CC) $(WEBSERVER_TEST_CFLAGS) -c $< -o $@
+
+%.o: %.c
+	$(CC) $(CFLAGS) -c $< -o $@
+
+%.o: %.cpp
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+
+run: $(OUTDIR)/cd32_tests
+	$(OUTDIR)/cd32_tests -v
+
+# Extended warning scan — -fsyntax-only produces no object files, runs all diagnostics.
+# Covers production C sources only; -Wconversion and friends would be noisy in test code.
+warn:
+	@echo "[warn] Extended -Wconversion/-Wshadow/-Wformat=2 scan..."
+	@for f in $(WARN_SRCS); do \
+	  $(CC) $(WARN_FLAGS) -fsyntax-only "$$f" || exit 1; \
+	done
+	@echo "[warn] OK"
+
+# Run cppcheck if installed; skip gracefully otherwise.
+# --suppress=missingIncludeSystem avoids noise from system headers we don't ship.
+cppcheck:
+	@if command -v cppcheck >/dev/null 2>&1; then \
+	  echo "[cppcheck] running..."; \
+	  cppcheck --error-exitcode=1 --enable=all \
+	    --suppress=missingIncludeSystem \
+	    --suppress=unusedFunction \
+	    -I../../include -I../../upstream/include \
+	    -DSECTOR_BUFFER_COUNT=8 -DMAX_TRACKS=99 \
+	    -DMAX_PATH_LEN=256 -DBUILD_WITH_COMMO=0 \
+	    ../../src/ ../../upstream/utils/; \
+	  echo "[cppcheck] OK"; \
+	else \
+	  echo "[cppcheck] skipped — not installed (apt install cppcheck)"; \
+	fi
+
+check-srcs:
+	@bash check-srcs.sh
+
+# Full CI gate: source check → build → test → extended warnings → static analysis
+check: check-srcs $(OUTDIR)/cd32_tests warn cppcheck
+	$(OUTDIR)/cd32_tests -v
+
+# Build and run all three test binaries.
+test: $(OUTDIR)/cd32_tests $(OUTDIR)/parser_tests $(OUTDIR)/vdisc_tests
+	$(OUTDIR)/cd32_tests
+	$(OUTDIR)/parser_tests -v
+	$(OUTDIR)/vdisc_tests -v
+
+# ---------------------------------------------------------------------------
+# Pthreaded stress test — TSan build (separate binary; TSan and UBSan cannot
+# be linked together).
+#
+# Build: make stress_tests  (or make stress_sector_cache)
+# Run:   ./build/tests/stress_tests
+#        TSan output goes to stderr; any "DATA RACE" line means a real bug.
+#
+# Uses -O1: high enough for the compiler to reorder, low enough for TSan to
+# instrument reliably.  Objects are prefixed stress_ to avoid colliding with
+# the UBSan .o files above.
+# ---------------------------------------------------------------------------
+TSAN = -fsanitize=thread
+
+STRESS_CFLAGS = -std=c11 -Wall -Wextra -O1 -D_GNU_SOURCE \
+                -I../stubs -I../../include -I../../upstream/include \
+                -DSECTOR_BUFFER_COUNT=8 -DMAX_TRACKS=99 -DMAX_PATH_LEN=256 \
+                -DBUILD_WITH_COMMO=0 $(TSAN)
+
+STRESS_CXXFLAGS = -std=c++14 -Wall -Wextra -O1 -D_GNU_SOURCE \
+                  -I../stubs -I../../include -I../../upstream/include \
+                  -DSECTOR_BUFFER_COUNT=8 -DMAX_TRACKS=99 -DMAX_PATH_LEN=256 \
+                  -DBUILD_WITH_COMMO=0 $(TSAN)
+
+stress_vis_audio.o: ../../src/vis_audio.c
+	$(CC)  $(STRESS_CFLAGS)   -c $< -o $@
+
+stress_fft.o: ../../src/fft.c
+	$(CC)  $(STRESS_CFLAGS)   -c $< -o $@
+
+stress_test.o: test_vis_audio_stress.cpp
+	$(CXX) $(STRESS_CXXFLAGS) -c $< -o $@
+
+$(OUTDIR)/stress_tests: stress_vis_audio.o stress_fft.o stress_test.o
+	@mkdir -p $(OUTDIR)
+	$(CXX) $(TSAN) $^ -o $@ -lstdc++ -lm -lpthread
+
+# ---------------------------------------------------------------------------
+# sector_cache lock-free stress test — TSan build (separate binary).
+# producer thread = Core 1 prefetch; consumer thread = Core 0 DA delivery.
+# Verifies __atomic_acquire/release barriers under concurrent access.
+#
+# Build: make stress_sector_cache
+# Run:   ./build/tests/stress_sector_cache
+# ---------------------------------------------------------------------------
+stress_sc_cache.o: ../../src/sector_cache.c
+	$(CC)  $(STRESS_CFLAGS)   -c $< -o $@
+
+stress_sc_test.o: test_sector_cache_stress.cpp
+	$(CXX) $(STRESS_CXXFLAGS) -c $< -o $@
+
+$(OUTDIR)/stress_sector_cache: stress_sc_cache.o stress_sc_test.o
+	@mkdir -p $(OUTDIR)
+	$(CXX) $(TSAN) $^ -o $@ -lstdc++ -lm -lpthread
+
+# Convenience phony aliases so `make stress_tests` / `make stress_sector_cache` still work.
+stress_tests:      $(OUTDIR)/stress_tests
+stress_sector_cache: $(OUTDIR)/stress_sector_cache
+
+# ---------------------------------------------------------------------------
+# Parser malformed-input tests — compile disc_image.c directly against the
+# injectable FatFS simulation (tests/host/ff.h shadows tests/stubs/ff.h via -I.).
+# A separate binary avoids duplicate-symbol conflicts with disc_image_stub.c.
+# Build: make parser_tests
+# Run:   ./build/tests/parser_tests -v
+# ---------------------------------------------------------------------------
+PARSER_CFLAGS = -std=c11 -Wall -Wextra -O2 -D_GNU_SOURCE \
+                -I. \
+                -I../stubs \
+                -I../../include \
+                -I../../upstream/include \
+                -DSECTOR_BUFFER_COUNT=8 -DMAX_TRACKS=99 \
+                -DMAX_PATH_LEN=256 -DBUILD_WITH_COMMO=0 \
+                $(UBSAN)
+
+PARSER_CXXFLAGS = -std=c++14 -Wall -Wextra -O2 -D_GNU_SOURCE \
+                  -I. \
+                  -I../stubs \
+                  -I../../include \
+                  -I../../upstream/include \
+                  -I/usr/include \
+                  -DSECTOR_BUFFER_COUNT=8 -DMAX_TRACKS=99 \
+                  -DMAX_PATH_LEN=256 -DBUILD_WITH_COMMO=0 \
+                  $(UBSAN)
+
+parser_disc_image.o: ../../src/disc_image.c
+	$(CC) $(PARSER_CFLAGS) -c $< -o $@
+
+parser_virtual_disc.o: ../../src/virtual_disc.c
+	$(CC) $(PARSER_CFLAGS) -c $< -o $@
+
+parser_ecc.o: ../../src/ecc.c
+	$(CC) $(PARSER_CFLAGS) -c $< -o $@
+
+parser_subcode.o: ../../src/subcode.c
+	$(CC) $(PARSER_CFLAGS) -c $< -o $@
+
+parser_maths.o: ../../upstream/utils/maths.c
+	$(CC) $(PARSER_CFLAGS) -c $< -o $@
+
+parser_fatfs_sim.o: fatfs_sim.c
+	$(CC) $(PARSER_CFLAGS) -c $< -o $@
+
+parser_main.o: main.cpp
+	$(CXX) $(PARSER_CXXFLAGS) -c $< -o $@
+
+parser_test.o: test_disc_parser.cpp
+	$(CXX) $(PARSER_CXXFLAGS) -c $< -o $@
+
+$(OUTDIR)/parser_tests: parser_disc_image.o parser_virtual_disc.o parser_ecc.o parser_subcode.o \
+              parser_maths.o \
+              parser_fatfs_sim.o parser_main.o parser_test.o
+	@mkdir -p $(OUTDIR)
+	$(CXX) $(UBSAN) $^ -o $@ -lCppUTest -lstdc++ -lm
+
+parser_tests: $(OUTDIR)/parser_tests
+
+# ---------------------------------------------------------------------------
+# Virtual disc ISO 9660 synthesiser tests — compile virtual_disc.c and
+# disc_image.c directly against the vdisc_sim FatFS simulation.
+# A separate binary avoids duplicate-symbol conflicts with disc_image_stub.c.
+# Build: make vdisc_tests
+# Run:   ./build/tests/vdisc_tests -v
+# ---------------------------------------------------------------------------
+VDISC_CFLAGS = -std=c11 -Wall -Wextra -O2 -D_GNU_SOURCE \
+               -I. \
+               -I../stubs \
+               -I../../include \
+               -I../../upstream/include \
+               -DSECTOR_BUFFER_COUNT=8 -DMAX_TRACKS=99 \
+               -DMAX_PATH_LEN=256 -DBUILD_WITH_COMMO=0 \
+               $(UBSAN)
+
+VDISC_CXXFLAGS = -std=c++14 -Wall -Wextra -O2 -D_GNU_SOURCE \
+                 -I. \
+                 -I../stubs \
+                 -I../../include \
+                 -I../../upstream/include \
+                 -I/usr/include \
+                 -DSECTOR_BUFFER_COUNT=8 -DMAX_TRACKS=99 \
+                 -DMAX_PATH_LEN=256 -DBUILD_WITH_COMMO=0 \
+                 $(UBSAN)
+
+vdisc_virtual_disc.o: ../../src/virtual_disc.c
+	$(CC) $(VDISC_CFLAGS) -c $< -o $@
+
+vdisc_disc_image.o: ../../src/disc_image.c
+	$(CC) $(VDISC_CFLAGS) -c $< -o $@
+
+vdisc_ecc.o: ../../src/ecc.c
+	$(CC) $(VDISC_CFLAGS) -c $< -o $@
+
+vdisc_subcode.o: ../../src/subcode.c
+	$(CC) $(VDISC_CFLAGS) -c $< -o $@
+
+vdisc_maths.o: ../../upstream/utils/maths.c
+	$(CC) $(VDISC_CFLAGS) -c $< -o $@
+
+vdisc_sim.o: vdisc_sim.c
+	$(CC) $(VDISC_CFLAGS) -c $< -o $@
+
+vdisc_main.o: main.cpp
+	$(CXX) $(VDISC_CXXFLAGS) -c $< -o $@
+
+vdisc_test.o: test_virtual_disc.cpp
+	$(CXX) $(VDISC_CXXFLAGS) -c $< -o $@
+
+$(OUTDIR)/vdisc_tests: vdisc_virtual_disc.o vdisc_disc_image.o vdisc_ecc.o \
+             vdisc_subcode.o vdisc_maths.o \
+             vdisc_sim.o vdisc_main.o vdisc_test.o
+	@mkdir -p $(OUTDIR)
+	$(CXX) $(UBSAN) $^ -o $@ -lCppUTest -lstdc++ -lm
+
+vdisc_tests: $(OUTDIR)/vdisc_tests
+
+clean:
+	rm -f $(OBJS_C) $(OBJS_CPP) webserver_html_test.o commo_hal_stub.o \
+	      $(OUTDIR)/cd32_tests \
+	      stress_vis_audio.o stress_fft.o stress_test.o $(OUTDIR)/stress_tests \
+	      stress_sc_cache.o stress_sc_test.o $(OUTDIR)/stress_sector_cache \
+	      parser_disc_image.o parser_virtual_disc.o parser_ecc.o parser_subcode.o parser_maths.o \
+	      parser_fatfs_sim.o parser_main.o parser_test.o \
+	      $(OUTDIR)/parser_tests \
+	      vdisc_virtual_disc.o vdisc_disc_image.o vdisc_ecc.o vdisc_subcode.o vdisc_maths.o \
+	      vdisc_sim.o vdisc_main.o vdisc_test.o $(OUTDIR)/vdisc_tests

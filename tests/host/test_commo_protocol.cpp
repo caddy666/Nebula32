@@ -1,18 +1,8 @@
 // =============================================================================
 // test_commo_protocol.cpp — COMMO serial state machine tests
 //
-// upstream/core/commo.c depends on pio_hw.h, commo.pio.h, and pico/stdlib.h
-// (all hardware-bound) and cannot be compiled into the host suite directly.
-// This file replicates commo_ctx_t, commo_step(), and the public API, then
-// replaces the three hardware calls with inline stubs:
-//   get_rxd_data()       — drain from a pre-loaded byte queue
-//   commo_data_is_low()  — controlled flag (set by drive_packet helper)
-//   transmit_txd()       — append to a capture log (TX path tests)
-//
-// Known bug documented in test SameOpcodeAfterCmdError_BugReturnsSame:
-//   commo.c COMMO_SM_RXD_CHECKSUM does not clear last_command on CMD_ERROR.
-//   A retry of the same opcode after a bad checksum returns COMMO_SAME_COMMAND
-//   instead of COMMO_NEW_COMMAND.
+// Tests run against the real upstream/core/commo.c compiled with
+// commo_hal_stub.c replacing the PIO/GPIO hardware calls.
 //
 // Relevant production code: upstream/core/commo.c, upstream/include/commo.h
 // =============================================================================
@@ -21,219 +11,9 @@
 #include <string.h>
 #include <stdint.h>
 
-// Constants from upstream/include/commo.h (not included to avoid function
-// declaration conflicts with the replicated static versions below)
-#define COMMO_FALSE               0x00
-#define COMMO_TRUE                0x01
-#define COMMO_READY_WITHOUT_ERROR 0x00
-#define COMMO_BUSY                0x03
-#define COMMO_NO_COMMAND          0x00
-#define COMMO_NEW_COMMAND         0x01
-#define COMMO_SAME_COMMAND        0x02
-#define COMMO_CMD_ERROR           0x03
-#define SEND_STRING_COMPLETE      1
-#define SEND_STRING_APPEND        0
-
-// ---------------------------------------------------------------------------
-// Stubs
-// ---------------------------------------------------------------------------
-
-static uint8_t s_rx_queue[32];
-static int     s_rx_head  = 0;
-static int     s_rx_tail  = 0;
-static int     s_data_is_low = 0;
-
-static uint8_t s_tx_log[32];
-static int     s_tx_log_count = 0;
-
-static uint8_t get_rxd_data(void)
-{
-    if (s_rx_head >= s_rx_tail) return 0;
-    return s_rx_queue[s_rx_head++];
-}
-
-static int commo_data_is_low(void) { return s_data_is_low; }
-
-static void transmit_txd(uint8_t b)
-{
-    if (s_tx_log_count < (int)sizeof(s_tx_log))
-        s_tx_log[s_tx_log_count++] = b;
-}
-
-static void pio_commo_release(void) {}
-
-// ---------------------------------------------------------------------------
-// State machine replicated from upstream/core/commo.c
-// Changes must be reflected in the production source and vice versa.
-// ---------------------------------------------------------------------------
-
-typedef enum {
-    COMMO_SM_IDLE = 0,
-    COMMO_SM_RXD_OPCODE,
-    COMMO_SM_RXD_PARM,
-    COMMO_SM_RXD_CHECKSUM,
-    COMMO_SM_TXD_DATA,
-    COMMO_SM_TXD_CHECKSUM,
-    COMMO_SM_ERR_SEND
-} commo_sm_state_t;
-
-typedef struct {
-    commo_sm_state_t state;
-    uint8_t cmd_length;
-    uint8_t checksum;
-    uint8_t byte_counter;
-    uint8_t byte_pointer;
-    uint8_t rx_status;
-    uint8_t last_command;
-    uint8_t rx_buffer[12];
-    uint8_t tx_buffer[16];
-    uint8_t tx_length;
-    uint8_t tx_req;
-    uint8_t tx_chk_req;
-    uint8_t report_cmd;
-    uint8_t cmd_buf_free;
-} commo_ctx_t;
-
-static commo_ctx_t s_commo;
-
-static const uint8_t command_length_table[16] = {
-    1, 2, 1, 1, 12, 2, 1, 1, 4, 1, 1, 1, 1, 2, 1, 1
-};
-
-static void commo_step(commo_ctx_t *c)
-{
-    switch (c->state) {
-
-    case COMMO_SM_IDLE:
-        if (c->tx_req) {
-            c->byte_pointer = 0;
-            c->checksum     = 0;
-            c->state        = COMMO_SM_TXD_DATA;
-        } else if (commo_data_is_low()) {
-            c->state        = COMMO_SM_RXD_OPCODE;
-            c->byte_counter = 0;
-            c->checksum     = 0;
-        }
-        break;
-
-    case COMMO_SM_RXD_OPCODE: {
-        uint8_t b = get_rxd_data();
-        if (b == 0) {
-            c->state        = COMMO_SM_ERR_SEND;
-            c->byte_counter = 128;
-            break;
-        }
-        c->rx_buffer[0] = b;
-        c->checksum     = b;
-        c->byte_counter = 1;
-        c->cmd_length   = command_length_table[b & 0x0Fu];
-        c->state = (c->cmd_length == 1) ? COMMO_SM_RXD_CHECKSUM
-                                        : COMMO_SM_RXD_PARM;
-        break;
-    }
-
-    case COMMO_SM_RXD_PARM:
-        if (!commo_data_is_low()) break;
-        {
-            uint8_t b = get_rxd_data();
-            c->rx_buffer[c->byte_counter++] = b;
-            c->checksum += b;
-            if (c->byte_counter >= c->cmd_length)
-                c->state = COMMO_SM_RXD_CHECKSUM;
-        }
-        break;
-
-    case COMMO_SM_RXD_CHECKSUM:
-        if (!commo_data_is_low()) break;
-        {
-            uint8_t rx = get_rxd_data();
-            if ((uint8_t)~rx == c->checksum) {
-                c->rx_status = (c->rx_buffer[0] == c->last_command)
-                               ? COMMO_SAME_COMMAND
-                               : COMMO_NEW_COMMAND;
-                if (c->rx_status == COMMO_NEW_COMMAND)
-                    c->last_command = c->rx_buffer[0];
-            } else {
-                c->rx_status    = COMMO_CMD_ERROR;
-                c->last_command = 0;  // invalidate so retry is treated as NEW_COMMAND
-            }
-            c->report_cmd = 1;
-            c->checksum   = 0;
-            c->state      = COMMO_SM_IDLE;
-        }
-        break;
-
-    case COMMO_SM_TXD_DATA:
-        if (commo_data_is_low()) break;
-        transmit_txd(c->tx_buffer[c->byte_pointer]);
-        c->checksum += c->tx_buffer[c->byte_pointer];
-        c->byte_pointer++;
-        if (--c->byte_counter == 0) {
-            c->tx_req = 0;
-            c->state  = c->tx_chk_req ? COMMO_SM_TXD_CHECKSUM
-                                      : COMMO_SM_IDLE;
-            pio_commo_release();
-        }
-        break;
-
-    case COMMO_SM_TXD_CHECKSUM:
-        if (commo_data_is_low()) break;
-        transmit_txd((uint8_t)~c->checksum);
-        c->tx_req     = 0;
-        c->tx_chk_req = 0;
-        c->checksum   = 0;
-        c->state      = COMMO_SM_IDLE;
-        pio_commo_release();
-        break;
-
-    case COMMO_SM_ERR_SEND:
-        if (c->byte_counter > 0) {
-            c->byte_counter--;
-        } else {
-            c->rx_status  = COMMO_CMD_ERROR;
-            c->report_cmd = 1;
-            c->state      = COMMO_SM_IDLE;
-        }
-        break;
-
-    default:
-        c->state = COMMO_SM_IDLE;
-        break;
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Public API wrappers (mirror commo.c signatures)
-// ---------------------------------------------------------------------------
-
-static void COMMO_INIT(void)
-{
-    memset(&s_commo, 0, sizeof(s_commo));
-    s_commo.state = COMMO_SM_IDLE;
-}
-
-static void    COMMO_INTERFACE(void)    { commo_step(&s_commo); }
-static uint8_t NEW_CMD_RECEIVED(void)   { return s_commo.report_cmd ? s_commo.rx_status : COMMO_NO_COMMAND; }
-static uint8_t GET_BUFFER(uint8_t idx)  { return (idx < 12) ? s_commo.rx_buffer[idx] : 0; }
-static uint8_t FREE_CMD_BUFFER(void)    { s_commo.report_cmd = 0; s_commo.cmd_buf_free = 1; return COMMO_TRUE; }
-
-static uint8_t SEND_STRING(uint8_t mode, uint8_t *data, uint8_t length)
-{
-    if (s_commo.tx_req || length > (uint8_t)sizeof(s_commo.tx_buffer)) return COMMO_FALSE;
-    memcpy(s_commo.tx_buffer, data, length);
-    s_commo.byte_counter = length;
-    s_commo.tx_length    = length;
-    s_commo.tx_chk_req   = (mode == SEND_STRING_COMPLETE) ? 1u : 0u;
-    s_commo.tx_req       = 1;
-    return COMMO_TRUE;
-}
-
-static uint8_t SEND_STRING_READY(void)
-{
-    if (s_commo.state == COMMO_SM_TXD_DATA ||
-        s_commo.state == COMMO_SM_TXD_CHECKSUM)
-        return COMMO_BUSY;
-    return COMMO_READY_WITHOUT_ERROR;
+extern "C" {
+#include "commo.h"
+#include "commo_hal_stub.h"
 }
 
 // ---------------------------------------------------------------------------
@@ -248,16 +28,15 @@ static uint8_t checksum_of(const uint8_t *buf, int len)
 }
 
 // Queue bytes then step through the state machine to deliver a complete packet.
-// Mirrors the drive_packet() helper from test_commo.c.
 static void drive_packet(const uint8_t *bytes, int len)
 {
     for (int i = 0; i < len; i++)
-        s_rx_queue[s_rx_tail++] = bytes[i];
+        commo_hal_stub_push(bytes[i]);
 
-    s_data_is_low = 1; COMMO_INTERFACE();   // IDLE → RXD_OPCODE
+    commo_hal_stub_set_data_low(1); COMMO_INTERFACE();  // IDLE → RXD_OPCODE
 
     for (int i = 0; i < len; i++) {
-        s_data_is_low = 1; COMMO_INTERFACE();   // receive one byte per iteration
+        commo_hal_stub_set_data_low(1); COMMO_INTERFACE();  // receive one byte per iteration
     }
 }
 
@@ -270,12 +49,7 @@ TEST_GROUP(CommoProtocol)
     void setup() override
     {
         COMMO_INIT();
-        s_rx_head      = 0;
-        s_rx_tail      = 0;
-        s_data_is_low  = 0;
-        s_tx_log_count = 0;
-        memset(s_rx_queue, 0, sizeof(s_rx_queue));
-        memset(s_tx_log,   0, sizeof(s_tx_log));
+        commo_hal_stub_reset();
     }
 };
 
@@ -329,13 +103,13 @@ TEST(CommoProtocol, SameOpcode_SecondIsSameCommand)
 TEST(CommoProtocol, ZeroOpcode_AfterCountdown_CmdError)
 {
     // Zero opcode → ERR_SEND with byte_counter=128; not reported until countdown done
-    s_rx_queue[s_rx_tail++] = 0x00;
-    s_data_is_low = 1; COMMO_INTERFACE();   // IDLE → RXD_OPCODE
-    s_data_is_low = 1; COMMO_INTERFACE();   // RXD_OPCODE: b=0 → ERR_SEND, counter=128
+    commo_hal_stub_push(0x00);
+    commo_hal_stub_set_data_low(1); COMMO_INTERFACE();  // IDLE → RXD_OPCODE
+    commo_hal_stub_set_data_low(1); COMMO_INTERFACE();  // RXD_OPCODE: b=0 → ERR_SEND, counter=128
 
     BYTES_EQUAL(COMMO_NO_COMMAND, NEW_CMD_RECEIVED());
 
-    for (int i = 0; i < 129; i++)           // 128 decrements + 1 that fires the error
+    for (int i = 0; i < 129; i++)          // 128 decrements + 1 that fires the error
         COMMO_INTERFACE();
 
     BYTES_EQUAL(COMMO_CMD_ERROR, NEW_CMD_RECEIVED());
@@ -414,29 +188,29 @@ TEST(CommoProtocol, SendString_DataByteTransmitted)
 {
     uint8_t tx = 0xA5;
     SEND_STRING(SEND_STRING_COMPLETE, &tx, 1);
-    s_data_is_low = 0;
+    commo_hal_stub_set_data_low(0);
     COMMO_INTERFACE();   // IDLE → TXD_DATA
     COMMO_INTERFACE();   // TXD_DATA: transmit 0xA5 → TXD_CHECKSUM
     COMMO_INTERFACE();   // TXD_CHECKSUM: transmit ~0xA5 → IDLE
-    LONGS_EQUAL(0xA5, s_tx_log[0]);
+    LONGS_EQUAL(0xA5, commo_hal_stub_tx_byte(0));
 }
 
 TEST(CommoProtocol, SendString_ChecksumByteTransmitted)
 {
     uint8_t tx = 0xA5;
     SEND_STRING(SEND_STRING_COMPLETE, &tx, 1);
-    s_data_is_low = 0;
+    commo_hal_stub_set_data_low(0);
     COMMO_INTERFACE();
     COMMO_INTERFACE();
     COMMO_INTERFACE();
-    LONGS_EQUAL((uint8_t)~0xA5u, s_tx_log[1]);   // 0x5A
+    LONGS_EQUAL((uint8_t)~0xA5u, commo_hal_stub_tx_byte(1));  // 0x5A
 }
 
 TEST(CommoProtocol, SendString_BusyDuringTxdData)
 {
     uint8_t tx = 0xA5;
     SEND_STRING(SEND_STRING_COMPLETE, &tx, 1);
-    s_data_is_low = 0;
+    commo_hal_stub_set_data_low(0);
     COMMO_INTERFACE();   // IDLE → TXD_DATA
     BYTES_EQUAL(COMMO_BUSY, SEND_STRING_READY());
 }
@@ -445,7 +219,7 @@ TEST(CommoProtocol, SendString_ReadyAfterComplete)
 {
     uint8_t tx = 0xA5;
     SEND_STRING(SEND_STRING_COMPLETE, &tx, 1);
-    s_data_is_low = 0;
+    commo_hal_stub_set_data_low(0);
     COMMO_INTERFACE();
     COMMO_INTERFACE();
     COMMO_INTERFACE();
@@ -461,12 +235,7 @@ TEST_GROUP(CommoFuzz)
     void setup() override
     {
         COMMO_INIT();
-        s_rx_head      = 0;
-        s_rx_tail      = 0;
-        s_data_is_low  = 0;
-        s_tx_log_count = 0;
-        memset(s_rx_queue, 0, sizeof(s_rx_queue));
-        memset(s_tx_log,   0, sizeof(s_tx_log));
+        commo_hal_stub_reset();
     }
 };
 
@@ -484,8 +253,8 @@ TEST(CommoFuzz, AbortedCommand_ByteConsumedAsChecksum)
 
     // Abort: feed what would be the next opcode (0x03) as the checksum byte.
     // ~0x03 = 0xFC ≠ 0x47 (= 0x05 + 0x42) → CMD_ERROR
-    s_rx_queue[s_rx_tail++] = 0x03;
-    s_data_is_low = 1;
+    commo_hal_stub_push(0x03);
+    commo_hal_stub_set_data_low(1);
     COMMO_INTERFACE();
 
     BYTES_EQUAL(COMMO_CMD_ERROR, NEW_CMD_RECEIVED());
@@ -500,14 +269,13 @@ TEST(CommoFuzz, AbortedCommand_ByteConsumedAsChecksum)
 
 // 50 rapid COMMO_INTERFACE calls with no pending TX and data_is_low=0 must
 // leave the state machine in IDLE with no spurious command reported.
-// Exercises the atomic-barrier path: no partial-status-word corruption.
 TEST(CommoFuzz, RapidStatusPoll_50Ticks_NoStateCorruption)
 {
-    s_data_is_low = 0;
+    commo_hal_stub_set_data_low(0);
     for (int i = 0; i < 50; i++)
         COMMO_INTERFACE();
 
-    BYTES_EQUAL(COMMO_SM_IDLE, (uint8_t)s_commo.state);
+    BYTES_EQUAL(COMMO_READY_WITHOUT_ERROR, SEND_STRING_READY());
     BYTES_EQUAL(COMMO_NO_COMMAND, NEW_CMD_RECEIVED());
 }
 
@@ -518,20 +286,20 @@ TEST(CommoFuzz, TxNotInterruptedByRxStrobe)
 {
     uint8_t tx[2] = { 0xA5, 0x5A };
     SEND_STRING(SEND_STRING_COMPLETE, tx, 2);
-    s_data_is_low = 0;
+    commo_hal_stub_set_data_low(0);
     COMMO_INTERFACE();   // IDLE → TXD_DATA (tx_req consumed)
 
-    s_data_is_low = 1;
+    commo_hal_stub_set_data_low(1);
     COMMO_INTERFACE();   // TXD_DATA: data_is_low set → blocked, nothing transmitted
-    LONGS_EQUAL(0, s_tx_log_count);
+    LONGS_EQUAL(0, commo_hal_stub_tx_count());
 
-    s_data_is_low = 0;
+    commo_hal_stub_set_data_low(0);
     COMMO_INTERFACE();   // transmit 0xA5
     COMMO_INTERFACE();   // transmit 0x5A → TXD_CHECKSUM
     COMMO_INTERFACE();   // transmit checksum → IDLE
-    LONGS_EQUAL(3, s_tx_log_count);
-    BYTES_EQUAL(0xA5, s_tx_log[0]);
-    BYTES_EQUAL(0x5A, s_tx_log[1]);
+    LONGS_EQUAL(3, commo_hal_stub_tx_count());
+    BYTES_EQUAL(0xA5, commo_hal_stub_tx_byte(0));
+    BYTES_EQUAL(0x5A, commo_hal_stub_tx_byte(1));
 }
 
 // data_is_low=1 in the TXD_CHECKSUM state must block the checksum byte just
@@ -540,18 +308,18 @@ TEST(CommoFuzz, TxChecksumState_BlockedByDataLow)
 {
     uint8_t tx = 0xA5;
     SEND_STRING(SEND_STRING_COMPLETE, &tx, 1);
-    s_data_is_low = 0;
+    commo_hal_stub_set_data_low(0);
     COMMO_INTERFACE();   // IDLE → TXD_DATA
     COMMO_INTERFACE();   // TXD_DATA: transmit 0xA5 → TXD_CHECKSUM
 
-    s_data_is_low = 1;
+    commo_hal_stub_set_data_low(1);
     COMMO_INTERFACE();   // TXD_CHECKSUM: data_is_low → blocked, count still 1
-    LONGS_EQUAL(1, s_tx_log_count);
+    LONGS_EQUAL(1, commo_hal_stub_tx_count());
 
-    s_data_is_low = 0;
+    commo_hal_stub_set_data_low(0);
     COMMO_INTERFACE();   // TXD_CHECKSUM: transmit ~0xA5 → IDLE
-    LONGS_EQUAL(2, s_tx_log_count);
-    BYTES_EQUAL((uint8_t)~0xA5u, s_tx_log[1]);
+    LONGS_EQUAL(2, commo_hal_stub_tx_count());
+    BYTES_EQUAL((uint8_t)~0xA5u, commo_hal_stub_tx_byte(1));
 }
 
 // Two successive checksum failures keep last_command=0; a subsequent valid
@@ -595,12 +363,7 @@ TEST_GROUP(CommoPowerOn)
     void setup() override
     {
         COMMO_INIT();
-        s_rx_head      = 0;
-        s_rx_tail      = 0;
-        s_data_is_low  = 0;
-        s_tx_log_count = 0;
-        memset(s_rx_queue, 0, sizeof(s_rx_queue));
-        memset(s_tx_log,   0, sizeof(s_tx_log));
+        commo_hal_stub_reset();
     }
 };
 
@@ -641,11 +404,11 @@ TEST(CommoPowerOn, StatusPacket_Produces16WireBytes)
     pkt[2] = 0x04;   // DRIVE_STATUS_DISC — disc present
 
     SEND_STRING(SEND_STRING_COMPLETE, pkt, 15);
-    s_data_is_low = 0;
+    commo_hal_stub_set_data_low(0);
     COMMO_INTERFACE();
     for (int i = 0; i < 15; i++) COMMO_INTERFACE();
     COMMO_INTERFACE();
-    LONGS_EQUAL(16, s_tx_log_count);
+    LONGS_EQUAL(16, commo_hal_stub_tx_count());
 }
 
 // The 16th wire byte must satisfy the COMMO additive checksum invariant:
@@ -658,13 +421,13 @@ TEST(CommoPowerOn, StatusPacket_AdditiveChecksumValid)
     pkt[2] = 0x04;   // DRIVE_STATUS_DISC
 
     SEND_STRING(SEND_STRING_COMPLETE, pkt, 15);
-    s_data_is_low = 0;
+    commo_hal_stub_set_data_low(0);
     COMMO_INTERFACE();
     for (int i = 0; i < 15; i++) COMMO_INTERFACE();
     COMMO_INTERFACE();
 
     uint8_t sum = 0;
-    for (int i = 0; i < 16; i++) sum += s_tx_log[i];
+    for (int i = 0; i < 16; i++) sum += commo_hal_stub_tx_byte(i);
     BYTES_EQUAL(0xFF, sum);
 }
 

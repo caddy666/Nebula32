@@ -1,5 +1,0 @@
-/home/caddy/pico-claude/cd32_ode/pioasm-install/pioasm/pioasm
-/home/caddy/pico-claude/cd32_ode/pioasm-install/pioasm/pioasmTargets.cmake
-/home/caddy/pico-claude/cd32_ode/pioasm-install/pioasm/pioasmTargets-release.cmake
-/home/caddy/pico-claude/cd32_ode/pioasm-install/pioasm/pioasmConfig.cmake
-/home/caddy/pico-claude/cd32_ode/pioasm-install/pioasm/pioasmConfigVersion.cmake

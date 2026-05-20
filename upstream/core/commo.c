@@ -1,25 +1,21 @@
 /**
  * @file  commo.c
- * @brief COMMO serial interface state machine — PIO-backed.
+ * @brief COMMO serial interface state machine.
  *
- * All GPIO bit-bang has been replaced with calls to pio_commo_rx_ready(),
- * pio_commo_rx_get(), pio_commo_tx_byte(), and pio_commo_release() from
- * commo_bridge.c.  The state machine logic is unchanged.
+ * Hardware I/O is isolated behind commo_hal.h:
+ *   upstream/core/commo_hal_pico.c  — real PIO + GPIO (linked in firmware)
+ *   tests/host/commo_hal_stub.c     — test-harness control (linked in host tests)
  *
  * PIO state machines used:
  *   PIO1 SM0 — commo_rx.pio   (host-clocked receive)
  *   PIO1 SM1 — commo_tx.pio   (self-clocked transmit)
  */
 
-#include "pico/stdlib.h"
 #include <stdint.h>
 #include <string.h>
 
 #include "commo.h"
-#include "pio_hw.h"
-#include "hardware/gpio.h"
-#include "commo.pio.h"
-#include "gpio_map.h"
+#include "commo_hal.h"
 
 /* =========================================================================
  * Internal state machine
@@ -62,47 +58,6 @@ static const uint8_t command_length_table[16] = {
 };
 
 /* =========================================================================
- * PIO-backed byte I/O
- * ====================================================================== */
-
-/**
- * Receive one byte from the host via PIO.
- * The PIO RX SM has already received it — we just drain it from the FIFO.
- */
-static uint8_t get_rxd_data(void)
-{
-    /* ARM the RX SM for the next byte and wait for data */
-    commo_rx_enable(PIO_COMMO_RX, SM_COMMO_RX, PIN_COMMO_CLK);
-
-    uint32_t timeout = 500000u;
-    while (!pio_commo_rx_ready() && --timeout)
-        tight_loop_contents();
-
-    if (!pio_commo_rx_ready()) return 0;
-
-    return pio_commo_rx_get();
-}
-
-/**
- * Transmit one byte to the host via PIO.
- */
-static void transmit_txd(uint8_t a)
-{
-    pio_commo_tx_byte(a);
-}
-
-/**
- * Check if the host is driving DATA low (start of incoming byte).
- * This maps to checking the DATA pin directly (before the PIO SM is armed).
- */
-static int commo_data_is_low(void)
-{
-    /* In idle mode, CLK and DATA are GPIO inputs managed by the CPU.
-     * The PIO SM is not running; we sample the pin directly. */
-    return (int)(!gpio_get(PIN_COMMO_DATA));
-}
-
-/* =========================================================================
  * State machine step
  * ====================================================================== */
 
@@ -115,7 +70,7 @@ static void commo_step(commo_ctx_t *c)
             c->byte_pointer = 0;
             c->checksum     = 0;
             c->state        = COMMO_SM_TXD_DATA;
-        } else if (commo_data_is_low()) {
+        } else if (commo_hal_data_is_low()) {
             c->state        = COMMO_SM_RXD_OPCODE;
             c->byte_counter = 0;
             c->checksum     = 0;
@@ -123,7 +78,7 @@ static void commo_step(commo_ctx_t *c)
         break;
 
     case COMMO_SM_RXD_OPCODE: {
-        uint8_t b = get_rxd_data();
+        uint8_t b = commo_hal_rxd();
         if (b == 0) {
             c->state        = COMMO_SM_ERR_SEND;
             c->byte_counter = 128;
@@ -139,9 +94,9 @@ static void commo_step(commo_ctx_t *c)
     }
 
     case COMMO_SM_RXD_PARM:
-        if (!commo_data_is_low()) break;
+        if (!commo_hal_data_is_low()) break;
         {
-            uint8_t b = get_rxd_data();
+            uint8_t b = commo_hal_rxd();
             c->rx_buffer[c->byte_counter++] = b;
             c->checksum += b;
             if (c->byte_counter >= c->cmd_length)
@@ -150,9 +105,9 @@ static void commo_step(commo_ctx_t *c)
         break;
 
     case COMMO_SM_RXD_CHECKSUM:
-        if (!commo_data_is_low()) break;
+        if (!commo_hal_data_is_low()) break;
         {
-            uint8_t rx = get_rxd_data();
+            uint8_t rx = commo_hal_rxd();
             if ((uint8_t)~rx == c->checksum) {
                 c->rx_status = (c->rx_buffer[0] == c->last_command)
                                ? COMMO_SAME_COMMAND
@@ -170,32 +125,32 @@ static void commo_step(commo_ctx_t *c)
         break;
 
     case COMMO_SM_TXD_DATA:
-        /* commo_data_is_low() reads gpio_get(PIN_COMMO_DATA).  During TX the
-         * pin is driven high by commo_tx_send(), so this always returns false
-         * and execution always falls through.  The check is a vestige of the
-         * original bit-bang code where the host could abort mid-transfer; it
-         * is harmless but intentionally left in place to preserve the SM shape
-         * for bisect-ability. */
-        if (commo_data_is_low()) break;
-        transmit_txd(c->tx_buffer[c->byte_pointer]);
+        /* commo_hal_data_is_low() reads gpio_get(PIN_COMMO_DATA).  During TX
+         * the pin is driven high by commo_tx_send(), so this always returns
+         * false and execution always falls through.  The check is a vestige of
+         * the original bit-bang code where the host could abort mid-transfer;
+         * it is harmless but intentionally left in place to preserve the SM
+         * shape for bisect-ability. */
+        if (commo_hal_data_is_low()) break;
+        commo_hal_txd(c->tx_buffer[c->byte_pointer]);
         c->checksum += c->tx_buffer[c->byte_pointer];
         c->byte_pointer++;
         if (--c->byte_counter == 0) {
             c->tx_req = 0;
             c->state  = c->tx_chk_req ? COMMO_SM_TXD_CHECKSUM
                                       : COMMO_SM_IDLE;
-            pio_commo_release();
+            commo_hal_release();
         }
         break;
 
     case COMMO_SM_TXD_CHECKSUM:
-        if (commo_data_is_low()) break;
-        transmit_txd((uint8_t)~c->checksum);
+        if (commo_hal_data_is_low()) break;
+        commo_hal_txd((uint8_t)~c->checksum);
         c->tx_req     = 0;
         c->tx_chk_req = 0;
         c->checksum   = 0;
         c->state      = COMMO_SM_IDLE;
-        pio_commo_release();
+        commo_hal_release();
         break;
 
     case COMMO_SM_ERR_SEND:

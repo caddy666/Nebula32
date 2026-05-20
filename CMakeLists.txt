@@ -1,13 +1,13 @@
 cmake_minimum_required(VERSION 3.13)
 
 # =============================================================================
-# CD32 Optical Drive Emulator
+# Nebula32 — CD32 Optical Drive Emulator
 # Target: Raspberry Pi Pico 2 (RP2350)
 # =============================================================================
 
 include($ENV{PICO_SDK_PATH}/external/pico_sdk_import.cmake)
 
-project(cd32_ode C CXX ASM)
+project(Nebula32 C CXX ASM)
 set(CMAKE_C_STANDARD   11)
 set(CMAKE_CXX_STANDARD 17)
 
@@ -136,7 +136,7 @@ add_subdirectory(libs/pico-mcp23017)
 # =============================================================================
 # Main executable
 # =============================================================================
-add_executable(cd32_ode
+add_executable(Nebula32
     # ---- Entry point ----
     src/main.c
 
@@ -145,6 +145,9 @@ add_executable(cd32_ode
 
     # ---- Multi-format disc image parser (ISO / BIN / NRG / MDF) ----
     src/disc_image.c
+
+    # ---- Virtual disc ISO 9660 synthesiser (SD partition 2 → virtual CD) ----
+    src/virtual_disc.c
 
     # ---- Read-ahead sector ring buffer ----
     src/sector_cache.c
@@ -167,7 +170,10 @@ add_executable(cd32_ode
     # ---- Persistent configuration stored in RP2350 flash ----
     src/config.c
 
-    # ---- SD card activity logger (writes cd32_cd.log, reads cd32_ode.cfg) ----
+    # ---- SD-card UF2 firmware self-update ----
+    src/fw_update.c
+
+    # ---- SD card activity logger (writes cd32_cd.log, reads Nebula32.cfg) ----
     src/logger.c
 
     # ---- ST7789 display + JPEGDEC cover art ----
@@ -193,6 +199,7 @@ add_executable(cd32_ode
 
     # ---- Upstream: COMMO serial bus state machine ----
     upstream/core/commo.c
+    upstream/core/commo_hal_pico.c
     upstream/core/dispatcher.c
     upstream/core/cmd_hndl.c
     upstream/core/sts_q_id.c
@@ -207,17 +214,17 @@ add_executable(cd32_ode
 )
 
 # ---- PIO programs (assembled at build time by pioasm) ----
-pico_generate_pio_header(cd32_ode
+pico_generate_pio_header(Nebula32
     ${CMAKE_CURRENT_SOURCE_DIR}/pio/da_output.pio)
-pico_generate_pio_header(cd32_ode
+pico_generate_pio_header(Nebula32
     ${CMAKE_CURRENT_SOURCE_DIR}/pio/subcode_encoder.pio)
 
 # ---- Upstream PIO programs (COMMO bus) ----
-pico_generate_pio_header(cd32_ode
+pico_generate_pio_header(Nebula32
     ${CMAKE_CURRENT_SOURCE_DIR}/upstream/pio/commo.pio)
 
 # ---- Include directories ----
-target_include_directories(cd32_ode PRIVATE
+target_include_directories(Nebula32 PRIVATE
     include
     upstream/include          # upstream defs.h, gpio_map.h, commo.h, etc.
     ${FATFS_SDK_PATH}/include
@@ -229,7 +236,7 @@ target_include_directories(cd32_ode PRIVATE
 )
 
 # ---- Libraries ----
-target_link_libraries(cd32_ode
+target_link_libraries(Nebula32
     pico_stdlib
     pico_multicore          # Dual-core launch (Core 1 bus handler)
     hardware_pio            # PIO for DA output and subcode encoder
@@ -238,8 +245,9 @@ target_link_libraries(cd32_ode
     hardware_timer          # Repeating 1 ms timer for state machine
     hardware_gpio
     hardware_clocks         # set_sys_clock_khz()
-    hardware_flash          # flash_range_erase/program for config persistence
+    hardware_flash          # flash_range_erase/program for config persistence and fw_update
     hardware_sync           # save_and_disable_interrupts for flash writes
+    hardware_watchdog       # watchdog_reboot() for fw_update self-reboot
     hardware_i2c            # I2C0 for MCP23017 GPIO expander
     hardware_spi            # SPI1 for ST7789 display
     no-OS-FatFS-SD-SDIO-SPI-RPi-Pico   # SD card FatFS (from no-OS-FatFS library)
@@ -249,16 +257,16 @@ target_link_libraries(cd32_ode
 
 # ---- Pico 2 W WiFi + lwIP — only link when building for pico2_w ----
 if(PICO_BOARD STREQUAL "pico2_w")
-    target_link_libraries(cd32_ode pico_cyw43_arch_lwip_poll)
-    target_compile_definitions(cd32_ode PRIVATE PICO_CYW43_SUPPORTED=1)
+    target_link_libraries(Nebula32 pico_cyw43_arch_lwip_poll)
+    target_compile_definitions(Nebula32 PRIVATE PICO_CYW43_SUPPORTED=1)
 endif()
 
 # ---- stdio via USB CDC (disable UART to free those pins for user GPIOs) ----
-pico_enable_stdio_usb(cd32_ode 1)
-pico_enable_stdio_uart(cd32_ode 0)
+pico_enable_stdio_usb(Nebula32 1)
+pico_enable_stdio_uart(Nebula32 0)
 
 # ---- Extra outputs: .uf2 for drag-and-drop flashing, .bin, .hex ----
-pico_add_extra_outputs(cd32_ode)
+pico_add_extra_outputs(Nebula32)
 
 # JPEGDEC uses #ifdef __LINUX__ to avoid including <Arduino.h>
 set_source_files_properties(libs/JPEGDEC/src/JPEGDEC.cpp PROPERTIES
@@ -266,7 +274,7 @@ set_source_files_properties(libs/JPEGDEC/src/JPEGDEC.cpp PROPERTIES
 )
 
 # ---- Compiler warnings ----
-target_compile_options(cd32_ode PRIVATE
+target_compile_options(Nebula32 PRIVATE
     -Wall
     -Wextra
     -Wno-unused-parameter   # Several callbacks take unused context pointers

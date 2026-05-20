@@ -31,13 +31,13 @@
 ; ---- RX state machine -------------------------------------------------------
 
 .program commo_rx
-.side_set 1 opt            ; optional side-set on CLK (pin+0) for acknowledge pulse
+; No side_set: CLK is host-driven (input) in RX mode; all 5 delay bits available for [31].
 
 ; On entry: DATA (pin+1) has gone low — CPU starts this SM when it detects the start bit.
 ; DIR (pin+2) = 1 means we are listening (set by CPU before enabling SM).
 
     ; Wait for CLK to go high, then sample DATA (8 bits, LSB first)
-    set x, 7           side 0    ; 8 bits to receive
+    set x, 7                     ; 8 bits to receive
 rx_loop:
     wait 1 pin 0                 ; wait for CLK rising edge (host drives CLK, pin+0)
     in pins, 1                   ; sample DATA (pin+1) into ISR

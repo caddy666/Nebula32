@@ -26,3 +26,11 @@ uint32_t sd_count_images(const char *base_dir);
 // Returns true if the SD card is mounted and accessible
 bool sd_card_is_ready(void);
 
+// Scan base_dir for .uf2 firmware files.
+// Same offset/max_count paging semantics as sd_scan_images().
+uint32_t sd_scan_uf2_files(char paths[][MAX_PATH_LEN], uint32_t max_count,
+                           const char *base_dir, uint32_t offset);
+
+// Count all .uf2 files in base_dir without storing paths.
+uint32_t sd_count_uf2_files(const char *base_dir);
+

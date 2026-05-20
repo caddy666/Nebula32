@@ -44,6 +44,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include "cd_types.h"
 
 // ---------------------------------------------------------------------------
 // Build-time selection

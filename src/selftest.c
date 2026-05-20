@@ -125,7 +125,7 @@ static void test_sd_card(void) {
                disc.first_track, disc.last_track, disc.total_sectors);
 
         // Try reading sector 0
-        uint8_t sector_buf[SECTOR_RAW_SIZE];
+        uint8_t sector_buf[SECTOR_RAW_BYTES];
         uint32_t bytes = disc_read_sector(&disc, 0, sector_buf, SECTOR_MODE_RAW);
         TEST_ASSERT(bytes > 0, "Sector 0 read returns data");
 

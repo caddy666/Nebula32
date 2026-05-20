@@ -91,7 +91,11 @@ Data transitions on the **falling** BCLK edge; Akiko samples on the **rising** e
 
 | File | Status | Notes |
 |------|--------|-------|
-| `upstream/core/commo.c` | ✅ Correct | COMMO command/status protocol; last_command cleared on CMD_ERROR; vestigial commo_data_is_low() during TX documented |
+| `upstream/core/commo.c` | ✅ Correct | COMMO command/status protocol; last_command cleared on CMD_ERROR; vestigial commo_hal_data_is_low() during TX documented; HAL-refactored — hardware calls replaced with commo_hal.h interface |
+| `upstream/core/commo_hal_pico.c` | ✅ Correct | Real PIO + GPIO implementation of commo_hal.h; linked in firmware only |
+| `upstream/include/commo_hal.h` | ✅ Correct | HAL interface: commo_hal_rxd/txd/data_is_low/release — 4 functions isolating commo.c from hardware |
+| `tests/host/commo_hal_stub.c` | ✅ Correct | Test-harness HAL: byte queue for RX, capture log for TX, controllable data_is_low flag |
+| `tests/host/commo_hal_stub.h` | ✅ Correct | Control API for the stub: reset/push/set_data_low/tx_count/tx_byte |
 | `upstream/core/dispatcher.c` | ✅ Correct | Packet routing |
 | `upstream/core/cmd_hndl.c` | ✅ Correct | Opcode dispatch |
 | `upstream/core/sts_q_id.c` | ✅ Correct | Status/Q-channel buffer |
@@ -160,9 +164,9 @@ All four PIO programs are always loaded. The upstream servo PIO programs
 
 **Location:** `tests/host/`  
 **Run:** `make && ./cd32_tests -v`  
-**Result:** 502 tests, 0 failures  
-**Parser tests:** `make parser_tests && ./parser_tests -v` → 30 tests, 0 failures (separate binary; uses FatFS injectable sim)
-**Virtual disc tests:** `make vdisc_tests && ./vdisc_tests -v` → 63 tests, 0 failures (separate binary; uses vdisc_sim with directory traversal support)
+**Result:** 538 tests, 0 failures  
+**Parser tests:** `make parser_tests && ./parser_tests -v` → 33 tests, 0 failures (separate binary; uses FatFS injectable sim)
+**Virtual disc tests:** `make vdisc_tests && ./vdisc_tests -v` → 73 tests, 0 failures (separate binary; uses vdisc_sim with directory traversal support)
 **Stress tests:** `make stress_sector_cache && ./stress_sector_cache` → 5 tests, 0 failures (TSan binary; concurrent producer/consumer)
 **Sanitizer:** `-fsanitize=undefined -fno-sanitize-recover=all` active on all C and C++ objects and the link step
 
