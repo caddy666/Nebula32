@@ -124,6 +124,9 @@ Data transitions on the **falling** BCLK edge; Akiko samples on the **rising** e
 | `src/fft.c` | ✅ Correct | 256-point Q15 radix-2 FFT with Hann window |
 | `src/effects.c` | ✅ Correct | 6 demoscene visualiser effects (SPECTRUM/SCOPE/RASTER/COMBO/SPACEBALLS/JUGGLER); JUGGLER is procedural 3-ball cascade with orbital balls and audio-reactive brightness |
 | `src/vis_audio.c` | ✅ Correct | DA DMA snoop — SPSC ring, left-channel extraction |
+| `src/main.c` | ✅ Correct | Entry point — 135 MHz sys_clk, 13-step boot sequence; Core 1 sector-prefetch loop; `load_image_page()` pagination (64-image pages); M17SINE clkdiv trim every 2 s during playback; boot-time firmware update sentinel (delegates to `fw_flash_and_reboot`); USB CDC console ('H' for help); visualiser tick with cover-art restore on stop |
+| `src/selftest.c` | ✅ Correct | Hardware self-test triggered by '#' at boot — GPIO pull-high/pull-low check on DA/SUB output pins 0–8, /RESET idle-high check, SD mount + disc open + sector-0 read; prints PASS/FAIL over USB CDC; no host unit tests (hardware-only checks) |
+| `src/fw_update.c` | ✅ Correct | SD-card UF2 self-update; dual-stage flash: `fw_validate()` pass-1 SD read-only + `fw_flash_and_reboot()` write Bank 1 → verify via XIP → copy Bank1→Bank0 → watchdog reboot; erase_map tracks dirty 4 KB sectors; security fixes B1 (SRAM address guard), B2 (payload_size=0/oversized/unaligned), B4 (NOFLASH block_no sequencing), B5/B6 (rename sentinel), B7 (per-page IRQ window); display progress overlay during flash |
 | `pio/da_output.pio` | ✅ Correct | 24-bit I2S frames, clkdiv=32 (2.12 MHz), 96 SM cycles/pair → 44.1 kHz; LRCLK polarity corrected (low=L, high=R) (F3) |
 | `include/subcode.h` | ✅ Correct | subcode_push_to_pio() clears FIFO on partial push to prevent orphaned words (F8) |
 | `include/disc_image.h` | ✅ Correct | track_t.file_offset widened to uint64_t for >4 GB images (F29+F30) |
