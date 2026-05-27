@@ -19,6 +19,7 @@ extern "C" {
 #include "hardware/clocks.h"
 #include "ff.h"           // FatFS for JPEG file access
 #include "display.h"
+#include "effects.h"
 #include "logger.h"
 #include <stdio.h>
 #include <string.h>
