@@ -21,10 +21,12 @@ typedef struct {
     char     wifi_ssid[64];
     char     wifi_password[64];
     char     wifi_hostname[32];
+    char     fw_token[33];
 } logger_config_t;
 
 static logger_config_t _stub_logger_cfg = {
-    .wifi_ssid = "", .wifi_password = "", .wifi_hostname = "nebula32"
+    false, true, false, true, true, true, false, 4096,
+    "0:/", "", "", "nebula32", ""
 };
 
 static inline bool                   logger_init(void)          { return false; }

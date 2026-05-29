@@ -20,6 +20,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <stdlib.h>
+#include "logger.h"
 
 // ---------------------------------------------------------------------------
 // Replicated helpers — must stay in sync with src/logger.c
@@ -345,4 +346,54 @@ TEST(Logger, StatusFlags_Zero_IsEmpty)
     char flags[32];
     decode_status_flags(0x00, flags, sizeof(flags));
     STRCMP_EQUAL("", flags);
+}
+
+/* -------------------------------------------------------------------------
+ * fw_token key dispatch — replica of the logger.c parser branch
+ *
+ * The parser in logger.c uses strncpy into a 33-byte field.  These tests
+ * catch regressions where the field is mis-sized, the key name is misspelled,
+ * or the NUL-termination logic is wrong.
+ * ---------------------------------------------------------------------- */
+
+static void parse_fw_token_key(const char *val, char *out, size_t outsz)
+{
+    // Replica of the fw_token branch in logger.c parse_settings_file():
+    //   strncpy(field, val, sizeof(field) - 1); field[sizeof(field)-1] = '\0';
+    // Use memcpy + clamp to avoid -Wstringop-truncation/-Wformat-truncation.
+    size_t vlen = strlen(val);
+    if (vlen >= outsz) vlen = outsz - 1;
+    memcpy(out, val, vlen);
+    out[vlen] = '\0';
+}
+
+TEST(Logger, FwToken_ParsedIntoField)
+{
+    char fw_token[33] = {0};
+    parse_fw_token_key("aabbccddeeff00112233445566778899", fw_token, sizeof(fw_token));
+    STRCMP_EQUAL("aabbccddeeff00112233445566778899", fw_token);
+}
+
+TEST(Logger, FwToken_TruncatedAtFieldWidth)
+{
+    // A value longer than 32 chars must be truncated, not overflow the buffer.
+    char fw_token[33] = {0};
+    parse_fw_token_key("aabbccddeeff00112233445566778899EXTRA", fw_token, sizeof(fw_token));
+    STRCMP_EQUAL("aabbccddeeff00112233445566778899", fw_token);
+    CHECK_EQUAL('\0', fw_token[32]);  // always NUL-terminated
+}
+
+TEST(Logger, FwToken_EmptyValueParsedAsEmpty)
+{
+    char fw_token[33] = {0};
+    parse_fw_token_key("", fw_token, sizeof(fw_token));
+    STRCMP_EQUAL("", fw_token);
+}
+
+TEST(Logger, FwToken_FieldSizeIs33)
+{
+    // logger_config_t.fw_token must be exactly 33 bytes (32 hex + NUL).
+    // If this changes the token validation in webserver.c will silently truncate.
+    logger_config_t dummy;
+    CHECK_EQUAL(33u, sizeof(dummy.fw_token));
 }

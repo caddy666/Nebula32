@@ -11,7 +11,7 @@
 //   basename_no_ext()  — strip path prefix and file extension from a string
 //   state_name()       — map drive_state_t integer to a display string
 //   config line parser — key=value splitting used in read_wifi_config()
-//   ".." traversal guard — rejects cover-art paths containing ".."
+//   ".." traversal guard — rejects cover-art paths with "..", "/", "\", or "%" in filename
 //   load-index bounds check — POST /api/load/{index} validates index range
 // =============================================================================
 //   CoverDir group: verifies that display.cpp and webserver.c use the same
@@ -25,6 +25,8 @@
 #include <string.h>
 #include <stdint.h>
 #include <stddef.h>
+#include <stdlib.h>   // strtoul
+#include <limits.h>   // ULONG_MAX
 
 // ---------------------------------------------------------------------------
 // Cover-directory contract — single source of truth from webserver.h
@@ -99,7 +101,57 @@ static bool parse_cfg_line(const char *line, char *key, int keysz,
 
 static bool covers_path_safe(const char *path)
 {
-    return strstr(path, "..") == NULL;
+    // Replica of the guard in handle_request().
+    // Precondition: only called after strncmp(path, "/covers/", 8) == 0 confirmed —
+    // so path always starts with "/covers/" here, exactly as in production.
+    const char *name = path + 8;
+    return strstr(name, "..") == NULL &&
+           strchr(name, '/')  == NULL &&
+           strchr(name, '\\') == NULL &&
+           strchr(name, '%')  == NULL;
+}
+
+// Replica of the parse+validate step in handle_request() for POST /api/load/.
+// Takes the raw path suffix (everything after "/api/load/") and image count.
+static bool load_index_valid_from_str(const char *suffix, uint32_t count)
+{
+    char *endp;
+    unsigned long v = strtoul(suffix, &endp, 10);
+    if (endp == suffix || v > UINT32_MAX) return false;
+    return (uint32_t)v < count;
+}
+
+// Replica of extract_request_token() from webserver.c.
+static void extract_request_token(const char *req, const char *url_path,
+                                   char *out, size_t outsz)
+{
+    out[0] = '\0';
+    if (outsz == 0) return;
+
+    const char *hdr = strstr(req, "\r\nX-FW-Token: ");
+    if (hdr) {
+        hdr += sizeof("\r\nX-FW-Token: ") - 1;
+        size_t i = 0;
+        while (hdr[i] && hdr[i] != '\r' && hdr[i] != '\n' && i < outsz - 1) {
+            out[i] = hdr[i];
+            i++;
+        }
+        out[i] = '\0';
+        if (out[0] != '\0') return;
+    }
+
+    const char *qs = strchr(url_path, '?');
+    if (!qs) return;
+    qs++;
+    const char *tok = strstr(qs, "token=");
+    if (!tok) return;
+    tok += sizeof("token=") - 1;
+    size_t i = 0;
+    while (tok[i] && tok[i] != '&' && tok[i] != '#' && i < outsz - 1) {
+        out[i] = tok[i];
+        i++;
+    }
+    out[i] = '\0';
 }
 
 static bool load_index_valid(uint32_t idx, uint32_t count)
@@ -238,8 +290,25 @@ TEST(Webserver, CoversPath_SafePathAccepted)
 TEST(Webserver, CoversPath_DotDotRejected)
 {
     CHECK_FALSE(covers_path_safe("/covers/../etc/passwd"));
-    CHECK_FALSE(covers_path_safe("/../secret"));
     CHECK_FALSE(covers_path_safe("/covers/..%2F..%2Fetc"));  // encoded — still contains ".."
+}
+
+TEST(Webserver, CoversPath_PercentEncodedDotDotRejected)
+{
+    // %2e%2e has no literal ".." so the old strstr("..") guard missed this.
+    CHECK_FALSE(covers_path_safe("/covers/%2e%2e/cd32_ode.cfg"));
+    CHECK_FALSE(covers_path_safe("/covers/%2E%2E/secret"));
+}
+
+TEST(Webserver, CoversPath_SlashInFilenameRejected)
+{
+    CHECK_FALSE(covers_path_safe("/covers/sub/escape.jpg"));
+    CHECK_FALSE(covers_path_safe("/covers/a\\b.jpg"));
+}
+
+TEST(Webserver, CoversPath_PercentInFilenameRejected)
+{
+    CHECK_FALSE(covers_path_safe("/covers/art%20name.jpg"));
 }
 
 /* -------------------------------------------------------------------------
@@ -265,6 +334,120 @@ TEST(Webserver, LoadIndex_Overflow_Invalid)
 TEST(Webserver, LoadIndex_ZeroCount_AlwaysInvalid)
 {
     CHECK_FALSE(load_index_valid(0, 0));
+}
+
+// The following tests exercise the parse step (strtoul replica) — these are
+// the cases that atoi() could not safely handle.
+TEST(Webserver, LoadIndex_NegativeStringRejected)
+{
+    // strtoul("-1") returns ULONG_MAX (wraps unsigned); v > UINT32_MAX triggers rejection.
+    CHECK_FALSE(load_index_valid_from_str("-1", 3));
+}
+
+TEST(Webserver, LoadIndex_OverflowStringRejected)
+{
+    CHECK_FALSE(load_index_valid_from_str("99999999999", 3));
+}
+
+TEST(Webserver, LoadIndex_NonNumericStringRejected)
+{
+    CHECK_FALSE(load_index_valid_from_str("abc", 3));
+    CHECK_FALSE(load_index_valid_from_str("", 3));
+}
+
+TEST(Webserver, LoadIndex_ValidStringAccepted)
+{
+    CHECK_TRUE(load_index_valid_from_str("0", 3));
+    CHECK_TRUE(load_index_valid_from_str("2", 3));
+}
+
+/* -------------------------------------------------------------------------
+ * Firmware-flash token extraction and validation
+ * ---------------------------------------------------------------------- */
+
+TEST(Webserver, FwToken_ExtractFromHeader)
+{
+    char out[33];
+    const char *req =
+        "POST /api/fw/flash/NEBULA32.UF2 HTTP/1.1\r\n"
+        "Host: nebula32.local\r\n"
+        "X-FW-Token: aabbccddeeff00112233445566778899\r\n"
+        "Content-Length: 0\r\n\r\n";
+    extract_request_token(req, "/api/fw/flash/NEBULA32.UF2", out, sizeof(out));
+    STRCMP_EQUAL("aabbccddeeff00112233445566778899", out);
+}
+
+TEST(Webserver, FwToken_ExtractFromQueryString)
+{
+    char out[33];
+    const char *req = "POST /api/fw/flash/NEBULA32.UF2?token=deadbeef01234567 HTTP/1.1\r\n\r\n";
+    extract_request_token(req, "/api/fw/flash/NEBULA32.UF2?token=deadbeef01234567",
+                          out, sizeof(out));
+    STRCMP_EQUAL("deadbeef01234567", out);
+}
+
+TEST(Webserver, FwToken_HeaderTakesPrecedenceOverQuery)
+{
+    char out[33];
+    const char *req =
+        "POST /api/fw/flash/N.UF2?token=fromquery HTTP/1.1\r\n"
+        "X-FW-Token: fromheader\r\n\r\n";
+    extract_request_token(req, "/api/fw/flash/N.UF2?token=fromquery", out, sizeof(out));
+    STRCMP_EQUAL("fromheader", out);
+}
+
+TEST(Webserver, FwToken_MissingTokenReturnsEmpty)
+{
+    char out[33];
+    const char *req = "POST /api/fw/flash/NEBULA32.UF2 HTTP/1.1\r\n\r\n";
+    extract_request_token(req, "/api/fw/flash/NEBULA32.UF2", out, sizeof(out));
+    STRCMP_EQUAL("", out);
+}
+
+TEST(Webserver, FwToken_QueryMultipleParams)
+{
+    char out[33];
+    const char *req = "POST /x?foo=bar&token=abc123&baz=1 HTTP/1.1\r\n\r\n";
+    extract_request_token(req, "/x?foo=bar&token=abc123&baz=1", out, sizeof(out));
+    STRCMP_EQUAL("abc123", out);
+}
+
+// Replica of the token-validation guard in handle_request().
+// Returns true when the request should be allowed through.
+static bool fw_token_valid(const char *req, const char *url_path,
+                           const char *server_token)
+{
+    if (server_token[0] == '\0') return false;
+    char provided[33] = "";
+    extract_request_token(req, url_path, provided, sizeof(provided));
+    return strcmp(provided, server_token) == 0;
+}
+
+TEST(Webserver, FwToken_WrongTokenRejected)
+{
+    const char *req =
+        "POST /api/fw/flash/N.UF2 HTTP/1.1\r\n"
+        "X-FW-Token: ffffffffffffffffffffffffffffffff\r\n\r\n";
+    CHECK_FALSE(fw_token_valid(req, "/api/fw/flash/N.UF2",
+                               "aabbccddeeff00112233445566778899"));
+}
+
+TEST(Webserver, FwToken_CorrectTokenAccepted)
+{
+    const char *req =
+        "POST /api/fw/flash/N.UF2 HTTP/1.1\r\n"
+        "X-FW-Token: aabbccddeeff00112233445566778899\r\n\r\n";
+    CHECK_TRUE(fw_token_valid(req, "/api/fw/flash/N.UF2",
+                              "aabbccddeeff00112233445566778899"));
+}
+
+TEST(Webserver, FwToken_EmptyServerTokenBlocksAll)
+{
+    // Even a correct-looking client token must be rejected when server has no token configured.
+    const char *req =
+        "POST /api/fw/flash/N.UF2 HTTP/1.1\r\n"
+        "X-FW-Token: aabbccddeeff00112233445566778899\r\n\r\n";
+    CHECK_FALSE(fw_token_valid(req, "/api/fw/flash/N.UF2", ""));
 }
 
 /* -------------------------------------------------------------------------

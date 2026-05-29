@@ -37,6 +37,7 @@
 //     wifi_ssid         =          # WiFi network name (leave blank to disable WiFi)
 //     wifi_password     =          # WiFi password
 //     wifi_hostname     = nebula32 # mDNS hostname (access as nebula32.local)
+//     fw_token          =          # 32-char hex token required to flash firmware via web UI
 //
 //   Example cd32_ode.cfg:
 //     # CD32 ODE settings
@@ -106,6 +107,7 @@ typedef struct {
     char     wifi_ssid[64];     // WiFi SSID (parsed from cd32_ode.cfg)
     char     wifi_password[64]; // WiFi password
     char     wifi_hostname[32]; // mDNS hostname (default "nebula32")
+    char     fw_token[33];      // 32-char hex token required by /api/fw/flash/
 } logger_config_t;
 
 // ---------------------------------------------------------------------------

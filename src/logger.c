@@ -52,6 +52,7 @@ static logger_config_t s_cfg = {
     .wifi_ssid       = "",
     .wifi_password   = "",
     .wifi_hostname   = "nebula32",
+    .fw_token        = "",
 };
 
 // Ring buffer for deferred SD card writes
@@ -138,7 +139,13 @@ static void parse_settings_file(void) {
                 "# wifi_hostname sets the mDNS name (access as hostname.local).\n"
                 "# wifi_ssid     = MyNetwork\n"
                 "# wifi_password = MyPassword\n"
-                "wifi_hostname   = nebula32\n";
+                "wifi_hostname   = nebula32\n"
+                "#\n"
+                "# --- Firmware Update Security ---\n"
+                "# fw_token is required to authorise firmware flashing via the web UI.\n"
+                "# Set it to any 32-character hex string (generated on first webserver start\n"
+                "# if left blank). Copy the value from this file into your browser or curl.\n"
+                "# fw_token      =\n";
             UINT bw;
             f_write(&out, template_text, strlen(template_text), &bw);
             f_close(&out);
@@ -206,6 +213,9 @@ static void parse_settings_file(void) {
         } else if (strcasecmp(key, "wifi_hostname") == 0) {
             strncpy(s_cfg.wifi_hostname, val, sizeof(s_cfg.wifi_hostname) - 1);
             s_cfg.wifi_hostname[sizeof(s_cfg.wifi_hostname) - 1] = '\0';
+        } else if (strcasecmp(key, "fw_token") == 0) {
+            strncpy(s_cfg.fw_token, val, sizeof(s_cfg.fw_token) - 1);
+            s_cfg.fw_token[sizeof(s_cfg.fw_token) - 1] = '\0';
         }
         // Unknown keys are silently ignored
     }

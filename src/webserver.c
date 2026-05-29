@@ -33,6 +33,7 @@
 // Pico W WiFi + lwIP headers
 #include "pico/stdlib.h"
 #ifdef PICO_CYW43_SUPPORTED
+#include "pico/rand.h"    // get_rand_32() for fw_token generation
 #include "pico/cyw43_arch.h"
 #include "lwip/tcp.h"
 #include "lwip/pbuf.h"
@@ -61,6 +62,8 @@ static char s_pass[WS_PASS_MAX]   = "";
 static char s_host[WS_HOST_MAX]   = WS_DEFAULT_HOSTNAME;
 static char s_ip_str[16]          = "";
 static bool s_running             = false;
+// 32-char hex token loaded from cd32_ode.cfg — required to authorise firmware flash
+static char s_fw_token[33]        = "";
 
 // ---------------------------------------------------------------------------
 // Pending load request from web interface
@@ -124,6 +127,75 @@ static void read_wifi_config(void) {
     strncpy(s_pass, cfg->wifi_password, sizeof(s_pass) - 1);
     if (cfg->wifi_hostname[0] != '\0')
         strncpy(s_host, cfg->wifi_hostname, sizeof(s_host) - 1);
+    strncpy(s_fw_token, cfg->fw_token, sizeof(s_fw_token) - 1);
+    s_fw_token[sizeof(s_fw_token) - 1] = '\0';
+}
+
+// ---------------------------------------------------------------------------
+// Firmware-flash token helpers
+// ---------------------------------------------------------------------------
+
+// Append "fw_token = <hex32>\n" to cd32_ode.cfg and update s_fw_token in-place.
+// Called once from webserver_init() when no token is found in the config file.
+#ifndef WEBSERVER_TEST_BUILD
+static void generate_and_save_token(void) {
+    // Build 32-char hex token from four 32-bit hardware RNG words
+    uint32_t r[4];
+    r[0] = get_rand_32(); r[1] = get_rand_32();
+    r[2] = get_rand_32(); r[3] = get_rand_32();
+    snprintf(s_fw_token, sizeof(s_fw_token),
+             "%08lx%08lx%08lx%08lx",
+             (unsigned long)r[0], (unsigned long)r[1],
+             (unsigned long)r[2], (unsigned long)r[3]);
+
+    FIL f;
+    if (f_open(&f, "0:/cd32_ode.cfg", FA_OPEN_APPEND | FA_WRITE) == FR_OK) {
+        char line[48];
+        int  len = snprintf(line, sizeof(line), "fw_token = %s\n", s_fw_token);
+        UINT bw;
+        f_write(&f, line, (UINT)len, &bw);
+        f_close(&f);
+        printf("[WEB] Generated fw_token and saved to cd32_ode.cfg\n");
+    } else {
+        printf("[WEB] Warning: could not save fw_token to cd32_ode.cfg\n");
+    }
+}
+#endif // WEBSERVER_TEST_BUILD
+
+// Extract the token value supplied by the HTTP client.
+// Checks (in order): X-FW-Token header, then ?token= query string in url_path.
+// Writes into out[outsz]; always NUL-terminates.
+static void extract_request_token(const char *req, const char *url_path,
+                                  char *out, size_t outsz) {
+    out[0] = '\0';
+    if (outsz == 0) return;
+
+    // 1. Check X-FW-Token header
+    const char *hdr = strstr(req, "\r\nX-FW-Token: ");
+    if (hdr) {
+        hdr += sizeof("\r\nX-FW-Token: ") - 1;
+        size_t i = 0;
+        while (hdr[i] && hdr[i] != '\r' && hdr[i] != '\n' && i < outsz - 1) {
+            out[i] = hdr[i];
+            i++;
+        }
+        out[i] = '\0';
+        if (out[0] != '\0') return;
+    }
+
+    // 2. Check ?token= query string
+    const char *qs = strchr(url_path, '?');
+    if (!qs) return;
+    qs++;
+    const char *tok = strstr(qs, "token=");
+    if (!tok) return;
+    tok += sizeof("token=") - 1;
+    size_t i = 0;
+    while (tok[i] && tok[i] != '&' && tok[i] != '#' && i < outsz - 1) {
+        out[i] = tok[i];
+        i++;
+    }
+    out[i] = '\0';
 }
 
 // ---------------------------------------------------------------------------
@@ -523,7 +595,8 @@ static char *build_html_page(void) {
          "  var msg=document.getElementById('fw-msg');"
          "  if(!name||name===''||!confirm('Flash '+name+' and reboot?'))return;"
          "  msg.textContent='Flashing… do not power off.';"
-         "  fetch('/api/fw/flash/'+encodeURIComponent(name),{method:'POST'})"
+         "  fetch('/api/fw/flash/'+encodeURIComponent(name),"
+         "    {method:'POST',headers:{'X-FW-Token':'%s'}})"
          "  .then(function(r){return r.json();})"
          "  .then(function(d){"
          "    if(d.ok){"
@@ -535,7 +608,7 @@ static char *build_html_page(void) {
          "      msg.textContent='Error: '+(d.error||'unknown');}"
          "  }).catch(function(){msg.textContent='No response — device may be rebooting.';});"
          "}"
-         "</script>");
+         "</script>", s_fw_token);
 
     // Perspective starfield — 150 stars in normalised 3D space.
     // Each frame z decreases (star approaches); projected with x/z * W + cx.
@@ -690,7 +763,9 @@ static void handle_request(struct tcp_pcb *pcb, http_conn_t *conn) {
 
     // ── POST /api/load/{index} ── Load a disc
     if (is_post && strncmp(path, "/api/load/", 10) == 0) {
-        uint32_t idx = (uint32_t)atoi(path + 10);
+        char *endp;
+        unsigned long idx_ul = strtoul(path + 10, &endp, 10);
+        uint32_t idx = (endp == path + 10 || idx_ul > UINT32_MAX) ? UINT32_MAX : (uint32_t)idx_ul;
         if (idx < s_image_count) {
             s_load_index   = idx;
             s_load_pending = true;
@@ -768,13 +843,34 @@ static void handle_request(struct tcp_pcb *pcb, http_conn_t *conn) {
 
     // ── POST /api/fw/flash/{filename} ── Validate + flash UF2 from SD root
     if (is_post && strncmp(path, "/api/fw/flash/", 14) == 0) {
-        const char *fname = path + 14;
+        // Validate firmware-flash token before doing anything else.
+        char provided_token[33] = "";
+        extract_request_token(req, path, provided_token, sizeof(provided_token));
+        if (s_fw_token[0] == '\0' || strcmp(provided_token, s_fw_token) != 0) {
+            static const char *unauth =
+                "HTTP/1.1 403 Forbidden\r\nContent-Type: application/json\r\n"
+                "Connection: close\r\n\r\n"
+                "{\"ok\":false,\"error\":\"invalid or missing fw_token\"}";
+            tcp_write(pcb, unauth, strlen(unauth), TCP_WRITE_FLAG_COPY);
+            tcp_output(pcb);
+            return;
+        }
+
+        // Strip query string from fname before filename validation.
+        const char *fname_raw = path + 14;
+        char fname[MAX_PATH_LEN];
+        size_t fn_len = 0;
+        while (fname_raw[fn_len] && fname_raw[fn_len] != '?' && fn_len < sizeof(fname) - 1)
+            fn_len++;
+        memcpy(fname, fname_raw, fn_len);
+        fname[fn_len] = '\0';
+
         // S1 FIX: also block backslash — FatFS on Windows-adjacent toolchains
         // treats '\' as a path separator, bypassing the '/' check.
         // S2 FIX: bound fname length before snprintf path construction to prevent
         // silent truncation matching a shorter, different filename.
         if (strstr(fname, "..") || strstr(fname, "/") || strstr(fname, "\\") ||
-            strlen(fname) >= (size_t)(MAX_PATH_LEN - 3)) {
+            fn_len == 0 || fn_len >= (size_t)(MAX_PATH_LEN - 3)) {
             static const char *bad =
                 "HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\n"
                 "Connection: close\r\n\r\n{\"ok\":false,\"error\":\"invalid filename\"}";
@@ -804,8 +900,11 @@ static void handle_request(struct tcp_pcb *pcb, http_conn_t *conn) {
 
     // ── GET /covers/{name}.jpg ── Serve cover art from SD card
     if (is_get && strncmp(path, "/covers/", 8) == 0) {
-        // Sanitise: reject any ".." path traversal attempts
-        if (strstr(path, "..")) {
+        // Sanitise: only a bare filename is permitted — no path separators,
+        // no "..", and no percent-encoded sequences (%2e%2e bypasses ".." check).
+        const char *cover_name = path + 8;
+        if (strstr(cover_name, "..") || strchr(cover_name, '/') ||
+            strchr(cover_name, '\\') || strchr(cover_name, '%')) {
             static const char *forbidden =
                 "HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n";
             tcp_write(pcb, forbidden, strlen(forbidden), TCP_WRITE_FLAG_COPY);
@@ -814,7 +913,7 @@ static void handle_request(struct tcp_pcb *pcb, http_conn_t *conn) {
         }
 
         char sd_path[264];
-        snprintf(sd_path, sizeof(sd_path), "0:/covers/%s", path + 8);
+        snprintf(sd_path, sizeof(sd_path), "0:/covers/%s", cover_name);
 
         FIL cover_file;
         FRESULT fr = f_open(&cover_file, sd_path, FA_READ);
@@ -865,9 +964,15 @@ static void handle_request(struct tcp_pcb *pcb, http_conn_t *conn) {
     }
 
     // ── 404 fallback ──
+    // Sanitise path: strip non-printable bytes before reflecting into response.
+    char safe_path[256];
+    size_t sp = 0;
+    for (const char *c = path; *c && sp < sizeof(safe_path) - 1; c++)
+        safe_path[sp++] = (*c >= 0x20 && *c < 0x7f) ? *c : '?';
+    safe_path[sp] = '\0';
     snprintf(s_resp_buf, sizeof(s_resp_buf),
         "HTTP/1.1 404 Not Found\r\nContent-Type: text/plain\r\n"
-        "Connection: close\r\n\r\nNot found: %s", path);
+        "Connection: close\r\n\r\nNot found: %s", safe_path);
     tcp_write(pcb, s_resp_buf, strlen(s_resp_buf), TCP_WRITE_FLAG_COPY);
     tcp_output(pcb);
 }
@@ -943,6 +1048,17 @@ bool webserver_init(void) {
                "      wifi_password = YourPassword\n");
         return false;
     }
+
+    // Generate and persist a firmware-flash token if none is configured.
+    // The token is appended to cd32_ode.cfg and visible to whoever has SD access.
+#ifndef WEBSERVER_TEST_BUILD
+    if (s_fw_token[0] == '\0') {
+        generate_and_save_token();
+        printf("[WEB] fw_token generated: %s\n"
+               "[WEB] Copy this value from cd32_ode.cfg to authorise firmware flashing.\n",
+               s_fw_token);
+    }
+#endif
 
     printf("[WEB] Connecting to WiFi SSID: %s ...\n", s_ssid);
     LOG_INFO_MSG("WEB ", "connecting to SSID: %s", s_ssid);
