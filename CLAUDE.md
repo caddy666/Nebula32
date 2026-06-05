@@ -5,6 +5,8 @@ _Use_ _incremental_ _edit/write_ _calls_ - breaks larger files into logistical s
 _Never_ _output_ _entire_ _large_ _files_ _in_ _a_ _single_ _tool_ _call_
 _Split_ _by:_ _imports,_ _functions,_ _classes,_ _configuration_ _blocks_
 
+Priority: create shell file for making project with picoboard as option
+
 ```
 68EC020 CPU
     ↕ chipset bus
@@ -148,6 +150,17 @@ tracked as git submodules or vendored snapshots. Project-specific configuration 
 would otherwise require editing a vendor file (e.g. FatFS `ffconf.h`) must instead be
 provided by a shadowing copy in `include/`, which appears earlier on every include path.
 
+### wolfSSL libraries (planned HTTPS integration)
+
+| Library | Path | Role |
+|---------|------|------|
+| wolfSSL 5.9.1 | `libs/wolfssl-master/` | TLS engine; RP2350 TRNG port at `wolfcrypt/src/port/rpi_pico/` |
+| wolfssl-examples | `libs/wolfssl-examples-master/` | Reference config — use `RPi-Pico/config/user_settings.h` as the base |
+
+Integration path: **`WOLFSSL_LWIP_NATIVE`** (in `libs/wolfssl-master/src/wolfio.c:3326–3490`).
+`wolfSSL_SetIO_LwIP(ssl, pcb, recv_fn, arg)` takes the raw `struct tcp_pcb *` and handles all pbuf management internally — no manual I/O glue needed.
+Shadow config: `include/user_settings.h` (mirrors the ffconf.h pattern; not yet created).
+
 ---
 
 ## PIO resource allocation (merged build)
@@ -168,7 +181,7 @@ All four PIO programs are always loaded. The upstream servo PIO programs
 
 **Location:** `tests/host/`  
 **Run:** `make && ./cd32_tests -v`  
-**Result:** 567 tests, 0 failures  
+**Result:** 598 tests, 0 failures  
 **Parser tests:** `make parser_tests && ./parser_tests -v` → 33 tests, 0 failures (separate binary; uses FatFS injectable sim)
 **Virtual disc tests:** `make vdisc_tests && ./vdisc_tests -v` → 73 tests, 0 failures (separate binary; uses vdisc_sim with directory traversal support)
 **Stress tests:** `make stress_sector_cache && ./stress_sector_cache` → 5 tests, 0 failures (TSan binary; concurrent producer/consumer)
@@ -201,7 +214,8 @@ All four PIO programs are always loaded. The upstream servo PIO programs
 | `NrgTrackCalc` | 6 | NRG track length, lead-out/lead-in skip conditions |
 | `IsoLayout` | 6 | ISO parser output structure, disc_find_track, TOC lead-out |
 | `LbaFileOffset` | 3 | LBA→byte-offset formula: ISO (×2048), raw BIN (×2352), multi-track non-zero start_lba |
-| `Webserver` | 21 | basename_no_ext (incl. multiple-dots), state_name, config key=val parser (incl. value-contains-equals), ".." traversal guard, load-index bounds |
+| `Webserver` | 36 | basename_no_ext (incl. multiple-dots), state_name, config key=val parser (incl. value-contains-equals), ".." traversal guard, load-index bounds, fw-flash token extraction (header + query string, precedence, missing, wrong, empty server token) |
+| `FwFlashFilename` | 12 | POST /api/fw/flash/{filename} security guard: dot-dot rejected, slash rejected, backslash rejected, percent-encoded rejected (%2e%2e bypass), empty rejected, oversized rejected, exact boundary (MAX_PATH_LEN-3 reject / MAX_PATH_LEN-4 accept), query-string stripped before check, dot-dot in query-only safe, double-dot in base name also rejected (conservative) |
 | `HtmlEscape` | 8 | html_escape() replica: plain text pass-through, &amp; &lt; &gt; &quot; &#39; individual escapes, empty input, buffer truncation |
 | `Logger` | 22 | parse_bool truthy/falsy set, trim all whitespace variants, cmd_name known/unknown, ring buffer append/wrap/overflow, status byte flag decode |
 | `Config` | 19 | struct size, defaults field values, CRC validity after defaults, CRC excludes crc32 field, magic/version/CRC guard, flag bit orthogonality, reserved bytes all zero, CRC changes on last_image_index |
