@@ -37,7 +37,7 @@
 //     4. Copy to the covers/ directory on the SD card
 //
 // WIFI SETUP:
-//   WiFi SSID and password are read from cd32_ode.cfg:
+//   WiFi SSID and password are read from nebula32.cfg:
 //     wifi_ssid     = MyNetwork
 //     wifi_password = MyPassword
 //     wifi_hostname = cd32ode
@@ -60,13 +60,13 @@
 #include <stdbool.h>
 
 // ---------------------------------------------------------------------------
-// Config keys in cd32_ode.cfg
+// Config keys in nebula32.cfg
 // ---------------------------------------------------------------------------
 #define WS_CFG_SSID_KEY      "wifi_ssid"
 #define WS_CFG_PASS_KEY      "wifi_password"
 #define WS_CFG_HOSTNAME_KEY  "wifi_hostname"
 #define WS_DEFAULT_HOSTNAME  "cd32ode"
-#define WS_HTTP_PORT         80
+#define WS_HTTPS_PORT        443
 
 // Max SSID / password lengths
 #define WS_SSID_MAX     64
@@ -83,7 +83,7 @@
 // ---------------------------------------------------------------------------
 
 // Initialise WiFi and start the HTTP server.
-// Reads wifi_ssid and wifi_password from cd32_ode.cfg (already parsed by
+// Reads wifi_ssid and wifi_password from nebula32.cfg (already parsed by
 // logger.c's parse_settings_file — we re-read here for the WiFi keys).
 // Returns true if WiFi connects and server starts successfully.
 // On failure, returns false and the ODE continues operating without WiFi.

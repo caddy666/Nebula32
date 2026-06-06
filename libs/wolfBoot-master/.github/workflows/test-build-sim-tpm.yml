@@ -1,0 +1,82 @@
+name: Wolfboot Reusable Build Workflow for TPM with Simulator
+
+on:
+
+  workflow_call:
+    inputs:
+      arch:
+        required: true
+        type: string
+      config-file:
+        required: true
+        type: string
+      make-args:
+        required: false
+        type: string
+      rot-args:
+        required: false
+        type: string
+      keyauthstr:
+        required: false
+        type: string
+      sealauthstr:
+        required: false
+        type: string
+
+jobs:
+
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      # setup ibmswtpm2
+      - uses: actions/checkout@master
+        with:
+          repository: kgoldman/ibmswtpm2
+          path: ibmswtpm2
+      - name: ibmswtpm2 make
+        working-directory: ./ibmswtpm2/src
+        run: |
+          make
+          ./tpm_server &
+
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: make keysclean
+        run: |
+          make keysclean
+
+      - name: Select config
+        run: |
+          cp ${{inputs.config-file}} .config
+
+      - name: Build tools
+        run: |
+          make -C tools/keytools && make -C tools/bin-assemble
+
+      - name: Build TPM tools
+        run: |
+          make tpmtools ${{inputs.make-args}}
+
+      - name: Write TPM ROT to TPM
+        run: |
+          ./tools/tpm/rot -write ${{inputs.rot-args}} -auth="${{inputs.keyauthstr}}"
+
+      - name: Create a PCR Policy
+        run: |
+          echo aaa > aaa.bin
+          echo bbb > bbb.bin
+          ./tools/tpm/pcr_extend 0 aaa.bin
+          ./tools/tpm/pcr_extend 1 bbb.bin
+          ./tools/tpm/policy_create -pcr=1 -pcr=0 -out=policy.bin
+
+      - name: Build wolfboot
+        run: |
+          make ${{inputs.make-args}} WOLFBOOT_TPM_KEYSTORE_AUTH="${{inputs.keyauthstr}}" WOLFBOOT_TPM_SEAL_AUTH="${{inputs.sealauthstr}}"
+
+      - name: Run wolfBoot
+        run: |
+          ./wolfboot.elf get_version

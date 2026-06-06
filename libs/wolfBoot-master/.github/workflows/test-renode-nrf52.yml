@@ -1,0 +1,97 @@
+name: Renode Automated - Base Tests
+
+on:
+  push:
+    branches: [ 'master', 'main', 'release/**' ]
+  pull_request:
+    branches: [ '*' ]
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  renode_automated_base:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 25
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Select config
+        run: |
+          cp config/examples/nrf52840.config .config && make include/target.h SIGN=NONE
+
+
+# SIGN=NONE TEST
+
+      - name: Renode Tests SIGN=NONE
+        run: ./tools/renode/docker-test.sh "SIGN=NONE V=1"
+
+
+# ECC256 TEST
+      - name: Renode Tests ECC256
+        run: ./tools/renode/docker-test.sh "SIGN=ECC256 V=1"
+
+# ECC384 TEST
+      - name: Renode Tests ECC384
+        run: ./tools/renode/docker-test.sh "SIGN=ECC384"
+
+# ECC521 TEST
+      - name: Renode Tests ECC521
+        run: ./tools/renode/docker-test.sh "SIGN=ECC521"
+
+# ED25519 TEST
+      - name: Renode Tests ED25519
+        run: ./tools/renode/docker-test.sh "SIGN=ED25519"
+
+# ED448 TEST
+      - name: Renode Tests ED448
+        run: ./tools/renode/docker-test.sh "SIGN=ED448"
+
+# RSA2048 TEST
+      - name: Renode Tests RSA2048
+        run: ./tools/renode/docker-test.sh "SIGN=RSA2048"
+
+# RSA3072 TEST
+      - name: Renode Tests RSA3072
+        run: ./tools/renode/docker-test.sh "SIGN=RSA3072"
+
+# RSA4096 TEST
+      - name: Renode Tests RSA4096
+        run: ./tools/renode/docker-test.sh "SIGN=RSA4096"
+
+# LMS TEST
+      - name: Renode Tests LMS-8-5-5
+        run: ./tools/renode/docker-test.sh "SIGN=LMS LMS_LEVELS=2 LMS_HEIGHT=5 LMS_WINTERNITZ=8 WOLFBOOT_SMALL_STACK=0 IMAGE_SIGNATURE_SIZE=2644 IMAGE_HEADER_SIZE=5288 WOLFBOOT_SECTOR_SIZE=0x2000"
+
+# XMSS TEST
+      - name: Renode Tests XMSS-SHA2_10_256
+        run: ./tools/renode/docker-test.sh "SIGN=XMSS XMSS_PARAMS='XMSS-SHA2_10_256' WOLFBOOT_SMALL_STACK=0 IMAGE_SIGNATURE_SIZE=2500 IMAGE_HEADER_SIZE=5000 WOLFBOOT_SECTOR_SIZE=0x2000"
+
+# ML-DSA Level 2 TEST
+      - name: Renode Tests ML-DSA-44
+        run: ./tools/renode/docker-test.sh "SIGN=ML_DSA ML_DSA_LEVEL=2 WOLFBOOT_SMALL_STACK=0 IMAGE_SIGNATURE_SIZE=2420 IMAGE_HEADER_SIZE=4840 WOLFBOOT_SECTOR_SIZE=0x2000"
+
+# ML-DSA Level 3 TEST
+      - name: Renode Tests ML-DSA-65
+        run: ./tools/renode/docker-test.sh "SIGN=ML_DSA ML_DSA_LEVEL=3 WOLFBOOT_SMALL_STACK=0 IMAGE_SIGNATURE_SIZE=3309 IMAGE_HEADER_SIZE=8192 WOLFBOOT_SECTOR_SIZE=0x2000"
+
+# ML-DSA Level 5 TEST
+      - name: Renode Tests ML-DSA-87
+        run: ./tools/renode/docker-test.sh "SIGN=ML_DSA ML_DSA_LEVEL=5 WOLFBOOT_SMALL_STACK=0 IMAGE_SIGNATURE_SIZE=4627 IMAGE_HEADER_SIZE=12288 WOLFBOOT_SECTOR_SIZE=0x3000"
+
+      - name: Upload Output Dir
+        uses: actions/upload-artifact@v4
+        with:
+          name: Renode Test Results
+          path: test_results/

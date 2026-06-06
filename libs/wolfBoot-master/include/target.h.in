@@ -1,0 +1,166 @@
+/* target.h
+ *
+ * User configurable build-time options for bootloader and application offsets
+ *
+ * target.h is automatically generated using the template in target.h.in by running
+ * "make config".
+ *
+ * Copyright (C) 2026 wolfSSL Inc.
+ *
+ * This file is part of wolfBoot.
+ *
+ * wolfBoot is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * wolfBoot is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1335, USA
+ */
+
+#ifndef H_TARGETS_TARGET_
+#define H_TARGETS_TARGET_
+
+
+#ifndef WOLFBOOT_NO_PARTITIONS
+#    define WOLFBOOT_FIXED_PARTITIONS
+#endif
+
+#define WOLFBOOT_SECTOR_SIZE                 @WOLFBOOT_SECTOR_SIZE@
+
+#ifdef WOLFBOOT_FIXED_PARTITIONS
+
+#if defined(ARCH_SIM) && !defined(WOLFBOOT_PARTITION_FILENAME)
+    #include <stdint.h>
+    /* use runtime ram base for simulator */
+    extern uint8_t *sim_ram_base;
+    #undef  ARCH_FLASH_OFFSET
+    #define ARCH_FLASH_OFFSET ((size_t)sim_ram_base)
+    #define WOLFBOOT_PART_USE_ARCH_OFFSET
+#endif
+
+#ifdef PULL_LINKER_DEFINES
+    #include <stdint.h>
+
+    /* linker script variables */
+    extern const uint32_t _wolfboot_nsc_address[];
+    extern const uint32_t _wolfboot_nsc_size[];
+    extern const uint32_t _wolfboot_partition_boot_address[];
+    extern const uint32_t _wolfboot_partition_size[];
+    extern const uint32_t _wolfboot_partition_update_address[];
+    extern const uint32_t _wolfboot_partition_swap_address[];
+
+    /* create plain integers from linker script variables */
+    static const uint32_t WOLFBOOT_NSC_ADDRESS = (uint32_t)_wolfboot_nsc_address;
+    static const uint32_t WOLFBOOT_NSC_SIZE = (uint32_t)_wolfboot_nsc_size;
+    static const uint32_t WOLFBOOT_PARTITION_BOOT_ADDRESS = (uint32_t)_wolfboot_partition_boot_address;
+    static const uint32_t WOLFBOOT_PARTITION_SIZE = (uint32_t)_wolfboot_partition_size;
+    static const uint32_t WOLFBOOT_PARTITION_UPDATE_ADDRESS = (uint32_t)_wolfboot_partition_update_address;
+    static const uint32_t WOLFBOOT_PARTITION_SWAP_ADDRESS = (uint32_t)_wolfboot_partition_swap_address;
+#else
+    #if defined(WOLFBOOT_PART_USE_ARCH_OFFSET)
+        #if !defined(EXT_FLASH) || (defined(EXT_FLASH) && !defined(PART_BOOT_EXT))
+            #define WOLFBOOT_PARTITION_BOOT_ADDRESS   (ARCH_FLASH_OFFSET + @WOLFBOOT_PARTITION_BOOT_ADDRESS@)
+        #endif
+        #if !defined(EXT_FLASH) || (defined(EXT_FLASH) && !defined(PART_UPDATE_EXT))
+            #define WOLFBOOT_PARTITION_UPDATE_ADDRESS (ARCH_FLASH_OFFSET + @WOLFBOOT_PARTITION_UPDATE_ADDRESS@)
+        #endif
+        #if !defined(EXT_FLASH) || (defined(EXT_FLASH) && !defined(PART_SWAP_EXT))
+            #define WOLFBOOT_PARTITION_SWAP_ADDRESS   (ARCH_FLASH_OFFSET + @WOLFBOOT_PARTITION_SWAP_ADDRESS@)
+        #endif
+    #endif
+
+    /* use values provided on input template parsing */
+    #ifndef WOLFBOOT_NSC_ADDRESS
+    #define WOLFBOOT_NSC_ADDRESS              @WOLFBOOT_NSC_ADDRESS@
+    #endif
+    #ifndef WOLFBOOT_NSC_SIZE
+    #define WOLFBOOT_NSC_SIZE                 @WOLFBOOT_NSC_SIZE@
+    #endif
+    #ifndef WOLFBOOT_PARTITION_BOOT_ADDRESS
+    #define WOLFBOOT_PARTITION_BOOT_ADDRESS   @WOLFBOOT_PARTITION_BOOT_ADDRESS@
+    #endif
+    #ifndef WOLFBOOT_PARTITION_UPDATE_ADDRESS
+    #define WOLFBOOT_PARTITION_UPDATE_ADDRESS @WOLFBOOT_PARTITION_UPDATE_ADDRESS@
+    #endif
+    #ifndef WOLFBOOT_PARTITION_SWAP_ADDRESS
+    #define WOLFBOOT_PARTITION_SWAP_ADDRESS   @WOLFBOOT_PARTITION_SWAP_ADDRESS@
+    #endif
+    #ifndef WOLFBOOT_PARTITION_SIZE
+    #define WOLFBOOT_PARTITION_SIZE           @WOLFBOOT_PARTITION_SIZE@
+    #endif
+    #ifdef WOLFBOOT_SELF_HEADER
+    #if defined(WOLFBOOT_PART_USE_ARCH_OFFSET)
+        #if !defined(EXT_FLASH) || (defined(EXT_FLASH) && !defined(WOLFBOOT_SELF_HEADER_EXT))
+            #define WOLFBOOT_PARTITION_SELF_HEADER_ADDRESS (ARCH_FLASH_OFFSET + @WOLFBOOT_PARTITION_SELF_HEADER_ADDRESS@)
+        #endif
+    #endif
+    #ifndef WOLFBOOT_PARTITION_SELF_HEADER_ADDRESS
+    #define WOLFBOOT_PARTITION_SELF_HEADER_ADDRESS @WOLFBOOT_PARTITION_SELF_HEADER_ADDRESS@
+    #endif
+    #endif /* WOLFBOOT_SELF_HEADER */
+#endif
+
+#define WOLFBOOT_DTS_BOOT_ADDRESS             @WOLFBOOT_DTS_BOOT_ADDRESS@
+#define WOLFBOOT_DTS_UPDATE_ADDRESS           @WOLFBOOT_DTS_UPDATE_ADDRESS@
+
+#if defined(WOLFBOOT_FIXED_PARTITIONS) && \
+    !defined(WOLFBOOT_PART_USE_ARCH_OFFSET) && !defined(PULL_LINKER_DEFINES)
+    /*
+     * Only compare partitions that share the same internal flash address
+     * space. External partitions and runtime/linker-provided addresses are
+     * validated elsewhere.
+     */
+    #if !defined(PART_BOOT_EXT) && !defined(PART_UPDATE_EXT) && \
+        ((WOLFBOOT_PARTITION_UPDATE_ADDRESS + 0) != 0) && \
+        ((WOLFBOOT_PARTITION_BOOT_ADDRESS + 0 + WOLFBOOT_PARTITION_SIZE + 0) > \
+         (WOLFBOOT_PARTITION_UPDATE_ADDRESS + 0)) && \
+        ((WOLFBOOT_PARTITION_BOOT_ADDRESS + 0) < \
+         (WOLFBOOT_PARTITION_UPDATE_ADDRESS + 0 + WOLFBOOT_PARTITION_SIZE + 0))
+        #error "Boot and update partitions overlap"
+    #endif
+
+    #if !defined(PART_BOOT_EXT) && !defined(PART_SWAP_EXT) && \
+        ((WOLFBOOT_PARTITION_SWAP_ADDRESS + 0) != 0) && \
+        ((WOLFBOOT_PARTITION_BOOT_ADDRESS + 0 + WOLFBOOT_PARTITION_SIZE + 0) > \
+         (WOLFBOOT_PARTITION_SWAP_ADDRESS + 0)) && \
+        ((WOLFBOOT_PARTITION_BOOT_ADDRESS + 0) < \
+         (WOLFBOOT_PARTITION_SWAP_ADDRESS + 0 + WOLFBOOT_SECTOR_SIZE))
+        #error "Boot and swap partitions overlap"
+    #endif
+
+    #if !defined(PART_UPDATE_EXT) && !defined(PART_SWAP_EXT) && \
+        ((WOLFBOOT_PARTITION_UPDATE_ADDRESS + 0) != 0) && \
+        ((WOLFBOOT_PARTITION_SWAP_ADDRESS + 0) != 0) && \
+        ((WOLFBOOT_PARTITION_UPDATE_ADDRESS + 0 + WOLFBOOT_PARTITION_SIZE + 0) > \
+         (WOLFBOOT_PARTITION_SWAP_ADDRESS + 0)) && \
+        ((WOLFBOOT_PARTITION_UPDATE_ADDRESS + 0) < \
+         (WOLFBOOT_PARTITION_SWAP_ADDRESS + 0 + WOLFBOOT_SECTOR_SIZE))
+        #error "Update and swap partitions overlap"
+    #endif
+#endif
+
+#endif /* WOLFBOOT_FIXED_PARTITIONS */
+
+#if !defined(WOLFBOOT_NO_LOAD_ADDRESS)
+/* Load address in RAM for staged OS (update_ram only) */
+#define WOLFBOOT_LOAD_ADDRESS                 @WOLFBOOT_LOAD_ADDRESS@
+#endif
+
+/* Optional RAM-boot image size cap for targets without partitions */
+@WOLFBOOT_RAMBOOT_MAX_SIZE_DEFINE@
+#define WOLFBOOT_LOAD_DTS_ADDRESS             @WOLFBOOT_LOAD_DTS_ADDRESS@
+
+/* Load address for FIT ramdisk extraction (used when WOLFBOOT_FIT_RAMDISK
+ * is set; otherwise unused). 0 means "use the FIT image's `load` property
+ * verbatim — do not relocate". */
+#define WOLFBOOT_LOAD_RAMDISK_ADDRESS         @WOLFBOOT_LOAD_RAMDISK_ADDRESS@
+
+
+#endif /* !H_TARGETS_TARGET_ */

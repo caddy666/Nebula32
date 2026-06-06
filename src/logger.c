@@ -3,7 +3,7 @@
 // =============================================================================
 //
 // Implements buffered, non-blocking text logging to "cd32_cd.log" on the SD
-// card, controlled by settings in "cd32_ode.cfg".
+// card, controlled by settings in "nebula32.cfg".
 //
 // THREAD SAFETY:
 //   All logger_write() / LOG_* macro calls must come from Core 0 only.
@@ -18,7 +18,7 @@
 //   acceptable for the main loop, completely invisible to Core 1.
 //
 // LOG ROTATION:
-//   If log_max_kb > 0 in cd32_ode.cfg, the log file is truncated (a new
+//   If log_max_kb > 0 in nebula32.cfg, the log file is truncated (a new
 //   session marker is written) when it exceeds the size limit.  This
 //   prevents filling the SD card over extended play sessions.
 // =============================================================================
@@ -78,7 +78,7 @@ static uint32_t s_dropped_lines = 0;
 static uint32_t s_log_size_bytes = 0;
 
 // ---------------------------------------------------------------------------
-// Settings file parser ("cd32_ode.cfg")
+// Settings file parser ("nebula32.cfg")
 // ---------------------------------------------------------------------------
 // Keys are case-insensitive. Values of "1", "yes", "true" are truthy.
 // Unknown keys are silently ignored so users can add comments freely.
@@ -105,12 +105,12 @@ static void trim(char *s) {
 
 static void parse_settings_file(void) {
     FIL cfg_file;
-    FRESULT fr = f_open(&cfg_file, "0:/cd32_ode.cfg", FA_READ);
+    FRESULT fr = f_open(&cfg_file, "0:/nebula32.cfg", FA_READ);
     if (fr != FR_OK) {
         // No settings file — defaults remain in place.
         // Create a template file so the user knows it exists.
         FIL out;
-        if (f_open(&out, "0:/cd32_ode.cfg", FA_WRITE | FA_CREATE_NEW) == FR_OK) {
+        if (f_open(&out, "0:/nebula32.cfg", FA_WRITE | FA_CREATE_NEW) == FR_OK) {
             const char *template_text =
                 "# CD32 ODE Settings File\n"
                 "# Edit this file on the SD card to configure the drive emulator.\n"
@@ -149,14 +149,14 @@ static void parse_settings_file(void) {
             UINT bw;
             f_write(&out, template_text, strlen(template_text), &bw);
             f_close(&out);
-            printf("[LOG] Created default cd32_ode.cfg on SD card\n");
+            printf("[LOG] Created default nebula32.cfg on SD card\n");
         }
         // Enable logging by default (template was created)
         s_cfg.logging_enabled = true;
         return;
     }
 
-    printf("[LOG] Reading cd32_ode.cfg...\n");
+    printf("[LOG] Reading nebula32.cfg...\n");
     char line[128];
     while (f_gets(line, sizeof(line), &cfg_file)) {
         trim(line);

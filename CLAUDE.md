@@ -150,16 +150,17 @@ tracked as git submodules or vendored snapshots. Project-specific configuration 
 would otherwise require editing a vendor file (e.g. FatFS `ffconf.h`) must instead be
 provided by a shadowing copy in `include/`, which appears earlier on every include path.
 
-### wolfSSL libraries (planned HTTPS integration)
+### wolfSSL libraries (HTTPS integration — wired, pending firmware build verification)
 
 | Library | Path | Role |
 |---------|------|------|
 | wolfSSL 5.9.1 | `libs/wolfssl-master/` | TLS engine; RP2350 TRNG port at `wolfcrypt/src/port/rpi_pico/` |
-| wolfssl-examples | `libs/wolfssl-examples-master/` | Reference config — use `RPi-Pico/config/user_settings.h` as the base |
+| wolfssl-examples | `libs/wolfssl-examples-master/` | Reference config — `RPi-Pico/config/user_settings.h` base used |
 
 Integration path: **`WOLFSSL_LWIP_NATIVE`** (in `libs/wolfssl-master/src/wolfio.c:3326–3490`).
-`wolfSSL_SetIO_LwIP(ssl, pcb, recv_fn, arg)` takes the raw `struct tcp_pcb *` and handles all pbuf management internally — no manual I/O glue needed.
-Shadow config: `include/user_settings.h` (mirrors the ffconf.h pattern; not yet created).
+`wolfSSL_SetIO_LwIP(ssl, pcb, tls_recv_fn, NULL, conn)` installs `LwIPNativeReceiveCB` as the lwIP recv callback; all pbuf management is internal.
+Shadow config: `include/user_settings.h` (created; mirrors the ffconf.h pattern).
+CMake: `add_subdirectory(libs/wolfssl-master EXCLUDE_FROM_ALL)` + `wolfssl pico_rand` linked in pico2_w block; `pico.c` TRNG port added as explicit source.
 
 ---
 

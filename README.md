@@ -3,9 +3,10 @@
 Replaces the optical drive mechanism in a Commodore CD32 with a Raspberry Pi Pico 2 (RP2350) reading ISO, BIN/CUE, NRG, and MDF disc images from an SD card.
 
 ---
-this readme
-needs updating.....
+this readme  needs updating.....
 
+however:
+now with 100% more TLS than before...
 
 ## How It Works
 

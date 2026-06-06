@@ -1,0 +1,38 @@
+name: Footprint test
+
+on:
+  push:
+    branches: [ 'master', 'main', 'release/**' ]
+  pull_request:
+    branches: [ '*' ]
+
+jobs:
+  footprint_test:
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/wolfssl/wolfboot-ci-arm:v1.0
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Trust workspace
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: make clean
+        run: |
+          make keysclean && rm -f include/target.h
+
+      - name: Select config
+        run: |
+          cp config/examples/stm32f407-discovery.config .config && make include/target.h
+
+      - name: Build key tools
+        run: |
+          make keytools
+
+      - name: Build wolfboot and test footprint
+        run: |
+          make test-size-all

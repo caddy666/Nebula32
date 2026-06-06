@@ -38,7 +38,7 @@ option(BUILD_WITH_COMMO   "Enable upstream COMMO 3-wire bus (real CD32 hardware)
 # BUILD_WITH_ROTARY: Enable the MCP23017-based rotary encoder disc selector.
 #   Runs over I2C1 (GPIO 26/27) — no conflict with COMMO bus (GPIO 15-17).
 option(BUILD_WITH_ROTARY  "Enable rotary encoder (development/standalone)"        ON)
-
+#PICO_BOARD=pico2
 # GPIO 0-17: cd32_pico hardware interface (gpio_map.h is authoritative).
 # GPIO 18-29: ODE peripherals (SDIO, display, MCP23017 rotary encoder).
 # COMMO (GPIO 15-17) is a self-contained module; rotary encoder is on the
@@ -132,6 +132,12 @@ add_subdirectory(${FATFS_SDK_PATH}/src fatfs_sd)
 # MCP23017 I2C GPIO expander (adamboardman/pico-mcp23017)
 add_subdirectory(libs/pico-interfaces)
 add_subdirectory(libs/pico-mcp23017)
+
+# wolfSSL TLS engine (pico2_w only; EXCLUDE_FROM_ALL means it is only built when linked)
+# user_settings.h in include/ shadows the vendor copy via WOLFSSL_USER_SETTINGS=ON.
+set(WOLFSSL_USER_SETTINGS   ON  CACHE BOOL "" FORCE)
+set(WOLFSSL_SINGLE_THREADED ON  CACHE BOOL "" FORCE)
+add_subdirectory(libs/wolfssl-master EXCLUDE_FROM_ALL)
 
 # =============================================================================
 # Main executable
@@ -255,10 +261,28 @@ target_link_libraries(Nebula32
 
 )
 
-# ---- Pico 2 W WiFi + lwIP — only link when building for pico2_w ----
+# ---- Pico 2 W WiFi + lwIP + TLS — only link when building for pico2_w ----
 if(PICO_BOARD STREQUAL "pico2_w")
-    target_link_libraries(Nebula32 pico_cyw43_arch_lwip_poll)
+    target_link_libraries(Nebula32
+        pico_cyw43_arch_lwip_poll
+        wolfssl
+        pico_rand   # RP2350 TRNG — required by wolfSSL Pico port
+    )
+    # wolfSSL Pico TRNG port — not auto-included by wolfSSL CMake
+    target_sources(Nebula32 PRIVATE
+        libs/wolfssl-master/wolfcrypt/src/port/rpi_pico/pico.c
+    )
     target_compile_definitions(Nebula32 PRIVATE PICO_CYW43_SUPPORTED=1)
+
+    # TLS certificate check — runs every pico2_w build.
+    # Generates certs/server.{crt,key}.der and include/tls_cert.h if missing or expiring.
+    add_custom_target(tls_cert_check ALL
+        COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/gen_tls_cert.sh
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+        COMMENT "Checking TLS certificate validity"
+        VERBATIM
+    )
+    add_dependencies(Nebula32 tls_cert_check)
 endif()
 
 # ---- stdio via USB CDC (disable UART to free those pins for user GPIOs) ----

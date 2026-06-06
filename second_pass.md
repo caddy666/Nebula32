@@ -150,7 +150,7 @@ s_cfg.log_max_kb = (uint32_t)atoi(val);
 
 `atoi("0")` → 0 (rotation disabled — correct).
 `atoi("-1")` → -1 → cast to `uint32_t` = 4 294 967 295 KB = effectively unlimited.
-A typo in `cd32_ode.cfg` (`log_max_kb = -1`) disables rotation silently and
+A typo in `nebula32.cfg` (`log_max_kb = -1`) disables rotation silently and
 could fill the SD card.
 
 **Fix:** use `strtol()` + range check, or clamp: `s_cfg.log_max_kb = (val[0]=='-') ? 0 : (uint32_t)atoi(val);`

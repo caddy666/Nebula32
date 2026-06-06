@@ -1,0 +1,48 @@
+MEM_SIZE = 536870912;
+WOLFBOOT_LOAD_BASE = @WOLFBOOT_LOAD_BASE@;
+FSP_S_LOAD_BASE = @FSP_S_LOAD_BASE@;
+
+MEMORY
+{
+    RAM (rwx) : ORIGIN = 0x0 LENGTH = MEM_SIZE
+}
+
+SECTIONS
+{
+   .text WOLFBOOT_LOAD_BASE :
+    {
+       _start_wolfboot = .;
+       _start_text = .;
+       *(.text*)
+       *(.rodata*)
+       *(.keystore*)
+       *(.data*)
+       _start_fsp_s = .;
+       KEEP(*(.fsp_s))
+       _end_fsp_s = .;
+       . = ALIGN(4);
+       _end_text = .;
+       _end_wolfboot = .;
+    } > RAM
+
+    _stored_data = _end_text;
+
+     _fsp_size = _end_fsp_s - _start_fsp_s;
+    .bss WOLFBOOT_LOAD_BASE + SIZEOF(.text) (NOLOAD):
+    {
+       _start_bss = .;
+       __bss_start__ = .;
+       *(.bss*)
+       *(COMMON)
+       . = ALIGN(4);
+       _end_bss = .;
+       __bss_end__ = .;
+       _end_wb = .;
+    } > RAM
+
+    .fsp_s_base FSP_S_LOAD_BASE (NOLOAD) :
+    {
+       _fsp_s_base_start = .;
+       . += _fsp_size;
+    }
+}

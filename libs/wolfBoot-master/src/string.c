@@ -1,0 +1,513 @@
+/* string.h
+ *
+ * Implementations of standard library functions to eliminate external dependencies.
+ *
+ *
+ * Copyright (C) 2026 wolfSSL Inc.
+ *
+ * This file is part of wolfBoot.
+ *
+ * wolfBoot is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * wolfBoot is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1335, USA
+ */
+
+#ifdef __APPLE__
+#define _FORTIFY_SOURCE 0
+#endif
+
+#include <stddef.h>
+#if !defined(TARGET_library) && defined(__STDC_HOSTED__) && __STDC_HOSTED__ \
+    && !defined(__CCRX__)
+#include <string.h>
+#else
+size_t strlen(const char *s); /* forward declaration */
+#endif
+
+#ifdef DEBUG_UART
+    #include "printf.h"
+    #ifdef PRINTF_ENABLED
+    #include <stdarg.h>
+    #endif
+#endif
+
+#if !defined(__IAR_SYSTEMS_ICC__) && !defined(TARGET_X86_64_EFI) && \
+    !defined(__CCRX__) && !defined(_RENESAS_RA_)
+/* for RAMFUNCTION */
+#include "image.h"
+#endif
+
+/* allow using built-in libc if WOLFBOOT_USE_STDLIBC is defined */
+#ifndef WOLFBOOT_USE_STDLIBC
+#if !(defined(BUILD_LOADER_STAGE1) && defined(ARCH_PPC)) || \
+    (defined(PRINTF_ENABLED) && defined(DEBUG_UART)) \
+    || defined(TARGET_same51)
+
+int islower(int c)
+{
+    return (c >= 'a' && c <= 'z');
+}
+
+int isupper(int c)
+{
+    return (c >= 'A' && c <= 'Z');
+}
+
+int tolower(int c)
+{
+    return isupper(c) ? c - 'A' + 'a' : c;
+}
+
+int toupper(int c)
+{
+    return islower(c) ? c - 'a' + 'A' : c;
+}
+
+int isalpha(int c)
+{
+    return (isupper(c) || islower(c));
+}
+
+#if !defined(__IAR_SYSTEMS_ICC__) && !defined(TARGET_X86_64_EFI)
+void *memset(void *s, int c, size_t n)
+{
+    unsigned char *d = (unsigned char *)s;
+
+    while (n--) {
+        *d++ = (unsigned char)c;
+    }
+
+    return s;
+}
+#endif /* IAR */
+
+char *strcat(char *dest, const char *src)
+{
+    size_t i = 0;
+    size_t j = strlen(dest);
+    size_t src_len = strlen(src);
+
+    for (i = 0; i < src_len; i++) {
+        dest[j++] = src[i];
+    }
+    dest[j] = '\0';
+
+    return dest;
+}
+
+int strcmp(const char *s1, const char *s2)
+{
+    while (*s1 && *s2) {
+        int c1 = ((unsigned char)*s1++);
+        int c2 = ((unsigned char)*s2++);
+        if (c1 != c2)
+            return c1 - c2;
+    }
+
+    return ((unsigned char)*s1) - ((unsigned char)*s2);
+}
+
+int strcasecmp(const char *s1, const char *s2)
+{
+    while (*s1 && *s2) {
+        int c1 = tolower((unsigned char)*s1++);
+        int c2 = tolower((unsigned char)*s2++);
+        if (c1 != c2)
+            return c1 - c2;
+    }
+    return tolower((unsigned char)*s1) - tolower((unsigned char)*s2);
+}
+
+int strncasecmp(const char *s1, const char *s2, size_t n)
+{
+    if (n == 0)
+        return 0;
+
+    while (n--) {
+        int c1 = tolower((unsigned char)*s1++);
+        int c2 = tolower((unsigned char)*s2++);
+        if (c1 != c2)
+            return c1 - c2;
+        if (c1 == '\0')
+            return 0;
+    }
+    return 0;
+}
+
+char *strncat(char *dest, const char *src, size_t n)
+{
+    size_t i;
+    size_t j = strlen(dest);
+
+    for (i = 0; i < n && src[i] != '\0'; i++) {
+        dest[j + i] = src[i];
+    }
+    dest[j + i] = '\0';
+
+    return dest;
+}
+
+int strncmp(const char *s1, const char *s2, size_t n)
+{
+    int diff = 0;
+
+    while (n > 0) {
+        diff = (unsigned char)*s1 - (unsigned char)*s2;
+        if (diff || !*s1)
+            break;
+        s1++;
+        s2++;
+        n--;
+    }
+
+    return diff;
+}
+
+char *strncpy(char *dst, const char *src, size_t n)
+{
+    size_t i;
+
+    for (i = 0; i < n; i++) {
+        dst[i] = src[i];
+        if (src[i] == '\0')
+            break;
+    }
+
+    while (++i < n) {
+        dst[i] = '\0';
+    }
+
+    return dst;
+}
+
+char *strcpy(char *dst, const char *src)
+{
+   size_t i = 0;
+
+    while (1) {
+        dst[i] = src[i];
+        if (src[i] == '\0')
+            break;
+        i++;
+    }
+
+    return dst;
+}
+
+int memcmp(const void *_s1, const void *_s2, size_t n)
+{
+    int diff = 0;
+    const unsigned char *s1 = (const unsigned char *)_s1;
+    const unsigned char *s2 = (const unsigned char *)_s2;
+
+    while (!diff && n) {
+        diff = (int)*s1 - (int)*s2;
+        s1++;
+        s2++;
+        n--;
+    }
+
+    return diff;
+}
+
+void* memchr(void const *s, int c_in, size_t n)
+{
+    unsigned char c = (unsigned char)c_in;
+    unsigned char *char_ptr = (unsigned char*)s;
+    for (; n > 0; --n, ++char_ptr) {
+        if (*char_ptr == c) {
+            return (void*)char_ptr;
+        }
+    }
+    return NULL;
+}
+#endif /* !BUILD_LOADER_STAGE1 || (PRINTF_ENABLED && DEBUG_UART) */
+
+#if !(defined(BUILD_LOADER_STAGE1) && defined(ARCH_PPC)) || defined(DEBUG_UART)
+size_t strlen(const char *s)
+{
+    size_t i = 0;
+
+    while (s[i] != 0)
+        i++;
+
+    return i;
+}
+#endif
+
+#if  !defined(__IAR_SYSTEMS_ICC__) && !defined(TARGET_X86_64_EFI)
+/* some of the hal_flash_ functions need this during updates */
+#ifdef __CCRX__
+ #define RAMFUNCTION
+ #pragma section FRAM
+#endif
+void RAMFUNCTION *memcpy(void *dst, const void *src, size_t n)
+{
+    size_t i;
+    const char *s = (const char *)src;
+    char *d = (char *)dst;
+
+#ifdef FAST_MEMCPY
+    /* is 32-bit aligned pointer */
+    if (((size_t)dst & (sizeof(unsigned long)-1)) == 0 &&
+        ((size_t)src & (sizeof(unsigned long)-1)) == 0)
+    {
+        while (n >= sizeof(unsigned long)) {
+            *(unsigned long*)d = *(unsigned long*)s;
+            d += sizeof(unsigned long);
+            s += sizeof(unsigned long);
+            n -= sizeof(unsigned long);
+        }
+    }
+#endif
+    for (i = 0; i < n; i++) {
+        d[i] = s[i];
+    }
+
+    return dst;
+}
+#ifdef __CCRX__
+ #pragma section
+#endif
+#endif /* IAR */
+
+#if !defined(__IAR_SYSTEMS_ICC__) && !defined(TARGET_X86_64_EFI) && \
+    !defined(__CCRX__)
+void *memmove(void *dst, const void *src, size_t n)
+{
+    size_t i;
+    if (dst == src)
+        return dst;
+    if (src < dst)  {
+        const char *s = (const char *)src;
+        char *d = (char *)dst;
+        size_t aligned_n = 0;
+#ifdef FAST_MEMCPY
+        if (((size_t)dst & (sizeof(unsigned long)-1)) == 0 &&
+            ((size_t)src & (sizeof(unsigned long)-1)) == 0)
+        {
+            aligned_n = n & ~(sizeof(unsigned long) - 1);
+        }
+#endif
+        for (i = n; i > aligned_n; i--) {
+            d[i - 1] = s[i - 1];
+        }
+#ifdef FAST_MEMCPY
+        while (aligned_n > 0) {
+            aligned_n -= sizeof(unsigned long);
+            *(unsigned long*)(d + aligned_n) =
+                *(const unsigned long*)(s + aligned_n);
+        }
+#endif
+        return dst;
+    } else {
+        return memcpy(dst, src, n);
+    }
+}
+#endif /* !IAR && !X86_64_EFI && !__CCRX__ */
+#endif /* WOLFBOOT_USE_STDLIBC */
+
+#if defined(PRINTF_ENABLED) && defined(DEBUG_UART)
+void uart_writenum(int num, int base, int zeropad, int maxdigits)
+{
+    int i = 0;
+    char buf[sizeof(unsigned long)*2+1];
+    const char* kDigitLut = "0123456789ABCDEF";
+    unsigned int val = (unsigned int)num;
+    int sz = 0;
+    if (maxdigits == 0)
+        maxdigits = 8;
+    if (maxdigits > (int)sizeof(buf))
+        maxdigits = (int)sizeof(buf);
+    memset(buf, 0, sizeof(buf));
+    if (base == 10 && num < 0) { /* handle negative */
+        buf[i++] = '-';
+        val = -num;
+    }
+    if (zeropad) {
+        memset(&buf[i], '0', maxdigits);
+    }
+    do {
+        buf[sizeof(buf)-sz-1] = kDigitLut[(val % base)];
+        sz++;
+        val /= base;
+    } while (val > 0U);
+    if (zeropad && sz < maxdigits) {
+        i += maxdigits-sz;
+    }
+    memmove(&buf[i], &buf[sizeof(buf)-sz], sz);
+    i+=sz;
+    uart_write(buf, i);
+}
+
+void uart_vprintf(const char* fmt, va_list argp)
+{
+    char* fmtp = (char*)fmt;
+    int zeropad, maxdigits, precision, leftjust;
+    while (fmtp != NULL && *fmtp != '\0') {
+        /* print non formatting characters */
+        if (*fmtp != '%') {
+            uart_write(fmtp++, 1);
+            continue;
+        }
+        fmtp++; /* skip % */
+
+        /* find formatters */
+        zeropad = maxdigits = leftjust = 0;
+        precision = -1; /* -1 = not specified */
+        /* check for left-justify flag */
+        if (*fmtp == '-') {
+            leftjust = 1;
+            fmtp++;
+        }
+        while (*fmtp != '\0') {
+            if (*fmtp == '*') {
+                /* width from argument */
+                maxdigits = va_arg(argp, int);
+                fmtp++;
+            }
+            else if (*fmtp >= '0' && *fmtp <= '9') {
+                /* length formatter */
+                if (*fmtp == '0' && maxdigits == 0) {
+                    zeropad = 1;
+                }
+                maxdigits *= 10;
+                maxdigits += (*fmtp - '0');
+                fmtp++;
+            }
+            else if (*fmtp == '.') {
+                /* precision */
+                fmtp++;
+                if (*fmtp == '*') {
+                    precision = va_arg(argp, int);
+                    fmtp++;
+                } else {
+                    precision = 0;
+                    while (*fmtp >= '0' && *fmtp <= '9') {
+                        precision = precision * 10 + (*fmtp - '0');
+                        fmtp++;
+                    }
+                }
+            }
+            else if (*fmtp == 'l') {
+                /* long - skip */
+                fmtp++;
+            }
+            else if (*fmtp == 'z') {
+                /* auto type - skip */
+                fmtp++;
+            }
+            else {
+                break;
+            }
+        }
+
+        switch (*fmtp) {
+            case '%':
+                uart_write(fmtp, 1);
+                break;
+            case 'u':
+            case 'i':
+            case 'd':
+            {
+                int n = (int)va_arg(argp, int);
+                uart_writenum(n, 10, zeropad, maxdigits);
+                break;
+            }
+            case 'p':
+                uart_write("0x", 2);
+                /* fall through */
+            case 'x':
+            case 'X':
+            {
+                int n = (int)va_arg(argp, int);
+                uart_writenum(n, 16, zeropad, maxdigits);
+                break;
+            }
+            case 's':
+            {
+                char* str = (char*)va_arg(argp, char*);
+                int slen = (int)strlen(str);
+                if (leftjust) {
+                    uart_write(str, slen);
+                    while (slen < maxdigits) {
+                        uart_write(" ", 1);
+                        slen++;
+                    }
+                } else {
+                    while (slen < maxdigits) {
+                        uart_write(" ", 1);
+                        slen++;
+                    }
+                    uart_write(str, (uint32_t)strlen(str));
+                }
+                break;
+            }
+            case 'c':
+            {
+                char c = (char)va_arg(argp, int);
+                uart_write(&c, 1);
+                break;
+            }
+#ifdef UART_PRINTF_FLOAT
+            case 'f':
+            case 'e':
+            case 'g':
+            {
+                double val = va_arg(argp, double);
+                int prec = (precision >= 0) ? precision : 3;
+                int digit;
+                unsigned int ipart;
+
+                /* handle negative */
+                if (val < 0.0) {
+                    uart_write("-", 1);
+                    val = -val;
+                }
+
+                /* integer part */
+                ipart = (unsigned int)val;
+                uart_writenum((int)ipart, 10, 0, 0);
+
+                /* fractional part */
+                if (prec > 0) {
+                    double frac = val - (double)ipart;
+                    char c;
+                    int i;
+                    uart_write(".", 1);
+                    for (i = 0; i < prec; i++) {
+                        frac *= 10.0;
+                        digit = (int)frac;
+                        if (digit > 9) digit = 9;
+                        c = '0' + digit;
+                        uart_write(&c, 1);
+                        frac -= (double)digit;
+                    }
+                }
+                break;
+            }
+#endif /* UART_PRINTF_FLOAT */
+            default:
+                break;
+        }
+        fmtp++;
+    };
+}
+void uart_printf(const char* fmt, ...)
+{
+    va_list argp;
+    va_start(argp, fmt);
+    uart_vprintf(fmt, argp);
+    va_end(argp);
+}
+#endif /* PRINTF_ENABLED && DEBUG_UART */

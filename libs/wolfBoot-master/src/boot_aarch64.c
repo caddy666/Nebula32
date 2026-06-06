@@ -1,0 +1,281 @@
+/* boot_aarch64.c
+ *
+ * Copyright (C) 2026 wolfSSL Inc.
+ *
+ * This file is part of wolfBoot.
+ *
+ * wolfBoot is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * wolfBoot is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1335, USA
+ */
+
+#include <stdint.h>
+
+#include "image.h"
+#include "loader.h"
+#include "printf.h"
+#include "wolfboot/wolfboot.h"
+
+/* Include platform-specific header for EL configuration defines
+ * (EL2_HYPERVISOR, etc.). Must be visible here so the BOOT_EL1 /
+ * EL2_HYPERVISOR guards around the EL2->EL1 ERET transition below
+ * compile in for the active target. */
+#if defined(TARGET_versal)
+#include "hal/versal.h"
+#elif defined(TARGET_zynq)
+#include "hal/zynq.h"
+#elif defined(TARGET_nxp_ls1028a)
+#include "hal/nxp_ls1028a.h"
+#endif
+
+/* Linker exported variables */
+extern unsigned int __bss_start__;
+extern unsigned int __bss_end__;
+#ifndef NO_XIP
+extern unsigned int _stored_data;
+extern unsigned int _start_data;
+extern unsigned int _end_data;
+#endif
+
+extern void main(void);
+extern void gicv2_init_secure(void);
+
+/* Asm helper in boot_aarch64_start.S: cleans the entire D-cache to PoC,
+ * invalidates the I-cache to PoU, and disables MMU + I-cache + D-cache
+ * via SCTLR_EL2, then returns. Required before handoff to any payload
+ * that sets up its own translation (Linux kernel, hypervisor, bare-metal
+ * RTOS, later bootloader stage), and mandatory for the ARM64 Linux boot
+ * protocol. Only built when EL2_HYPERVISOR == 1 is visible to
+ * boot_aarch64_start.S (e.g. via hal/zynq.h on ZynqMP). */
+#if defined(EL2_HYPERVISOR) && EL2_HYPERVISOR == 1
+extern void el2_flush_and_disable_mmu(void);
+#endif
+
+/* SKIP_GIC_INIT - Skip GIC initialization before booting app
+ * This is needed for:
+ * - Versal: Uses GICv3, not GICv2. BL31 handles GIC setup.
+ * - Systems where another bootloader stage handles GIC init
+ * NO_QNX also implies SKIP_GIC_INIT for backwards compatibility
+ */
+#if defined(NO_QNX) && !defined(SKIP_GIC_INIT)
+#define SKIP_GIC_INIT
+#endif
+
+#ifndef TARGET_versal
+/* current_el() is defined in hal/versal.h for Versal */
+unsigned int current_el(void)
+{
+    unsigned long el;
+    asm volatile("mrs %0, CurrentEL" : "=r" (el) : : "cc");
+    return (unsigned int)((el >> 2) & 0x3U);
+}
+#endif
+
+#if defined(BOOT_EL1) && defined(EL2_HYPERVISOR) && EL2_HYPERVISOR == 1
+/**
+ * @brief Transition from EL2 to EL1 and jump to application
+ *
+ * This function configures the necessary system registers for EL1 operation
+ * and performs an exception return (ERET) to drop from EL2 to EL1.
+ *
+ * Based on ARM Architecture Reference Manual and U-Boot implementation.
+ *
+ * @param entry_point Address to jump to in EL1
+ * @param dts_addr Device tree address (passed in x0 to application)
+ */
+extern void el2_to_el1_boot(uintptr_t entry_point, uintptr_t dts_addr);
+#endif /* BOOT_EL1 && EL2_HYPERVISOR */
+
+void boot_entry_C(void)
+{
+    register unsigned int *dst, *src;
+
+    /* Initialize the BSS section to 0 */
+    dst = &__bss_start__;
+    while (dst < (unsigned int *)&__bss_end__) {
+        *dst = 0U;
+        dst++;
+    }
+
+#ifndef NO_XIP
+    /* Copy data section from flash to RAM if necessary */
+    src = (unsigned int*)&_stored_data;
+    dst = (unsigned int*)&_start_data;
+    if (src != dst) {
+        while (dst < (unsigned int *)&_end_data) {
+            *dst = *src;
+            dst++;
+            src++;
+        }
+    }
+#else
+    (void)src;
+#endif
+
+    /* Run wolfboot! */
+    main();
+}
+
+
+#ifdef MMU
+int WEAKFUNCTION hal_dts_fixup(void* dts_addr)
+{
+    (void)dts_addr;
+    return 0;
+}
+#endif
+
+
+/* This is the main loop for the bootloader.
+ *
+ * It performs the following actions:
+ *  - Call the application entry point
+ *
+ */
+
+#ifdef MMU
+void RAMFUNCTION do_boot(const uint32_t *app_offset, const uint32_t* dts_offset)
+#else
+void RAMFUNCTION do_boot(const uint32_t *app_offset)
+#endif
+{
+    wolfBoot_printf("do_boot: entry=0x%08x, EL=%d\n",
+        (uint32_t)(uintptr_t)app_offset, current_el());
+#ifdef MMU
+    wolfBoot_printf("do_boot: dts=0x%08x\n", (uint32_t)(uintptr_t)dts_offset);
+    hal_dts_fixup((uint32_t*)dts_offset);
+#endif
+
+#ifndef SKIP_GIC_INIT
+    /* Initialize GICv2 for Kernel (ZynqMP and similar platforms)
+     * Skip this for:
+     * - Versal (uses GICv3, handled by BL31)
+     * - Platforms where BL31 or another stage handles GIC
+     */
+    gicv2_init_secure();
+#endif
+
+#if defined(BOOT_EL1) && defined(EL2_HYPERVISOR) && EL2_HYPERVISOR == 1
+    /* Transition from EL2 to EL1 before jumping to application.
+     * This is needed when:
+     * - Application expects to run at EL1 (e.g., Linux kernel)
+     * - wolfBoot runs at EL2 (hypervisor mode)
+     */
+    {
+    #ifdef MMU
+        uintptr_t dts = (uintptr_t)dts_offset;
+    #else
+        uintptr_t dts = 0;
+    #endif
+        wolfBoot_printf("do_boot: EL2->EL1 via ERET\n");
+        el2_to_el1_boot((uintptr_t)app_offset, dts);
+    }
+#else
+    /* Stay at current EL (EL2 or EL3) and jump directly to application.
+     *
+     * Before the jump, tear down wolfBoot's EL2 MMU/caches so the next
+     * stage enters with a clean state. Mandatory for the ARM64 Linux
+     * boot protocol (Linux's arm64_panic_block_init() panics with
+     * "Non-EFI boot detected with MMU and caches enabled" otherwise),
+     * and correct for any payload that sets up its own translation
+     * (hypervisor, RTOS, later bootloader stage). */
+#if defined(MMU) && defined(EL2_HYPERVISOR) && EL2_HYPERVISOR == 1
+    if (current_el() == 2) {
+        wolfBoot_printf("do_boot: flushing caches, disabling MMU\n");
+        el2_flush_and_disable_mmu();
+    }
+#endif
+
+    /* Non-Linux EL2 and EL3 path: legacy direct br x4 */
+
+    /* Set application address via x4 */
+    asm volatile("mov x4, %0" : : "r"(app_offset));
+
+#ifdef MMU
+    /* Move the dts pointer to x5 (as first argument) */
+    asm volatile("mov x5, %0" : : "r"(dts_offset));
+#else
+    asm volatile("mov x5, xzr");
+#endif
+
+    /* Zero registers x1, x2, x3 */
+    asm volatile("mov x3, xzr");
+    asm volatile("mov x2, xzr");
+    asm volatile("mov x1, xzr");
+
+    /* Move the dts pointer to x0 (as first argument) */
+    asm volatile("mov x0, x5");
+
+    /* Unconditionally jump to app_entry at x4 */
+    asm volatile("br x4");
+#endif /* BOOT_EL1 */
+}
+
+#ifdef RAM_CODE
+
+#define AIRCR *(volatile uint32_t *)(0xE000ED0C)
+#define AIRCR_VKEY (0x05FA << 16)
+#define AIRCR_SYSRESETREQ (1 << 2)
+
+void RAMFUNCTION arch_reboot(void)
+{
+    AIRCR = AIRCR_SYSRESETREQ | AIRCR_VKEY;
+    while(1)
+        ;
+    wolfBoot_panic();
+
+}
+#endif
+
+/* ============================================================================
+ * Exception Handlers for EL2 (optional DEBUG_HARDFAULT)
+ * ============================================================================
+ */
+
+#if defined(DEBUG_HARDFAULT) && defined(DEBUG_UART) && defined(EL2_HYPERVISOR)
+
+#define READ_SYSREG(_out, _reg) __asm__ volatile("mrs %0, " #_reg : "=r"(_out))
+
+static void print_exception_info(const char *type)
+{
+    uint64_t esr, elr, far;
+
+    READ_SYSREG(esr, ESR_EL2);
+    READ_SYSREG(elr, ELR_EL2);
+    READ_SYSREG(far, FAR_EL2);
+
+    wolfBoot_printf("\n\n*** %s EXCEPTION ***\n", type);
+    wolfBoot_printf("ESR_EL2: 0x%08x%08x\n", (uint32_t)(esr >> 32), (uint32_t)esr);
+    wolfBoot_printf("ELR_EL2: 0x%08x%08x\n", (uint32_t)(elr >> 32), (uint32_t)elr);
+    wolfBoot_printf("FAR_EL2: 0x%08x%08x\n", (uint32_t)(far >> 32), (uint32_t)far);
+    wolfBoot_printf("*** SYSTEM HALTED ***\n");
+}
+
+static void hardfault_halt(const char *type)
+{
+    print_exception_info(type);
+    while (1) { __asm__ volatile("wfi"); }
+}
+
+void SynchronousInterrupt(void) { hardfault_halt("SYNCHRONOUS"); }
+void IRQInterrupt(void) { hardfault_halt("IRQ"); }
+void FIQInterrupt(void) { hardfault_halt("FIQ"); }
+void SErrorInterrupt(void) { hardfault_halt("SERROR"); }
+
+#else
+/* Simple stubs when debug not enabled */
+void SynchronousInterrupt(void) { while (1) { __asm__ volatile("wfi"); } }
+void IRQInterrupt(void) { while (1) { __asm__ volatile("wfi"); } }
+void FIQInterrupt(void) { while (1) { __asm__ volatile("wfi"); } }
+void SErrorInterrupt(void) { while (1) { __asm__ volatile("wfi"); } }
+#endif /* DEBUG_HARDFAULT && DEBUG_UART && EL2_HYPERVISOR */

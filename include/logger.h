@@ -20,7 +20,7 @@
 //   which keeps SD card write latency well away from real-time paths.
 //
 // SETTINGS FILE:
-//   The file "cd32_ode.cfg" in the SD card root controls logger behaviour.
+//   The file "nebula32.cfg" in the SD card root controls logger behaviour.
 //   It is a plain text file with one KEY=VALUE pair per line.
 //   Lines starting with '#' or ';' are comments.  Keys are case-insensitive.
 //
@@ -39,7 +39,7 @@
 //     wifi_hostname     = nebula32 # mDNS hostname (access as nebula32.local)
 //     fw_token          =          # 32-char hex token required to flash firmware via web UI
 //
-//   Example cd32_ode.cfg:
+//   Example nebula32.cfg:
 //     # CD32 ODE settings
 //     sdcard_base     = 0:/games/
 //     logging_enabled = 1
@@ -92,7 +92,7 @@ typedef enum {
 } log_level_t;
 
 // ---------------------------------------------------------------------------
-// Logger configuration (populated from cd32_ode.cfg)
+// Logger configuration (populated from nebula32.cfg)
 // ---------------------------------------------------------------------------
 typedef struct {
     bool     logging_enabled;   // Master on/off switch
@@ -104,7 +104,7 @@ typedef struct {
     bool     log_irq;           // Every IRQ assertion (very verbose!)
     uint32_t log_max_kb;        // Max log file size KB (0 = unlimited)
     char     sdcard_base[256];  // Base dir for disc image scan (default "0:/")
-    char     wifi_ssid[64];     // WiFi SSID (parsed from cd32_ode.cfg)
+    char     wifi_ssid[64];     // WiFi SSID (parsed from nebula32.cfg)
     char     wifi_password[64]; // WiFi password
     char     wifi_hostname[32]; // mDNS hostname (default "nebula32")
     char     fw_token[33];      // 32-char hex token required by /api/fw/flash/
@@ -123,7 +123,7 @@ typedef struct {
 // ---------------------------------------------------------------------------
 
 // Initialise the logger.
-// Reads cd32_ode.cfg from the SD card to determine enabled/disabled state
+// Reads nebula32.cfg from the SD card to determine enabled/disabled state
 // and which categories to log.  Opens (or creates) cd32_cd.log for appending.
 // Must be called after the SD card is mounted.
 // Returns true if logging is active, false if disabled or file open failed.
@@ -148,7 +148,7 @@ bool logger_is_enabled(void);
 // Returns the current logger configuration (read-only copy).
 const logger_config_t *logger_get_config(void);
 
-// Toggle logging on/off at runtime (does not modify cd32_ode.cfg).
+// Toggle logging on/off at runtime (does not modify nebula32.cfg).
 void logger_set_enabled(bool enabled);
 
 // ---------------------------------------------------------------------------

@@ -1,0 +1,522 @@
+/* stm32l5.c
+ *
+ * Copyright (C) 2026 wolfSSL Inc.
+ *
+ * This file is part of wolfBoot.
+ *
+ * wolfBoot is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * wolfBoot is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1335, USA
+ */
+
+#include <stdint.h>
+#include <stddef.h>
+#include <image.h>
+#include <string.h>
+
+#if defined(WOLFCRYPT_TZ_PSA)
+#if defined(WOLFBOOT_HASH_SHA256)
+#include <wolfssl/wolfcrypt/sha256.h>
+#elif defined(WOLFBOOT_HASH_SHA384)
+#include <wolfssl/wolfcrypt/sha512.h>
+#elif defined(WOLFBOOT_HASH_SHA3_384)
+#include <wolfssl/wolfcrypt/sha3.h>
+#endif
+#endif
+
+#include "hal.h"
+#include "hal/stm32l5.h"
+
+
+static void RAMFUNCTION flash_set_waitstates(unsigned int waitstates)
+{
+    uint32_t reg = FLASH_ACR;
+    if ((reg & FLASH_ACR_LATENCY_MASK) != waitstates)
+        FLASH_ACR =  (reg & ~FLASH_ACR_LATENCY_MASK) | waitstates ;
+}
+
+void RAMFUNCTION hal_flash_wait_complete(uint8_t bank)
+{
+    while ((FLASH_SR & FLASH_SR_BSY) == FLASH_SR_BSY)
+        ;
+#if TZ_SECURE()
+    while ((FLASH_NS_SR & FLASH_SR_BSY) == FLASH_SR_BSY)
+        ;
+#endif
+
+}
+
+void RAMFUNCTION hal_flash_clear_errors(uint8_t bank)
+{
+
+    FLASH_SR |= ( FLASH_SR_OPERR | FLASH_SR_PROGERR | FLASH_SR_WRPERR |
+            FLASH_SR_PGAERR | FLASH_SR_SIZERR | FLASH_SR_PGSERR
+#if !(TZ_SECURE())
+            |
+            FLASH_SR_OPTWERR
+#endif
+            ) ;
+#if TZ_SECURE()
+    FLASH_NS_SR |= ( FLASH_SR_OPERR | FLASH_SR_PROGERR | FLASH_SR_WRPERR |
+            FLASH_SR_PGAERR | FLASH_SR_SIZERR | FLASH_SR_PGSERR |
+            FLASH_SR_OPTWERR);
+#endif
+
+}
+
+int RAMFUNCTION hal_flash_write(uint32_t address, const uint8_t *data, int len)
+{
+    int i = 0;
+    uint32_t *src, *dst;
+    uint32_t dword[2];
+    volatile uint32_t *sr, *cr;
+
+    cr = &FLASH_CR;
+    sr = &FLASH_SR;
+
+    hal_flash_clear_errors(0);
+    src = (uint32_t *)data;
+    dst = (uint32_t *)address;
+
+#if TZ_SECURE()
+    if (address >= FLASH_BANK2_BASE)
+        hal_tz_claim_nonsecure_area(address, len);
+    /* Convert into secure address space */
+    dst = (uint32_t *)((address & (~FLASHMEM_ADDRESS_SPACE)) | FLASH_SECURE_MMAP_BASE);
+#endif
+
+    while (i < len) {
+        dword[0] = src[i >> 2];
+        dword[1] = src[(i >> 2) + 1];
+        *cr |= FLASH_CR_PG;
+        dst[i >> 2] = dword[0];
+        ISB();
+        dst[(i >> 2) + 1] = dword[1];
+        hal_flash_wait_complete(0);
+        if ((*sr & FLASH_SR_EOP) != 0)
+            *sr |= FLASH_SR_EOP;
+        *cr &= ~FLASH_CR_PG;
+        i+=8;
+    }
+#if TZ_SECURE()
+    hal_tz_release_nonsecure_area();
+#endif
+    return 0;
+}
+
+#define STM32L5_UID_BASE 0x1FFF7590u
+#define STM32L5_UID0 (*(volatile uint32_t *)(STM32L5_UID_BASE + 0x0))
+#define STM32L5_UID1 (*(volatile uint32_t *)(STM32L5_UID_BASE + 0x4))
+#define STM32L5_UID2 (*(volatile uint32_t *)(STM32L5_UID_BASE + 0x8))
+
+#if defined(WOLFCRYPT_TZ_PSA)
+static int uds_from_uid(uint8_t *out, size_t out_len)
+{
+    uint8_t uid[12];
+#if defined(WOLFBOOT_HASH_SHA256)
+    uint8_t digest[SHA256_DIGEST_SIZE];
+    wc_Sha256 hash;
+#elif defined(WOLFBOOT_HASH_SHA384)
+    uint8_t digest[SHA384_DIGEST_SIZE];
+    wc_Sha384 hash;
+#elif defined(WOLFBOOT_HASH_SHA3_384)
+    uint8_t digest[SHA3_384_DIGEST_SIZE];
+    wc_Sha3 hash;
+#endif
+    size_t copy_len = 0;
+
+    if (out == NULL || out_len == 0) {
+        return -1;
+    }
+
+    uid[0] = (uint8_t)(STM32L5_UID0 >> 0);
+    uid[1] = (uint8_t)(STM32L5_UID0 >> 8);
+    uid[2] = (uint8_t)(STM32L5_UID0 >> 16);
+    uid[3] = (uint8_t)(STM32L5_UID0 >> 24);
+    uid[4] = (uint8_t)(STM32L5_UID1 >> 0);
+    uid[5] = (uint8_t)(STM32L5_UID1 >> 8);
+    uid[6] = (uint8_t)(STM32L5_UID1 >> 16);
+    uid[7] = (uint8_t)(STM32L5_UID1 >> 24);
+    uid[8] = (uint8_t)(STM32L5_UID2 >> 0);
+    uid[9] = (uint8_t)(STM32L5_UID2 >> 8);
+    uid[10] = (uint8_t)(STM32L5_UID2 >> 16);
+    uid[11] = (uint8_t)(STM32L5_UID2 >> 24);
+
+#if defined(WOLFBOOT_HASH_SHA256)
+    wc_InitSha256(&hash);
+    wc_Sha256Update(&hash, uid, sizeof(uid));
+    wc_Sha256Final(&hash, digest);
+    copy_len = sizeof(digest);
+#elif defined(WOLFBOOT_HASH_SHA384)
+    wc_InitSha384(&hash);
+    wc_Sha384Update(&hash, uid, sizeof(uid));
+    wc_Sha384Final(&hash, digest);
+    copy_len = sizeof(digest);
+#elif defined(WOLFBOOT_HASH_SHA3_384)
+    wc_InitSha3_384(&hash, NULL, INVALID_DEVID);
+    wc_Sha3_384_Update(&hash, uid, sizeof(uid));
+    wc_Sha3_384_Final(&hash, digest);
+    copy_len = sizeof(digest);
+#endif
+
+    if (copy_len > out_len) {
+        copy_len = out_len;
+    }
+    memcpy(out, digest, copy_len);
+    return 0;
+}
+
+int hal_uds_derive_key(uint8_t *out, size_t out_len)
+{
+    if (out == NULL || out_len == 0) {
+        return -1;
+    }
+
+#ifdef WOLFBOOT_UDS_UID_FALLBACK_FORTEST
+    return uds_from_uid(out, out_len);
+#else
+    return -1;
+#endif
+}
+#endif /* WOLFCRYPT_TZ_PSA */
+
+int hal_attestation_get_lifecycle(uint32_t *lifecycle)
+{
+    if (lifecycle == NULL) {
+        return -1;
+    }
+
+    *lifecycle = 0x3000u; /* PSA_LIFECYCLE_SECURED (default) */
+    return 0;
+}
+
+void RAMFUNCTION hal_flash_unlock(void)
+{
+    hal_flash_wait_complete(0);
+    if ((FLASH_CR & FLASH_CR_LOCK) != 0) {
+        FLASH_KEYR = FLASH_KEY1;
+        DMB();
+        FLASH_KEYR = FLASH_KEY2;
+        DMB();
+        while ((FLASH_CR & FLASH_CR_LOCK) != 0)
+            ;
+    }
+}
+
+void RAMFUNCTION hal_flash_lock(void)
+{
+    hal_flash_wait_complete(0);
+    if ((FLASH_CR & FLASH_CR_LOCK) == 0)
+        FLASH_CR |= FLASH_CR_LOCK;
+}
+
+void RAMFUNCTION hal_flash_opt_unlock(void)
+{
+    hal_flash_wait_complete(0);
+    if ((FLASH_CR & FLASH_CR_OPTLOCK) != 0) {
+        FLASH_OPTKEYR = FLASH_OPTKEY1;
+        DMB();
+        FLASH_OPTKEYR = FLASH_OPTKEY2;
+        DMB();
+        while ((FLASH_CR & FLASH_CR_OPTLOCK) != 0)
+            ;
+    }
+
+}
+
+void RAMFUNCTION hal_flash_opt_lock(void)
+{
+    FLASH_CR |= FLASH_CR_OPTSTRT;
+    hal_flash_wait_complete(0);
+    FLASH_CR |= FLASH_CR_OBL_LAUNCH;
+    if ((FLASH_CR & FLASH_CR_OPTLOCK) == 0)
+        FLASH_CR |= FLASH_CR_OPTLOCK;
+}
+
+int RAMFUNCTION hal_flash_erase(uint32_t address, int len)
+{
+    uint32_t end_address;
+    uint32_t p;
+
+    hal_flash_clear_errors(0);
+    if (len == 0)
+        return -1;
+
+    if (address < ARCH_FLASH_OFFSET)
+        return -1;
+
+    end_address = address + len;
+    for (p = address; p < end_address; p += FLASH_PAGE_SIZE) {
+        uint32_t reg;
+        uint32_t base;
+        uint32_t bker = 0;
+        if ((((FLASH_OPTR & FLASH_OPTR_DBANK) == 0) && (p <= FLASH_TOP)) ||
+                (p < FLASH_BANK2_BASE)) {
+            base = FLASHMEM_ADDRESS_SPACE;
+        }
+        else if(p >= (FLASH_BANK2_BASE) && (p <= (FLASH_TOP) ))
+        {
+            bker = FLASH_CR_BKER;
+            base = FLASH_BANK2_BASE;
+        } else {
+            FLASH_CR &= ~FLASH_CR_PER ;
+            return 0; /* Address out of range */
+        }
+        reg = FLASH_CR & (~((FLASH_CR_PNB_MASK << FLASH_CR_PNB_SHIFT) | FLASH_CR_BKER));
+        reg |= ((((p - base)  >> 11) << FLASH_CR_PNB_SHIFT) | FLASH_CR_PER | bker );
+        FLASH_CR = reg;
+        DMB();
+        FLASH_CR |= FLASH_CR_STRT;
+        hal_flash_wait_complete(0);
+    }
+    /* If the erase operation is completed, disable the associated bits */
+    FLASH_CR &= ~FLASH_CR_PER ;
+    return 0;
+}
+
+static void clock_pll_off(void)
+{
+    uint32_t reg32;
+
+     /* Select MSI as SYSCLK source. */
+    reg32 = RCC_CFGR;
+    reg32 &= ~((1 << 1) | (1 << 0));
+    RCC_CFGR = (reg32 | RCC_CFGR_SW_MSI);
+    DMB();
+
+    /* Wait for MSI clock to be selected. */
+    while ((RCC_CFGR & ((1 << 1) | (1 << 0))) != RCC_CFGR_SW_MSI) {};
+
+    /* Turn off PLL */
+    RCC_CR &= ~RCC_CR_PLLON;
+    DMB();
+}
+
+/*This implementation will setup MSI 48 MHz as PLL Source Mux, PLLCLK as System Clock Source*/
+
+static void clock_pll_on(int powersave)
+{
+    uint32_t reg32;
+    uint32_t plln, pllm, pllq, pllp, pllr, hpre, apb1pre, apb2pre , flash_waitstates;
+
+    RCC_APB2ENR |= RCC_APB2ENR_SYSCFGEN;
+    RCC_APB1ENR |= RCC_APB1ENR_PWREN;
+    PWR_CR3 |= PWR_CR3_UCPD_DBDIS;
+
+    PWR_CR1 &= ~((1 << 10) | (1 << 9));
+    PWR_CR1 |= (PWR_CR1_VOS_0 << PWR_CR1_VOS_SHIFT);
+    /* Delay after setting the voltage scaling */
+    reg32 = PWR_CR1;
+    while ((PWR_SR2 & PWR_SR2_VOSF)) {};
+
+    while ((RCC_CR & RCC_CR_MSIRDY) == 0) {};
+    flash_waitstates = 2;
+    flash_set_waitstates(flash_waitstates);
+
+    RCC_CR |= RCC_CR_MSIRGSEL;
+
+    reg32 = RCC_CR;
+    reg32 &= ~((1 << 7) | (1 << 6) | (1 << 5) | (1 << 4));
+    reg32 |= (RCC_CR_MSIRANGE_11 << RCC_CR_MSIRANGE_SHIFT);
+    RCC_CR = reg32;
+    reg32 = RCC_CR;
+    DMB();
+
+    /* Select clock parameters (CPU Speed = 110 MHz) */
+    pllm = 12;
+    plln = 55;
+    pllp = 7;
+    pllq = RCC_PLLCFGR_QR_DIV_2;
+    pllr = RCC_PLLCFGR_QR_DIV_2;
+    hpre  = RCC_AHB_PRESCALER_DIV_NONE;
+    apb1pre = RCC_APB_PRESCALER_DIV_NONE;
+    apb2pre = RCC_APB_PRESCALER_DIV_NONE;
+    flash_waitstates = 5;
+
+    RCC_CR &= ~RCC_CR_PLLON;
+    while ((RCC_CR & RCC_CR_PLLRDY) != 0) {};
+
+    /*PLL Clock source selection*/
+    reg32 = RCC_PLLCFGR ;
+    reg32 |= RCC_PLLCKSELR_PLLSRC_MSI;
+    reg32 |= ((pllm-1) << RCC_PLLCFGR_PLLM_SHIFT);
+    reg32 |= ((plln) << RCC_PLLCFGR_PLLN_SHIFT);
+    reg32 |= ((pllp) << RCC_PLLCFGR_PLLP_SHIFT);
+    reg32 |= ((pllq) << RCC_PLLCFGR_PLLQ_SHIFT);
+    reg32 |= ((pllr) << RCC_PLLCFGR_PLLR_SHIFT);
+    RCC_PLLCFGR = reg32;
+    DMB();
+
+    RCC_CR |= RCC_CR_PLLON;
+    while ((RCC_CR & RCC_CR_PLLRDY) == 0) {};
+
+    RCC_PLLCFGR |= RCC_PLLCFGR_PLLREN;
+
+    flash_set_waitstates(flash_waitstates);
+
+    /*step down HPRE before going to >80MHz*/
+    reg32 = RCC_CFGR ;
+    reg32 &= ~((1 << 7) | (1 << 6) | (1 << 5) | (1 << 4));
+    reg32 |= ((RCC_AHB_PRESCALER_DIV_2) << RCC_CFGR_HPRE_SHIFT) ;
+    RCC_CFGR = reg32;
+    DMB();
+
+    /* Select PLL as SYSCLK source. */
+    reg32 = RCC_CFGR;
+    reg32 &= ~((1 << 1) | (1 << 0));
+    RCC_CFGR = (reg32 | RCC_CFGR_SW_PLL);
+    DMB();
+
+    /* Wait for PLL clock to be selected. */
+    while ((RCC_CFGR & ((1 << 1) | (1 << 0))) != RCC_CFGR_SW_PLL) {};
+
+    /*step-up HPRE to go > 80MHz*/
+    reg32 = RCC_CFGR ;
+    reg32 &= ~((1 << 7) | (1 << 6) | (1 << 5) | (1 << 4));
+    reg32 |= ((hpre) << RCC_CFGR_HPRE_SHIFT) ;
+    RCC_CFGR = reg32;
+    DMB();
+
+    /*PRE1 and PRE2 conf*/
+    reg32 = RCC_CFGR ;
+    reg32 &= ~((1 << 10) | (1 << 9) | (1 << 8));
+    reg32 |= ((apb1pre) << RCC_CFGR_PPRE1_SHIFT) ;
+    reg32 &= ~((1 << 13) | (1 << 12) | (1 << 11));
+    reg32 |= ((apb2pre) << RCC_CFGR_PPRE2_SHIFT) ;
+    RCC_CFGR = reg32;
+    DMB();
+}
+
+#if TZ_SECURE()
+static void periph_unsecure()
+{
+    volatile uint32_t reg;
+
+    /*Enable clock for User LED GPIOs */
+    RCC_AHB2_CLOCK_ER|= LED_AHB2_ENABLE;
+
+    /* Enable clock for LPUART1 */
+    RCC_APB1_CLOCK_ER |= UART1_APB1_CLOCK_ER_VAL;
+    /* Enable clock for USART3 used by emu-test-apps on PD8/PD9 */
+    RCC_APB1_CLOCK_ER |= UART3_APB1_CLOCK_ER_VAL;
+    /* Enable clock for GPIO D (USART3 pins) */
+    RCC_AHB2_CLOCK_ER |= GPIOD_AHB2_CLOCK_ER;
+
+
+    PWR_CR2 |= PWR_CR2_IOSV;
+    /*Un-secure User LED GPIO pins */
+#ifdef STM32_DISCOVERY
+    GPIO_SECCFGR(GPIOD_BASE) &= ~(1<<LED_USR_PIN);
+    GPIO_SECCFGR(GPIOG_BASE) &= ~(1<<LED_BOOT_PIN);
+#else /* Nucleo board */
+    GPIO_SECCFGR(GPIOA_BASE) &= ~(1<<LED_BOOT_PIN);
+    GPIO_SECCFGR(GPIOB_BASE) &= ~(1<<LED_USR_PIN);
+    GPIO_SECCFGR(GPIOC_BASE) &= ~(1<<LED_EXTRA_PIN);
+#endif
+
+    /* Unsecure LPUART1 */
+    TZSC_PRIVCFGR1 &= ~(TZSC_PRIVCFG1_LPUARTPRIV);
+    GPIO_SECCFGR(GPIOG_BASE) &= ~(1<<UART1_TX_PIN);
+    GPIO_SECCFGR(GPIOG_BASE) &= ~(1<<UART1_RX_PIN);
+
+    /* Unsecure USART3 and its pins for the STM32L5 emulator app path. */
+    reg = TZSC_SECCFGR1;
+    if (reg & TZSC_SECCFGR1_USART3SEC) {
+        reg &= ~TZSC_SECCFGR1_USART3SEC;
+        DMB();
+        TZSC_SECCFGR1 = reg;
+    }
+    GPIO_SECCFGR(GPIOD_BASE) &= ~(1u << 8);
+    GPIO_SECCFGR(GPIOD_BASE) &= ~(1u << 9);
+
+}
+#endif
+
+
+#define OPTR_SWAP_BANK (1 << 20)
+
+#define AIRCR *(volatile uint32_t *)(0xE000ED0C)
+#define AIRCR_VKEY (0x05FA << 16)
+#define AIRCR_SYSRESETREQ (1 << 2)
+
+static void RAMFUNCTION stm32l5_reboot(void)
+{
+    AIRCR = AIRCR_SYSRESETREQ | AIRCR_VKEY;
+    while(1)
+        ;
+
+}
+
+void RAMFUNCTION hal_flash_dualbank_swap(void)
+{
+    uint32_t cur_opts;
+    hal_flash_unlock();
+    hal_flash_opt_unlock();
+    cur_opts = (FLASH_OPTR & FLASH_OPTR_SWAP_BANK) >> 20;
+    if (cur_opts)
+        FLASH_OPTR &= (~FLASH_OPTR_SWAP_BANK);
+    else
+        FLASH_OPTR |= FLASH_OPTR_SWAP_BANK;
+    hal_flash_opt_lock();
+    hal_flash_lock();
+    stm32l5_reboot();
+}
+
+
+#if defined(DUALBANK_SWAP) && defined(__WOLFBOOT)
+static uint8_t bootloader_copy_mem[BOOTLOADER_SIZE];
+static void RAMFUNCTION fork_bootloader(void)
+{
+    uint8_t *data = (uint8_t *) FLASHMEM_ADDRESS_SPACE;
+    uint32_t dst  = FLASH_BANK2_BASE;
+
+    /* Return if content already matches */
+    if (memcmp(data, (void *)FLASH_BANK2_BASE, BOOTLOADER_SIZE) == 0)
+        return;
+
+    /* Read the wolfBoot image in RAM */
+    memcpy(bootloader_copy_mem, data, BOOTLOADER_SIZE);
+
+    /* Mass-erase */
+    hal_flash_unlock();
+    hal_flash_erase(dst, BOOTLOADER_SIZE);
+    hal_flash_write(dst, bootloader_copy_mem, BOOTLOADER_SIZE);
+    hal_flash_lock();
+}
+#endif
+
+void hal_init(void)
+{
+
+#if defined(DUALBANK_SWAP) && defined(__WOLFBOOT)
+    if ((FLASH_OPTR & (FLASH_OPTR_SWAP_BANK | FLASH_OPTR_DBANK)) == FLASH_OPTR_DBANK)
+        fork_bootloader();
+#endif
+
+#if TZ_SECURE()
+    hal_tz_sau_init();
+    hal_gtzc_init();
+#endif
+    clock_pll_on(0);
+
+}
+
+void hal_prepare_boot(void)
+{
+#ifdef WOLFBOOT_RESTORE_CLOCK
+    clock_pll_off();
+#endif
+#if TZ_SECURE()
+    periph_unsecure();
+#endif
+}

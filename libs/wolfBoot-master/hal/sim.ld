@@ -1,0 +1,1 @@
+/* linker script not required */

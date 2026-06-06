@@ -1,0 +1,18 @@
+[submodule "android/wolfssljni-ndk-sample/wolfssl"]
+	path = android/wolfssljni-ndk-sample/wolfssl
+	url = https://github.com/wolfSSL/wolfssl.git
+[submodule "android/wolfssljni-ndk-sample/wolfssljni"]
+	path = android/wolfssljni-ndk-sample/wolfssljni
+	url = https://github.com/wolfSSL/wolfssljni.git
+[submodule "android/wolfssljni-ndk-gradle/wolfssl"]
+	path = android/wolfssljni-ndk-gradle/wolfssl
+	url = https://github.com/wolfSSL/wolfssl.git
+[submodule "android/wolfssljni-ndk-gradle/wolfssljni"]
+	path = android/wolfssljni-ndk-gradle/wolfssljni
+	url = https://github.com/wolfSSL/wolfssljni.git
+[submodule "android/wolfcryptjni-ndk-gradle/wolfssl"]
+	path = android/wolfcryptjni-ndk-gradle/wolfssl
+	url = https://github.com/wolfssl/wolfssl.git
+[submodule "android/wolfcryptjni-ndk-gradle/wolfcrypt-jni"]
+	path = android/wolfcryptjni-ndk-gradle/wolfcrypt-jni
+	url = https://github.com/wolfssl/wolfcrypt-jni

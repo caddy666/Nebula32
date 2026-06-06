@@ -34,7 +34,7 @@
 // ---------------------------------------------------------------------------
 // How long the "selection preview" display stays active before auto-confirming
 // (0 = never auto-confirm; user must press button)
-// Set in cd32_ode.cfg as: ui_autoload_ms = 3000
+// Set in nebula32.cfg as: ui_autoload_ms = 3000
 // ---------------------------------------------------------------------------
 #define UI_AUTOLOAD_TIMEOUT_MS    0    // Default: no auto-load; wait for press
 

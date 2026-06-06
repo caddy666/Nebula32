@@ -7,12 +7,14 @@
 // invariant.  If the production code diverges, the replica will differ and
 // the test will catch the regression.
 //
-// Functions under test (all static in logger.c):
-//   parse_bool()       — maps config value strings to bool (truthy set)
-//   trim()             — strips leading/trailing whitespace/newlines in-place
-//   cmd_name()         — maps COMMO command byte to a human-readable string
-//   ring_append()      — ring buffer write with drop-on-overflow semantics
-//   status flag decode — bit-mask → flag string used in _log_cmd_resp()
+// Functions under test:
+//   parse_bool()       — replica of logger.c static; maps config value strings to bool
+//   trim()             — replica of logger.c static; strips leading/trailing whitespace
+//   ring_append()      — mirrors logger.c ring buffer write with drop-on-overflow semantics
+//   cmd_name()         — standalone COMMO opcode→name map (removed from logger.c as dead
+//                        code; retained here as reference documentation of the opcode set)
+//   decode_status_flags() — standalone status byte decoder (_log_cmd_resp removed from
+//                        logger.c; retained as reference for the DRIVE_STATUS_* bit layout)
 // =============================================================================
 
 #include <CppUTest/TestHarness.h>
@@ -23,7 +25,10 @@
 #include "logger.h"
 
 // ---------------------------------------------------------------------------
-// Replicated helpers — must stay in sync with src/logger.c
+// Replicated helpers — must stay in sync with src/logger.c:
+//   parse_bool(), trim() — verified live replicas
+// Standalone helpers (removed from logger.c, kept as reference docs):
+//   cmd_name(), decode_status_flags()
 // ---------------------------------------------------------------------------
 
 static bool parse_bool(const char *val)
@@ -219,6 +224,8 @@ TEST(Logger, Trim_OnlyWhitespace)
 
 /* -------------------------------------------------------------------------
  * cmd_name — COMMO command byte → display string
+ * (cmd_name was removed from logger.c as dead code; these tests serve as
+ * reference documentation for the COMMO opcode set and its canonical names)
  * ---------------------------------------------------------------------- */
 
 TEST(Logger, CmdName_KnownCommands)
@@ -308,7 +315,9 @@ TEST(Logger, Ring_ZeroLengthAppendIsNoop)
 }
 
 /* -------------------------------------------------------------------------
- * Status byte flag decoding (mirrors _log_cmd_resp in logger.c)
+ * Status byte flag decoding — reference documentation for DRIVE_STATUS_* bits
+ * (_log_cmd_resp was removed from logger.c as dead code; decode_status_flags
+ * here documents the bit layout against cd_types.h DRIVE_STATUS_* constants)
  * ---------------------------------------------------------------------- */
 
 TEST(Logger, StatusFlags_Busy)

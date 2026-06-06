@@ -1,0 +1,54 @@
+name: Stack Size warnings
+
+# START OF COMMON SECTION
+on:
+  push:
+    branches: [ 'release/**' ]
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    branches: [ '*' ]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+# END OF COMMON SECTION
+
+jobs:
+  build_library:
+    strategy:
+      matrix:
+        config: [
+          # defaults, noasm
+          '--disable-asm',
+
+          # defaults + native PQ, no asm
+          '--disable-asm --enable-mlkem --enable-lms --enable-xmss --enable-mldsa',
+
+          # all-crypto + native PQ, no asm
+          '--disable-asm --enable-all-crypto --enable-mlkem --enable-lms --enable-xmss --enable-mldsa',
+
+          # defaults, intelasm + sp-asm
+          '--enable-intelasm --enable-sp-asm',
+
+          # defaults + native PQ, intelasm + sp-asm
+          '--enable-intelasm --enable-sp-asm --enable-mlkem --enable-lms --enable-xmss --enable-mldsa',
+
+          # all-crypto + native PQ, intelasm + sp-asm
+          '--enable-intelasm --enable-sp-asm --enable-all-crypto --enable-mlkem --enable-lms --enable-xmss --enable-mldsa'
+        ]
+    name: build library
+    if: ${{ (github.repository_owner == 'wolfssl') && (github.event_name != 'pull_request' || github.event.pull_request.draft == false) }}
+    runs-on: ubuntu-24.04
+    # This should be a safe limit for the tests to run.
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+        name: Checkout wolfSSL
+
+      - name: Build wolfCrypt with smallstack and stack depth warnings, and run testwolfcrypt
+        run: |
+          ./autogen.sh || $(exit 2)
+          echo "running ./configure ... ${{ matrix.config }}"
+          ./configure --enable-cryptonly --disable-cryptocb --disable-testcert --enable-smallstack --enable-smallstackcache --enable-crypttests --disable-benchmark --disable-examples --with-max-rsa-bits=16384 --enable-stacksize=verbose CFLAGS="-Wframe-larger-than=2048 -Wstack-usage=4096 -DWOLFSSL_TEST_MAX_RELATIVE_STACK_BYTES=8192 -DTEST_ALWAYS_RUN_TO_END" ${{ matrix.config }} || $(exit 3)
+          make -j 4 || $(exit 4)
+          ./wolfcrypt/test/testwolfcrypt

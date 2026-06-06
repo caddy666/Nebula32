@@ -22,11 +22,11 @@ Usage:
 
 SD card setup reminder:
   Copy validated images to the root directory of a FAT32 or exFAT formatted
-  SD card.  The firmware also reads 'cd32_ode.cfg' from the SD card root to
+  SD card.  The firmware also reads 'nebula32.cfg' from the SD card root to
   configure logging and other settings.  On first boot, if this file does not
   exist, the firmware creates a template with all settings documented inline.
 
-  Key settings in cd32_ode.cfg:
+  Key settings in nebula32.cfg:
     logging_enabled = 1     # Write cd32_cd.log (1=on, 0=off)
     log_commands    = 1     # Log every CXD2545Q command and response
     log_sectors     = 0     # Log every sector (verbose; leave off normally)

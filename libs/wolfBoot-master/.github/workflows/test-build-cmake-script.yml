@@ -1,0 +1,64 @@
+# Tests the /tools/scripts/wolfboot_cmake_full_build.sh
+# See also test-build-cmake-presets.yml
+# Presets are found in /CMakePresets.json
+#
+name: wolfboot CMake Script
+on:
+  push:
+    branches: [ 'master', 'main', 'release/**' ]
+  pull_request:
+    branches: [ "*" ]
+
+jobs:
+  wolfboot_build_script_test:
+    name: Build wolfBoot (target=${{ matrix.target }})
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/wolfssl/wolfboot-ci-arm:v1.0
+    timeout-minutes: 15
+
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          # - "~No config (wolfBoot sim)"
+          # - imx-rt # Disabled, requires NXP SDK
+          - stm32c0
+          - stm32f1
+          - stm32f4
+          - stm32f7
+          - stm32g0
+          - stm32h5
+          - stm32h7
+          - stm32l0
+          - stm32l4
+          - stm32l5
+          - stm32u5
+          - stm32wb
+          # add more targets here later, e.g.:
+          # - stm32v8
+          # - sim options, etc
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Trust workspace
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: View Presets
+        run: |
+          # Use CMake to list all presets defined in CMakePresets.json
+          echo "All presets:"
+          cmake -S . -B build --list-presets=configure
+
+          chmod +x ./tools/scripts/wolfboot_cmake_full_build.sh
+
+      - name: Run wolfboot_cmake_full_build script
+        run: |
+          rm -rf ./build
+          rm -rf ./build-"${{ matrix.target }}"
+
+          ./tools/scripts/wolfboot_cmake_full_build.sh --CLEAN  "${{ matrix.target }}"
+          ./tools/scripts/wolfboot_cmake_full_build.sh --target "${{ matrix.target }}"

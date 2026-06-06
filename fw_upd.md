@@ -135,3 +135,135 @@ while (f_read(&fil, read_buf, BUFFER_SIZE, &bytes_read) == FR_OK && bytes_read >
 }
 
 f_close(&fil);
+
+---
+
+## TODO — bugs, security holes, optimisations found during 2026-05-31 audit
+
+### Security
+
+**S1 — Missing `%` guard in `POST /api/fw/flash/` filename validator** (`src/webserver.c:877`)
+
+The `/covers/` guard (line 911–912) explicitly rejects any filename containing `%` to
+block `%2e%2e`-style bypasses of the `..` check. Its own comment says: *"no
+percent-encoded sequences (%2e%2e bypasses '..' check)"*.
+
+The `POST /api/fw/flash/` guard at line 877 has no such `%` check:
+```c
+// CURRENT — missing % guard:
+if (strstr(fname, "..") || strstr(fname, "/") || strstr(fname, "\\") ||
+    fn_len == 0 || fn_len >= (size_t)(MAX_PATH_LEN - 3)) {
+
+// CONSISTENT with covers endpoint:
+if (strstr(fname, "..") || strchr(fname, '/') || strchr(fname, '\\') ||
+    strchr(fname, '%') ||                          // ← add this
+    fn_len == 0 || fn_len >= (size_t)(MAX_PATH_LEN - 3)) {
+```
+
+In practice FatFS does not URL-decode, so `0:/%2e%2e%2fconfig.UF2` will fail to
+open and the flash operation is never attempted. However this relies on an implicit
+property of the FatFS implementation as a safety net rather than an explicit guard.
+If the VFS layer ever changes, the `%` bypass would become real. Add `strchr(fname,
+'%')` to harden the guard to match the covers endpoint's defence-in-depth posture.
+
+Also add a test in `FwFlashFilename`:
+```cpp
+TEST(FwFlashFilename, PercentEncoded_Rejected)
+{
+    CHECK_FALSE(fw_flash_fname_safe("%2e%2e%2fconfig.UF2"));
+}
+```
+
+---
+
+### Optimisations
+
+**O1 — `strstr` used for single-character search in fw/flash guard** (`src/webserver.c:877`)
+
+The fw/flash guard uses `strstr(fname, "/")` and `strstr(fname, "\\")` to detect
+single characters. The covers guard correctly uses `strchr`. These are semantically
+identical but `strchr` is more efficient and more idiomatic:
+
+```c
+// CURRENT:
+strstr(fname, "/") || strstr(fname, "\\")
+
+// BETTER (matches covers endpoint):
+strchr(fname, '/') || strchr(fname, '\\')
+```
+
+Also update the `fw_flash_fname_safe` replica in `tests/host/test_webserver.cpp` to
+match.
+
+**O2 — Cheap `fn_len` bound checks run after three `strstr` calls** (`src/webserver.c:877–878`)
+
+Current evaluation order: `strstr(..) || strstr(..) || strstr(..) || fn_len == 0 || fn_len >= MAX`.
+For an empty filename (`fn_len == 0`) three `strstr("")` calls return NULL before the
+trivial integer check is reached. Preferred order — bounds first, string search only
+if needed:
+
+```c
+if (fn_len == 0 || fn_len >= (size_t)(MAX_PATH_LEN - 3) ||
+    strstr(fname, "..") || strchr(fname, '/') || strchr(fname, '\\') || strchr(fname, '%')) {
+```
+
+The test replica in `fw_flash_fname_safe()` already uses this order — update
+production to match.
+
+---
+
+### Test gaps
+
+**T1 — `Oversized_Rejected` does not test the exact rejection boundary** (`tests/host/test_webserver.cpp`)
+
+`Oversized_Rejected` creates a string of `MAX_PATH_LEN + 3` characters — far above
+the threshold. Add two precision tests:
+
+```cpp
+TEST(FwFlashFilename, Oversized_ExactThreshold_Rejected)
+{
+    // fn_len == MAX_PATH_LEN - 3 is the rejection threshold (>=).
+    char at[MAX_PATH_LEN - 3 + 1];
+    memset(at, 'A', MAX_PATH_LEN - 3);
+    at[MAX_PATH_LEN - 3] = '\0';
+    CHECK_FALSE(fw_flash_fname_safe(at));
+}
+
+TEST(FwFlashFilename, Oversized_OneBelowThreshold_Accepted)
+{
+    // fn_len == MAX_PATH_LEN - 4 is the last accepted length.
+    char at[MAX_PATH_LEN - 4 + 1];
+    memset(at, 'A', MAX_PATH_LEN - 4);
+    at[MAX_PATH_LEN - 4] = '\0';
+    CHECK_TRUE(fw_flash_fname_safe(at));
+}
+```
+
+**T2 — No test documents the `..` false-positive for legitimate double-dot filenames** (`tests/host/test_webserver.cpp`)
+
+`strstr(fname, "..")` rejects any filename containing two consecutive dots, including
+non-traversal names like `firmware..v2.UF2`. Add a test that documents this behaviour
+so the trade-off is explicit and reviewers understand why such filenames are blocked:
+
+```cpp
+TEST(FwFlashFilename, DoubleDotInBasename_AlsoRejected)
+{
+    // strstr(..) blocks ANY double-dot, including firmware..v2.UF2
+    // which cannot traverse but is rejected conservatively.
+    // This is intentional — see webserver.c:877 comment.
+    CHECK_FALSE(fw_flash_fname_safe("firmware..v2.UF2"));
+}
+```
+
+If a future release needs to support such filenames, the fix is to check for
+`/..`, `\..`, `../`, `..\` boundaries rather than bare `..`.
+
+---
+
+### Replica drift note (not a bug — already fixed this session)
+
+`parse_cfg_line()` in `tests/host/test_webserver.cpp` and `cmd_name()` /
+`decode_status_flags()` in `tests/host/test_logger.cpp` are orphaned replicas —
+the production functions they tracked were removed. Comments updated 2026-05-31 to
+document them as standalone reference implementations rather than live replicas.
+No functional impact; flagged here so the next replica audit skips them.

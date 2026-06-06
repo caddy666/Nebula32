@@ -1,0 +1,71 @@
+name: Wolfboot CMake Build (Ubuntu)
+on:
+  push:
+    branches: [ 'master', 'main', 'release/**' ]
+  pull_request:
+    branches: [ '*' ]
+jobs:
+  cmake_automated_test:
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/wolfssl/wolfboot-ci-arm:v1.0
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Trust workspace
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Run CMake build for STM32U5
+        run: |
+          rm -rf ./build
+          cmake -B build -DWOLFBOOT_TARGET=stm32u5 -DWOLFBOOT_PARTITION_BOOT_ADDRESS=0x08100000 -DWOLFBOOT_SECTOR_SIZE=0x2000 -DWOLFBOOT_PARTITION_SIZE=0x20000 -DWOLFBOOT_PARTITION_UPDATE_ADDRESS=0x817F000 -DWOLFBOOT_PARTITION_SWAP_ADDRESS=0x81FE000 -DNO_MPU=yes
+
+      - name: Build wolfBoot
+        run: make -C build
+
+      - name: Run CMake build for STM32H7
+        run: |
+          rm -rf ./build
+          cmake -B build -DWOLFBOOT_TARGET=stm32h7 -DWOLFBOOT_PARTITION_BOOT_ADDRESS=0x8020000 -DWOLFBOOT_SECTOR_SIZE=0x20000 -DWOLFBOOT_PARTITION_SIZE=0xD0000 -DWOLFBOOT_PARTITION_UPDATE_ADDRESS=0x80F0000 -DWOLFBOOT_PARTITION_SWAP_ADDRESS=0x81C0000
+      - name: Build wolfBoot
+        run: make -C build
+
+      - name: Run CMake build for STM32F407-DISCOVERY
+        run: |
+          rm -rf ./build
+          cmake -B build -DWOLFBOOT_TARGET=stm32f4 -DWOLFBOOT_PARTITION_SIZE=0x20000 -DWOLFBOOT_SECTOR_SIZE=0x20000 -DWOLFBOOT_PARTITION_BOOT_ADDRESS=0x08020000 -DWOLFBOOT_PARTITION_UPDATE_ADDRESS=0x08040000 -DWOLFBOOT_PARTITION_SWAP_ADDRESS=0x08060000 -DCLOCK_SPEED=160000000 -DSTM32_PLLM=8 -DSTM32_PLLN=336 -DSTM32_PLLP=2 -DSTM32_PLLQ=7
+      - name: Build wolfBoot
+        run: make -C build
+
+      - name: Run CMake build for STM32F411-BLACKPILL
+        run: |
+          rm -rf ./build
+          cmake -B build -DWOLFBOOT_TARGET=stm32f4 -DWOLFBOOT_PARTITION_SIZE=0x20000 -DWOLFBOOT_SECTOR_SIZE=0x20000 -DWOLFBOOT_PARTITION_BOOT_ADDRESS=0x08020000 -DWOLFBOOT_PARTITION_UPDATE_ADDRESS=0x08040000 -DWOLFBOOT_PARTITION_SWAP_ADDRESS=0x08060000 -DCLOCK_SPEED=84000000 -DSTM32_PLLM=25 -DSTM32_PLLN=336 -DSTM32_PLLP=4 -DSTM32_PLLQ=7
+      - name: Build wolfBoot
+        run: make -C build
+
+      - name: Run CMake build for STM32L0
+        run: |
+          rm -rf ./build
+          cmake -B build -DWOLFBOOT_TARGET=stm32l0 -DWOLFBOOT_PARTITION_BOOT_ADDRESS=0x8000 -DWOLFBOOT_SECTOR_SIZE=0x1000 -DWOLFBOOT_PARTITION_SIZE=0x10000 -DWOLFBOOT_PARTITION_UPDATE_ADDRESS=0x18000 -DWOLFBOOT_PARTITION_SWAP_ADDRESS=0x28000 -DNVM_FLASH_WRITEONCE=yes
+      - name: Build wolfBoot
+        run: make -C build
+
+      - name: Run Cmake build for Nordic nrf52
+        run: |
+          rm -rf ./build
+          cmake -B build -DWOLFBOOT_TARGET=nrf52 -DWOLFBOOT_PARTITION_SIZE=0x8000 -DWOLFBOOT_SECTOR_SIZE=0x1000 -DWOLFBOOT_PARTITION_BOOT_ADDRESS=0x27000 -DWOLFBOOT_PARTITION_UPDATE_ADDRESS=0x2F000 -DWOLFBOOT_PARTITION_SWAP_ADDRESS=0x37000
+      - name: Build wolfBoot
+        run: make -C build
+
+      - name: Run wolfbuild script
+        run: |
+          rm -rf ./build
+          chmod +x ./tools/scripts/wolfboot_cmake_full_build.sh
+
+          ./tools/scripts/wolfboot_cmake_full_build.sh --CLEAN  "stm32l4"
+          ./tools/scripts/wolfboot_cmake_full_build.sh --target "stm32l4"

@@ -1,0 +1,70 @@
+name: Wolfboot Reusable Build Workflow for Cypress PSoC6
+
+on:
+
+  workflow_call:
+    inputs:
+      arch:
+        required: true
+        type: string
+      config-file:
+        required: true
+        type: string
+      make-args:
+        required: false
+        type: string
+
+jobs:
+
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/wolfssl/wolfboot-ci-arm:v1.0
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - uses: actions/checkout@v4
+        with:
+          repository: Infineon/psoc6pdl
+          path: lib/psoc6pdl
+
+      - uses: actions/checkout@v4
+        with:
+          repository: Infineon/TARGET_CY8CKIT-062S2-43012
+          path: lib/TARGET_CY8CKIT-062S2-43012
+
+      - uses: actions/checkout@v4
+        with:
+          repository: Infineon/core-lib
+          path: lib/core-lib
+
+      - name: Trust workspace
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Patch cy_syslib.c to declare cy_delay32kMs
+        run: |
+          # Add extern declaration for cy_delay32kMs directly in cy_syslib.c
+          # Find the line with the include and add the extern declaration after it
+          awk '/#include "cy_syslib.h"/ {print; print ""; print "/* Extern declaration for delay variable */"; print "extern uint32_t cy_delay32kMs;"; next} 1' \
+            lib/psoc6pdl/drivers/source/cy_syslib.c > /tmp/cy_syslib_patched.c
+          mv /tmp/cy_syslib_patched.c lib/psoc6pdl/drivers/source/cy_syslib.c
+
+      - name: make distclean
+        run: |
+          make distclean
+
+      - name: Select config
+        run: |
+          cp ${{inputs.config-file}} .config && make include/target.h
+
+      - name: Build tools
+        run: |
+          make -C tools/keytools && make -C tools/bin-assemble
+
+      - name: Build wolfboot
+        run: |
+          make ${{inputs.make-args}} V=1

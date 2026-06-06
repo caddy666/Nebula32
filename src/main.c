@@ -13,7 +13,7 @@
 //   2. Stdio init (USB CDC)
 //   3. Load persistent config from flash
 //   4. Mount SD card via 4-bit SDIO; scan disc images
-//   5. Initialise logger (reads cd32_ode.cfg, opens cd32_cd.log)
+//   5. Initialise logger (reads nebula32.cfg, opens cd32_cd.log)
 //   6. Open selected disc image; initialise sector_cache
 //   7. Initialise DA output PIO (GPIO 0-2) — starts clocking I2S to Akiko
 //   8. Initialise subcode encoder PIO (GPIO 5-8)
@@ -407,7 +407,7 @@ int main(void) {
         while (true) tight_loop_contents();
     }
 
-    // Logger init reads cd32_ode.cfg (including sdcard_base) before the image
+    // Logger init reads nebula32.cfg (including sdcard_base) before the image
     // scan so that sd_scan_images() uses the configured directory.
     logger_init();
 

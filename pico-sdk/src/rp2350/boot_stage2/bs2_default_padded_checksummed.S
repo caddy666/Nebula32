@@ -1,4 +1,4 @@
-// Padded and checksummed version of: /home/caddy/pico-claude/cd32_ode/pico-sdk/src/rp2350/boot_stage2/bs2_default.bin
+// Padded and checksummed version of: /home/caddy/pico-claude/Nebula32/pico-sdk/src/rp2350/boot_stage2/bs2_default.bin
 
 .cpu cortex-m0plus
 .thumb

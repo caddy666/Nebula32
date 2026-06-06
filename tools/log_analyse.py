@@ -429,7 +429,7 @@ def report_sectors(lines: List[LogLine]):
                   and '→ host' in l.message]
 
     if not sect_lines:
-        print('No sector data found.  Enable log_sectors=1 in cd32_ode.cfg.')
+        print('No sector data found.  Enable log_sectors=1 in nebula32.cfg.')
         return
 
     lba_re = re.compile(r'LBA=(\d+)')

@@ -187,7 +187,7 @@ static const char *state_name(int state) {
 
 ### 18. `disc_image.c` / `webserver.c` — settings file parsed twice independently
 
-`logger.c:parse_settings_file` reads `0:/cd32_ode.cfg` for logging settings.  `webserver.c:read_wifi_config` re-opens and re-reads the **same file** for WiFi credentials.  Any new config key must be added in two places, and both parsers can diverge in their handling of whitespace, comments, and encoding.  One parser should extract all known keys in a single pass.
+`logger.c:parse_settings_file` reads `0:/nebula32.cfg` for logging settings.  `webserver.c:read_wifi_config` re-opens and re-reads the **same file** for WiFi credentials.  Any new config key must be added in two places, and both parsers can diverge in their handling of whitespace, comments, and encoding.  One parser should extract all known keys in a single pass.
 
 ---
 

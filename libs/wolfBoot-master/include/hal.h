@@ -1,0 +1,266 @@
+/* hal.h
+ *
+ * The HAL API definitions.
+ *
+ * Copyright (C) 2026 wolfSSL Inc.
+ *
+ * This file is part of wolfBoot.
+ *
+ * wolfBoot is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * wolfBoot is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1335, USA
+ */
+
+#ifndef H_HAL_
+#define H_HAL_
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+#include "target.h"
+#include <stddef.h>
+#include <stdint.h>
+
+/* Architecture specific calls */
+#ifdef MMU
+extern void do_boot(const uint32_t *app_offset, const uint32_t* dts_offset);
+#else
+extern void do_boot(const uint32_t *app_offset);
+#endif
+extern void arch_reboot(void);
+
+/* Simulator-only calls */
+#ifdef TARGET_sim
+void hal_set_internal_flash_file(const char* file);
+void hal_set_external_flash_file(const char* file);
+void hal_deinit();
+#endif
+
+#if !defined(ARCH_64BIT) && \
+    (defined(ARCH_x86_64) || defined(ARCH_AARCH64) || defined(ARCH_SIM))
+    #define ARCH_64BIT
+#endif
+
+void hal_init(void);
+
+/* Timer functions (platform-specific, used for benchmarking) */
+#if defined(WOLFBOOT_UPDATE_DISK) || defined(BOOT_BENCHMARK)
+uint64_t hal_get_timer_us(void);
+#endif
+
+/* Boot benchmarking macros
+ * Usage: Declare BENCHMARK_DECLARE() at function scope,
+ *        then use BENCHMARK_START() and BENCHMARK_END(msg) to measure time.
+ */
+#ifdef BOOT_BENCHMARK
+    #define BENCHMARK_DECLARE() uint64_t _boot_bench_start
+    #define BENCHMARK_START() (_boot_bench_start = hal_get_timer_us())
+    #define BENCHMARK_END(msg) do { \
+        uint64_t _elapsed_ms = (hal_get_timer_us() - _boot_bench_start) / 1000; \
+        wolfBoot_printf(msg " (%lu ms)\r\n", (unsigned long)_elapsed_ms); \
+    } while(0)
+#else
+    #define BENCHMARK_DECLARE() do {} while(0)
+    #define BENCHMARK_START() do {} while(0)
+    #define BENCHMARK_END(msg) wolfBoot_printf(msg "\r\n")
+#endif
+
+#ifdef ARCH_64BIT
+    typedef uintptr_t haladdr_t; /* 64-bit platforms */
+    int hal_flash_write(uintptr_t address, const uint8_t *data, int len);
+    int hal_flash_erase(uintptr_t address, int len);
+#else
+    typedef uint32_t haladdr_t; /* original 32-bit */
+    int hal_flash_write(uint32_t address, const uint8_t *data, int len);
+    int hal_flash_erase(uint32_t address, int len);
+#endif
+void hal_flash_unlock(void);
+void hal_flash_lock(void);
+/*
+ * Lock the flash region [address, address + len) against writes.
+ * Return 0 on success, or a negative value on failure.
+ */
+int hal_flash_protect(haladdr_t address, int len);
+void hal_prepare_boot(void);
+
+#ifdef DUALBANK_SWAP
+    void hal_flash_dualbank_swap(void);
+#endif
+
+#ifdef WOLFBOOT_DUALBOOT
+    void* hal_get_primary_address(void);
+    void* hal_get_update_address(void);
+#endif
+
+#ifdef MMU
+    void *hal_get_dts_address(void);
+    void *hal_get_dts_update_address(void);
+#endif
+
+#if !defined(SPI_FLASH) && !defined(QSPI_FLASH) && !defined(OCTOSPI_FLASH)
+    /* user supplied external flash interfaces */
+    int  ext_flash_write(uintptr_t address, const uint8_t *data, int len);
+    int  ext_flash_read(uintptr_t address, uint8_t *data, int len);
+    int  ext_flash_erase(uintptr_t address, int len);
+    void ext_flash_lock(void);
+    void ext_flash_unlock(void);
+#else
+    #include "spi_flash.h"
+    #define ext_flash_lock() do{}while(0)
+    #define ext_flash_unlock() do{}while(0)
+    #define ext_flash_read spi_flash_read
+    #define ext_flash_write spi_flash_write
+    static inline int ext_flash_erase(uintptr_t address, int len)
+    {
+        int ret = 0;
+        uint32_t end = address + len - 1;
+        uint32_t p;
+        for (p = address; p <= end; p += SPI_FLASH_SECTOR_SIZE) {
+            ret = spi_flash_sector_erase(p);
+            if (ret != 0) {
+                break;
+            }
+        }
+        return ret;
+    }
+#endif /* !SPI_FLASH */
+
+#ifdef TZEN
+
+/* TrustZone hal API */
+
+void hal_tz_claim_nonsecure_area(uint32_t address, int len);
+void hal_tz_release_nonsecure_area(void);
+void hal_tz_sau_init(void);
+void hal_tz_sau_ns_region(void);
+void hal_gtzc_init(void);
+
+/* Needed by TZ to claim/release nonsecure flash areas */
+void hal_flash_wait_complete(uint8_t bank);
+void hal_flash_clear_errors(uint8_t bank);
+
+#endif
+
+#ifdef WOLFCRYPT_SECURE_MODE
+
+void hal_trng_init(void);
+void hal_trng_fini(void);
+int hal_trng_get_entropy(unsigned char *out, unsigned len);
+
+#endif
+
+/* Attestation helpers (optional, weak stubs available). */
+int hal_uds_derive_key(uint8_t *out, size_t out_len);
+int hal_attestation_get_lifecycle(uint32_t *lifecycle);
+int hal_attestation_get_implementation_id(uint8_t *buf, size_t *len);
+int hal_attestation_get_ueid(uint8_t *buf, size_t *len);
+int hal_attestation_get_iak_private_key(uint8_t *buf, size_t *len);
+
+#ifdef WOLFBOOT_DICE_HW
+/* Hardware DICE hooks — implement these to delegate CDI derivation and
+ * attestation signing to a platform security boundary. */
+
+/* Mix one boot-component measurement into the platform CDI chain.
+ * measurement_desc identifies the component; use the WOLFBOOT_DICE_COMPONENT_*
+ * macros from wolfboot/dice.h (e.g. WOLFBOOT_DICE_COMPONENT_WOLFBOOT,
+ * WOLFBOOT_DICE_COMPONENT_BOOTIMAGE).
+ * The platform updates its internal CDI state; no CDI material is returned. */
+int hal_dice_update_cdi(const uint8_t *measurement, size_t meas_len,
+                        const char *measurement_desc, size_t measurement_desc_len);
+
+/* Derive and store the attestation keypair from the current CDI state.
+ * The private key must not be exposed outside the platform security boundary.
+ * Returns 0 on success. */
+int hal_dice_create_attest_key(void);
+
+/* Sign a pre-computed SHA-256 hash with the platform attestation key.
+ * Output: 64-byte raw R||S (big-endian), same format as wolfCrypt ES256.
+ * Must be called after hal_dice_create_attest_key(). */
+int hal_dice_sign_hash(const uint8_t *hash, size_t hash_len,
+                       uint8_t *sig, size_t *sig_len);
+
+/* Retrieve the IAK public key cached by hal_dice_create_attest_key().
+ * Output: 65-byte X9.63 uncompressed point (0x04 || X || Y).
+ * The internal copy is zeroized after this call (read-once). */
+int hal_dice_get_attest_pubkey(uint8_t *buf, size_t *len);
+#endif /* WOLFBOOT_DICE_HW */
+
+#ifdef FLASH_OTP_KEYSTORE
+
+int hal_flash_otp_write(uint32_t flashAddress, const void* data, uint16_t length);
+int hal_flash_otp_set_readonly(uint32_t flashAddress, uint16_t length);
+int hal_flash_otp_read(uint32_t flashAddress, void* data, uint32_t length);
+
+#endif
+
+#ifdef TEST_FLASH
+int hal_flash_test(void);
+#endif
+
+
+#if defined(WOLFBOOT_ENABLE_WOLFHSM_CLIENT)
+
+#include "wolfhsm/wh_error.h"         /* wolfHSM error codes */
+#include "wolfhsm/wh_client.h"        /* For client API access */
+#include "wolfhsm/wh_client_crypto.h" /* For client crypto helper API */
+
+extern whClientContext hsmClientCtx; /* global wolfHSM client context */
+
+int hal_hsm_init_connect(void);
+int hal_hsm_disconnect(void);
+
+#elif defined(WOLFBOOT_ENABLE_WOLFHSM_SERVER) /*WOLFBOOT_ENABLE_WOLFHSM_CLIENT*/
+
+#include "wolfhsm/wh_error.h"
+#include "wolfhsm/wh_server.h"
+#include "wolfhsm/wh_server_crypto.h"
+#include "wolfhsm/wh_server_keystore.h"
+#if defined(WOLFBOOT_CERT_CHAIN_VERIFY)
+#include "wolfhsm/wh_server_cert.h"
+#endif
+
+extern whServerContext hsmServerCtx; /* global wolfHSM server context */
+
+int hal_hsm_server_init(void);
+int hal_hsm_server_cleanup(void);
+
+#endif /* WOLFBOOT_ENABLE_WOLFHSM_SERVER */
+
+#if defined(WOLFBOOT_ENABLE_WOLFHSM_CLIENT) || \
+    defined(WOLFBOOT_ENABLE_WOLFHSM_SERVER)
+
+/* devId and KeyIds for wolfHSM operations */
+
+extern const int hsmDevIdHash;   /* devId for image digest */
+extern const int hsmDevIdPubKey; /* devId for signature verification */
+extern const int hsmKeyIdPubKey; /* KeyId for public key operations */
+#ifdef EXT_ENCRYPTED
+extern const int hsmDevIdCrypt; /* devId for image (enc)decryption */
+extern const int hsmKeyIdCrypt; /* KeyId for image (enc/dec)ryption */
+#endif
+#ifdef WOLFBOOT_CERT_CHAIN_VERIFY
+/* List of NvmIds for trusted root CA certificates. Verification succeeds if
+ * the cert chain anchors to any root in the list. The list length must not
+ * exceed WOLFHSM_CFG_CERT_MAX_VERIFY_ROOTS. */
+extern const whNvmId  hsmNvmIdCertRootCAList[];
+extern const uint16_t hsmNvmIdCertRootCACount;
+#endif
+
+#endif /* WOLFBOOT_ENABLE_WOLFHSM_CLIENT || WOLFBOOT_ENABLE_WOLFHSM_SERVER */
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* H_HAL_FLASH_ */

@@ -1,0 +1,31 @@
+;; lpc55s69_flash_update.cmm
+
+&basedir="\\wsl.localhost\Ubuntu-22.04\home\tcook\wolf\wolfBoot"
+
+RESet
+SYStem.RESet
+SYStem.CPU LPC55S69JBD100-CPU0
+SYStem.CONFIG.DEBUGPORTTYPE SWD
+IF COMBIPROBE()||UTRACE()
+(
+  SYStem.CONFIG.CONNECTOR MIPI20T
+)
+SYStem.Option DUALPORT ON
+SYStem.MemAccess DAP
+SYStem.JtagClock 10MHz
+ITM.OFF
+Trace.DISable
+
+SYStem.Up
+
+DO ~~/demo/arm/flash/lpc55xx PREPAREONLY
+
+; Change from 32KiB sector size to 512
+flash.delete 1.
+flash.create 1. 0x00000000--0x00097fff 0x200 TARGET Long
+
+FLASH.ReProgram ALL
+Data.LOAD.Binary "&basedir\test-app\image_v2_signed.bin" 0x18000
+FLASH.ReProgram OFF
+
+ENDDO

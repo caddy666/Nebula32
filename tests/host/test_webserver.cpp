@@ -10,9 +10,14 @@
 // Functions under test (all static in webserver.c):
 //   basename_no_ext()  — strip path prefix and file extension from a string
 //   state_name()       — map drive_state_t integer to a display string
-//   config line parser — key=value splitting used in read_wifi_config()
 //   ".." traversal guard — rejects cover-art paths with "..", "/", "\", or "%" in filename
 //   load-index bounds check — POST /api/load/{index} validates index range
+//
+// Note: the config-line parser tests below use a standalone parse_cfg_line()
+// helper that documents expected key=value parsing behavior.  This function
+// is NOT a replica of webserver.c (config parsing moved to logger.c in
+// the logger_get_config() refactor).  logger.c's parse_bool/trim are tested
+// in test_logger.cpp; the tests here document the key=value split contract.
 // =============================================================================
 //   CoverDir group: verifies that display.cpp and webserver.c use the same
 //   cover-art directory prefix.  The expected value is read from WS_COVERS_DIR
@@ -47,6 +52,7 @@
 
 // ---------------------------------------------------------------------------
 // Replicated helpers — must stay in sync with src/webserver.c
+// (basename_no_ext, state_name, covers_path_safe, html_escape, fw token helpers)
 // ---------------------------------------------------------------------------
 
 static const char *basename_no_ext(const char *path, char *buf, int bufsz)
@@ -72,8 +78,9 @@ static const char *state_name(int state)
     }
 }
 
-// Returns true if the line is a valid key=value pair.
-// Writes null-terminated key and val into the provided buffers.
+// Standalone key=value parser — documents expected config-file parsing contract.
+// NOT a replica of any current production function (config parsing lives in
+// logger.c::parse_settings_file(), tested via test_logger.cpp).
 static bool parse_cfg_line(const char *line, char *key, int keysz,
                             char *val, int valsz)
 {
@@ -296,7 +303,7 @@ TEST(Webserver, CoversPath_DotDotRejected)
 TEST(Webserver, CoversPath_PercentEncodedDotDotRejected)
 {
     // %2e%2e has no literal ".." so the old strstr("..") guard missed this.
-    CHECK_FALSE(covers_path_safe("/covers/%2e%2e/cd32_ode.cfg"));
+    CHECK_FALSE(covers_path_safe("/covers/%2e%2e/nebula32.cfg"));
     CHECK_FALSE(covers_path_safe("/covers/%2E%2E/secret"));
 }
 
@@ -448,6 +455,114 @@ TEST(Webserver, FwToken_EmptyServerTokenBlocksAll)
         "POST /api/fw/flash/N.UF2 HTTP/1.1\r\n"
         "X-FW-Token: aabbccddeeff00112233445566778899\r\n\r\n";
     CHECK_FALSE(fw_token_valid(req, "/api/fw/flash/N.UF2", ""));
+}
+
+/* -------------------------------------------------------------------------
+ * FwFlashFilename — replica of the filename-validation guard in handle_request()
+ * for POST /api/fw/flash/{filename} (webserver.c lines 864-878).
+ *
+ * This guard is a security control: it prevents directory traversal and path
+ * separator injection before the filename is used in snprintf("0:/%s", fname).
+ * Tests here must stay byte-for-byte in sync with the production guard.
+ * ---------------------------------------------------------------------- */
+
+// Replica of the fname validation logic in handle_request() (webserver.c:864-878).
+// Strips a query string from raw_fname, then rejects traversal / separator chars,
+// empty names, names that would overflow the "0:/" prefix buffer, and
+// percent-encoded sequences (%2e%2e bypasses the ".." check).
+static bool fw_flash_fname_safe(const char *raw_fname)
+{
+    size_t fn_len = 0;
+    while (raw_fname[fn_len] && raw_fname[fn_len] != '?' && fn_len < (size_t)(MAX_PATH_LEN - 1))
+        fn_len++;
+    if (fn_len == 0 || fn_len >= (size_t)(MAX_PATH_LEN - 3)) return false;
+    char fname[MAX_PATH_LEN];
+    memcpy(fname, raw_fname, fn_len);
+    fname[fn_len] = '\0';
+    return !(strstr(fname, "..") || strchr(fname, '/') ||
+             strchr(fname, '\\') || strchr(fname, '%'));
+}
+
+TEST_GROUP(FwFlashFilename) {};
+
+TEST(FwFlashFilename, ValidName_Accepted)
+{
+    CHECK_TRUE(fw_flash_fname_safe("NEBULA32.UF2"));
+}
+
+TEST(FwFlashFilename, DotDot_Rejected)
+{
+    CHECK_FALSE(fw_flash_fname_safe("../../etc/passwd"));
+}
+
+TEST(FwFlashFilename, Slash_Rejected)
+{
+    CHECK_FALSE(fw_flash_fname_safe("subdir/evil.UF2"));
+}
+
+TEST(FwFlashFilename, Backslash_Rejected)
+{
+    CHECK_FALSE(fw_flash_fname_safe("subdir\\evil.UF2"));
+}
+
+TEST(FwFlashFilename, EmptyName_Rejected)
+{
+    CHECK_FALSE(fw_flash_fname_safe(""));
+}
+
+TEST(FwFlashFilename, Oversized_Rejected)
+{
+    // MAX_PATH_LEN - 3 bytes or more must be rejected (snprintf headroom for "0:/").
+    char big[MAX_PATH_LEN + 4];
+    memset(big, 'A', sizeof(big) - 1);
+    big[sizeof(big) - 1] = '\0';
+    CHECK_FALSE(fw_flash_fname_safe(big));
+}
+
+TEST(FwFlashFilename, QueryStripped_BeforeCheck)
+{
+    // A query string must not cause a safe base name to be rejected.
+    CHECK_TRUE(fw_flash_fname_safe("NEBULA32.UF2?token=abc123"));
+}
+
+TEST(FwFlashFilename, DotDot_InQueryStripped_Safe)
+{
+    // ".." only in the query string (after '?') — base name is clean.
+    CHECK_TRUE(fw_flash_fname_safe("NEBULA32.UF2?redir=../../etc"));
+}
+
+TEST(FwFlashFilename, PercentEncoded_Rejected)
+{
+    // %2e%2e would pass a literal ".." check but must be blocked to match
+    // the /covers/ endpoint's defence-in-depth against URL-encoded traversal.
+    CHECK_FALSE(fw_flash_fname_safe("%2e%2e%2fconfig.UF2"));
+    CHECK_FALSE(fw_flash_fname_safe("NEBULA32%2f.UF2"));
+}
+
+TEST(FwFlashFilename, Oversized_ExactThreshold_Rejected)
+{
+    // fn_len == MAX_PATH_LEN - 3 is the rejection threshold (the guard uses >=).
+    char at[MAX_PATH_LEN - 3 + 1];
+    memset(at, 'A', MAX_PATH_LEN - 3);
+    at[MAX_PATH_LEN - 3] = '\0';
+    CHECK_FALSE(fw_flash_fname_safe(at));
+}
+
+TEST(FwFlashFilename, Oversized_OneBelowThreshold_Accepted)
+{
+    // fn_len == MAX_PATH_LEN - 4 is the longest accepted filename.
+    char at[MAX_PATH_LEN - 4 + 1];
+    memset(at, 'A', MAX_PATH_LEN - 4);
+    at[MAX_PATH_LEN - 4] = '\0';
+    CHECK_TRUE(fw_flash_fname_safe(at));
+}
+
+TEST(FwFlashFilename, DoubleDotInBasename_AlsoRejected)
+{
+    // strstr("..") rejects ANY double-dot, including non-traversal names like
+    // firmware..v2.UF2.  This is conservative by design — simpler than a
+    // path-boundary check, and no legitimate UF2 filename needs two adjacent dots.
+    CHECK_FALSE(fw_flash_fname_safe("firmware..v2.UF2"));
 }
 
 /* -------------------------------------------------------------------------
