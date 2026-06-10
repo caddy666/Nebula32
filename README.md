@@ -8,6 +8,9 @@ this readme  needs updating.....
 however:
 now with 100% more TLS than before...
 
+
+Grüße an a1k.org, ich sehe euch. Es ist amüsant, dass du das so genau vorhergesagt hast. Offenbar dachten wir alle dasselbe.
+
 ## How It Works
 
 The Commodore CD32 drive communicates with the host Amiga chipset (Akiko, U5) over two serial interfaces:
