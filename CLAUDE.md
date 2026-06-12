@@ -1,3 +1,11 @@
+change the build for a 2350B, using the same wifi as the pico2w (RM2 board), add a uart serial out for debugging, and move the pin assignments so that there is no need for that mcp23017
+
+board is this: https://www.waveshare.com/wiki/Core2350B0 looks like psram is on gpio47 on this board
+i also have a RM2 wifi to add to the pcb, so that will need gpio.
+move SD/display pins (18–27) to a higher number so that standard wifi(23,24,25,29) pins/LEDs(blue25,red39) be also used. 
+add uart on pins (16/17)
+
+
 # CD32 ODE — Architecture Reference
 
 ## Verified hardware architecture (schematics docs/u5.png, docs/u31.png)
@@ -5,7 +13,9 @@ _Use_ _incremental_ _edit/write_ _calls_ - breaks larger files into logistical s
 _Never_ _output_ _entire_ _large_ _files_ _in_ _a_ _single_ _tool_ _call_
 _Split_ _by:_ _imports,_ _functions,_ _classes,_ _configuration_ _blocks_
 
-Priority: create shell file for making project with picoboard as option
+Build entry point: `./build.sh [pico2|pico2_w] [-D...]` — out-of-source via explicit
+-S/-B (a stale CMakeCache.txt in the source root silently hijacks `cmake ..`; the
+script deletes such leftovers). pico2 → build/, pico2_w → build-pico2w/
 
 ```
 68EC020 CPU
@@ -105,7 +115,7 @@ Data transitions on the **falling** BCLK edge; Akiko samples on the **rising** e
 | `upstream/utils/timer.c` | ✅ Correct | 8 ms software timer; delay() zero-entry guard; SCOR IRQ guarded by #if !BUILD_WITH_COMMO (F25) |
 | `upstream/pio/commo.pio` | ✅ Correct | COMMO PIO; RX acknowledge pulse extended to [31] delay ≈ 237 ns (F21) |
 | `src/disc_image.c` | ✅ Correct | ISO/BIN/NRG/MDF parsers; CUE PREGAP+INDEX00 fix; NRG lead-out skip fix; NRG chunk_size=0/DAOX-too-short guards; MDF sector_size=0 guard; CUE/MDF track-length underflow clamp; NRG uint64_t aligned memcpy; NRG v1 unaligned reads use memcpy; disc_find_track includes pregap LBAs; NRG v1 file_off uses idx1_lba (F11); disc_build_toc_response emits 4-byte entries [track,min,sec,frame] (F15); file_offset widened to uint64_t (F29+F30) |
-| `src/sector_cache.c` | ✅ Correct | SD prefetch ring buffer + flush_gen race fix; hard_assert null-cache guard in prefetch_tick; __atomic_acquire/release builtins; SD read error retries once before skipping; sector_cache_is_full() added; error slots marked valid with valid_bytes=0 (permanent miss sentinel) |
+| `src/sector_cache.c` | ✅ Correct | SD prefetch ring buffer + flush_gen race fix; hard_assert null-cache guard in prefetch_tick; __atomic_acquire/release builtins; SD read error retries once before skipping; sector_cache_is_full() added; error slots marked valid with valid_bytes=0 (permanent miss sentinel); sector_cache_get/release_before pinned to SRAM via sram_attr.h |
 | `src/subcode.c` | ✅ Correct | Q-channel generation; dead ORIG function comment removed |
 | `pio/subcode_encoder.pio` | ✅ Correct | SUB signal output on GPIO 5-8; .side_set 1 drives SUB_CLK (FINDING-20); WFCLK/SCOR pulsed by subcode_pulse_sector_clocks() |
 | `src/sd_card.c` | ✅ Correct | SDIO mount/scan; sd_scan_images offset param; sd_count_images for total count; qsort alphabetical order for stable indices (F24) |
@@ -113,20 +123,21 @@ Data transitions on the **falling** BCLK edge; Akiko samples on the **rising** e
 | `src/virtual_disc.c` | ✅ Correct | ISO 9660 synthesis from SD partition 2; BFS scan → LBA assignment → per-sector dispatch (PVD/VDST/path tables/dir records/file data) |
 | `include/virtual_disc.h` | ✅ Correct | vdisc_t / vdisc_entry_t types; vdisc_mount / vdisc_read_sector API |
 | `include/ffconf.h` | ✅ Correct | Project-owned FatFS config; FF_MULTI_PARTITION=1 enables two-partition support; shadows vendor copy in libs/ |
+| `include/sram_attr.h` | ✅ Correct | Host-compatible __not_in_flash_func shim: firmware includes pico.h (NOT pico/platform.h — SDK 2.2 forbids direct include); host builds get a no-op macro. Used by sector_cache.c and vis_audio.c (both host-compiled) |
 | `src/ecc.c` | ✅ Correct | EDC/ECC computation; P-parity fixed to 24 rows; Q-parity uses correct ECMA-130 diagonal interleave (stride 44 mod 2236) |
 | `src/logger.c` | ✅ Correct | SD activity log; WiFi fields (ssid/password/hostname) added to logger_config_t; log_max_kb negative guard; dead cmd_name/_log_cmd/_log_cmd_resp/_log_irq removed; state_names[] offset corrected (RESET removed, bounds ≤7) (F7+F18) |
 | `src/config.c` | ✅ Correct | Flash-backed settings; multicore_lockout_start/end_blocking() wraps flash erase/program (BUG-1) |
-| `src/display.cpp` | ✅ Correct | ST7789 240×240 cover art + scanline API; `display_fw_progress()` firmware update overlay; `display_fw_success_animation()` Boing Ball (spherical UV mapped, FPU trig) |
+| `src/display.cpp` | ✅ Correct | ST7789 240×240 cover art + scanline API; `display_fw_progress()` firmware update overlay; `display_fw_success_animation()` Boing Ball (spherical UV mapped, FPU trig); scanline-sized writes go via async SPI TX DMA (SRAM bounce buffer, deferred CS, command writes drain first); JPEG MCU blocks stay blocking (JPEGDEC reuses its buffer) |
 | `src/ui.c` | ✅ Correct | UI event handler |
-| `src/webserver.c` | ✅ Correct | WiFi web interface; use-after-free fixed; HCAT overflow guard; html_escape + json_escape; static conn pool; tcp_recved before tcp_close (BUG-3); JPEG ERR_MEM retry; cover path cache (≤3 f_stat/render); pagination (page offset/count/total, prev/next buttons, /api/page/*); cover_exists base[] widened to MAX_PATH_LEN (F22) |
-| `src/da_output.c` | ✅ Correct | DA DMA engine — 24-bit I2S expand, DRQ flag, FIFO drain on stop/pause, M17SINE clkdiv trim; hard_assert on DMA ch claims; s_drq_pending __atomic_*; s_audio_mode __atomic_*; dma_channel_abort in end-of-disc ISR (BUG-2); resume_lba from min(buf_lba) (SMELL-5); NULL s_cache guard in IRQ (F23); subcode PIO clkdiv updated on 2× change (F14); da_get_resume_lba() added (F12); spin-wait after seek in da_resume() (F9) |
+| `src/webserver.c` | ✅ Correct | WiFi web interface; use-after-free fixed; HCAT overflow guard; html_escape + json_escape; static conn pool; tcp_recved before tcp_close (BUG-3); JPEG ERR_MEM retry; cover path cache (≤3 f_stat/render); pagination (page offset/count/total, prev/next buttons, /api/page/*); cover_exists base[] widened to MAX_PATH_LEN (F22); wolfSSL allocators deliberately NOT routed to PSRAM (bump allocator never reclaims → per-handshake leak); use WOLFSSL_STATIC_MEMORY if SRAM pressure returns |
+| `src/da_output.c` | ✅ Correct | DA DMA engine — 24-bit I2S expand, DRQ flag, FIFO drain on stop/pause, M17SINE clkdiv trim; hard_assert on DMA ch claims; s_drq_pending __atomic_*; s_audio_mode __atomic_*; dma_channel_abort in end-of-disc ISR (BUG-2); resume_lba from min(buf_lba) (SMELL-5); NULL s_cache guard in IRQ (F23); subcode PIO clkdiv updated on 2× change (F14); da_get_resume_lba() added (F12); spin-wait after seek in da_resume() (F9); DMA ISR + expand_to_i2s24 + _push_subcode pinned to SRAM (__not_in_flash_func) |
 | `src/rotary_mcp.cpp` | ✅ Correct | MCP23017 encoder + logger toggle button (GPB0) |
 | `src/commo_bridge.c` | ✅ Correct | PLAY_TRACK_OPC BCD decode, TRAY_IN seek, audio mode set, DRQ packet; _send_toc_packets guards first_track==0; PIN_RESET init+poll; send_status/qchannel pkt stack-allocated; _wait_commo_ready 5 ms timeout; FAKE_TIMING enabled + 1.8s spinup (F2); TOC 0xA1 uses ctrl_first (F5); _wait_commo_ready removed from _send_toc_packets (F10); da_get_resume_lba in PAUSE_OFF (F12); Dispatcher/cmd_hndl called only when Path A idle (F13) |
 | `src/upstream_player_shim.c` | ✅ Correct | Linkage shim — provides player_interface globals and no-op player() for upstream cmd_hndl.c |
 | `src/fft.c` | ✅ Correct | 256-point Q15 radix-2 FFT with Hann window |
-| `src/effects.c` | ✅ Correct | 6 demoscene visualiser effects (SPECTRUM/SCOPE/RASTER/COMBO/SPACEBALLS/JUGGLER); JUGGLER is procedural 3-ball cascade with orbital balls and audio-reactive brightness |
-| `src/vis_audio.c` | ✅ Correct | DA DMA snoop — SPSC ring, left-channel extraction |
-| `src/main.c` | ✅ Correct | Entry point — 135 MHz sys_clk, 13-step boot sequence; Core 1 sector-prefetch loop; `load_image_page()` pagination (64-image pages); M17SINE clkdiv trim every 2 s during playback; boot-time firmware update sentinel (delegates to `fw_flash_and_reboot`); USB CDC console ('H' for help); visualiser tick with cover-art restore on stop |
+| `src/effects.c` | ✅ Correct | 6 demoscene visualiser effects (SPECTRUM/SCOPE/RASTER/COMBO/SPACEBALLS/JUGGLER); JUGGLER is procedural 3-ball cascade with orbital balls and audio-reactive brightness; copper_color() lerps via INTERP0 blend mode (bit-identical to C lerp); builds at -O3 |
+| `src/vis_audio.c` | ✅ Correct | DA DMA snoop — SPSC ring, left-channel extraction; vis_audio_push_sector pinned to SRAM via sram_attr.h |
+| `src/main.c` | ✅ Correct | Entry point — 135 MHz sys_clk, 13-step boot sequence; Core 1 sector-prefetch loop; `load_image_page()` pagination (64-image pages); M17SINE clkdiv trim every 2 s during playback; boot-time firmware update sentinel (delegates to `fw_flash_and_reboot`); USB CDC console ('H' for help); visualiser tick with cover-art restore on stop — render capped at 30 fps (FFT still per batch; frame += 2 preserves animation speed) |
 | `src/selftest.c` | ✅ Correct | Hardware self-test triggered by '#' at boot — GPIO pull-high/pull-low check on DA/SUB output pins 0–8, /RESET idle-high check, SD mount + disc open + sector-0 read; prints PASS/FAIL over USB CDC; no host unit tests (hardware-only checks) |
 | `src/fw_update.c` | ✅ Correct | SD-card UF2 self-update; dual-stage flash: `fw_validate()` pass-1 SD read-only + `fw_flash_and_reboot()` write Bank 1 → verify via XIP → copy Bank1→Bank0 → watchdog reboot; erase_map tracks dirty 4 KB sectors; security fixes B1 (SRAM address guard), B2 (payload_size=0/oversized/unaligned), B4 (NOFLASH block_no sequencing), B5/B6 (rename sentinel), B7 (per-page IRQ window); display progress overlay during flash |
 | `pio/da_output.pio` | ✅ Correct | 24-bit I2S frames, clkdiv=32 (2.12 MHz), 96 SM cycles/pair → 44.1 kHz; LRCLK polarity corrected (low=L, high=R) (F3) |
@@ -150,7 +161,7 @@ tracked as git submodules or vendored snapshots. Project-specific configuration 
 would otherwise require editing a vendor file (e.g. FatFS `ffconf.h`) must instead be
 provided by a shadowing copy in `include/`, which appears earlier on every include path.
 
-### wolfSSL libraries (HTTPS integration — wired, pending firmware build verification)
+### wolfSSL libraries (HTTPS integration — wired; pico2_w build verified 2026-06-12, 7-fix recipe applied in CMakeLists.txt + include/user_settings.h; TLS runtime on hardware still untested)
 
 | Library | Path | Role |
 |---------|------|------|
@@ -182,7 +193,7 @@ All four PIO programs are always loaded. The upstream servo PIO programs
 
 **Location:** `tests/host/`  
 **Run:** `make && ./cd32_tests -v`  
-**Result:** 598 tests, 0 failures  
+**Result:** 605 tests, 0 failures  
 **Parser tests:** `make parser_tests && ./parser_tests -v` → 33 tests, 0 failures (separate binary; uses FatFS injectable sim)
 **Virtual disc tests:** `make vdisc_tests && ./vdisc_tests -v` → 73 tests, 0 failures (separate binary; uses vdisc_sim with directory traversal support)
 **Stress tests:** `make stress_sector_cache && ./stress_sector_cache` → 5 tests, 0 failures (TSan binary; concurrent producer/consumer)

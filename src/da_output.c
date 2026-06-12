@@ -92,7 +92,7 @@ static float _clkdiv(bool dbl) {
 // Output: one uint32_t per channel: [31:16]=sample, [15:0]=0 (zero-padded slot).
 // The PIO's autopull=24 outputs bits [31:8] (16 data + 8 zero padding) and
 // silently discards the remaining [7:0] of each 32-bit word.
-static void expand_to_i2s24(const uint8_t *raw, uint32_t *out) {
+static void __not_in_flash_func(expand_to_i2s24)(const uint8_t *raw, uint32_t *out) {
     for (int i = 0; i < 588; i++) {
         uint16_t l = (uint16_t)raw[i * 4 + 0] | ((uint16_t)raw[i * 4 + 1] << 8);
         uint16_t r = (uint16_t)raw[i * 4 + 2] | ((uint16_t)raw[i * 4 + 3] << 8);
@@ -124,7 +124,7 @@ static void _configure_dma_channel(int ch, int chain_to_ch, uint32_t *buf) {
 // for the sector that just started streaming and pushes it into the subcode
 // encoder PIO FIFO.  Skips silently if FIFO full (previous sector's subcode
 // stays displayed — briefly wrong but preferable to blocking the ISR).
-static void _push_subcode(uint32_t lba) {
+static void __not_in_flash_func(_push_subcode)(uint32_t lba) {
     if (!s_cache || !s_cache->disc) return;
     const track_t *trk = disc_find_track(s_cache->disc, lba);
     if (!trk) return;
@@ -265,7 +265,7 @@ void da_start_play(sector_cache_t *cache, uint32_t start_lba) {
 //
 // Currently implements Option A.  Change the else-branch below to switch.
 //
-static void __isr _dma_irq_handler(void) {
+static void __isr __not_in_flash_func(_dma_irq_handler)(void) {
     bool ch0_done = dma_channel_get_irq0_status(s_dma_ch);
     bool ch1_done = dma_channel_get_irq0_status(s_dma_ch2);
 

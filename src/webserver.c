@@ -93,7 +93,6 @@ static const unsigned long sizeof_ecc_key_der_256 = 0;
 
 #ifdef PICO_CYW43_SUPPORTED
 
-#include "psram.h"   // wolfSSL allocator routing to PSRAM when available
 
 // ---------------------------------------------------------------------------
 // External state from main.c
@@ -1232,12 +1231,13 @@ bool webserver_init(void) {
     printf("[WEB] Connected! IP: %s\n", s_ip_str);
     LOG_INFO_MSG("WEB ", "WiFi connected, IP=%s", s_ip_str);
 
-    // Route wolfSSL heap allocations to PSRAM when available.
-    // Recovers ~120-180 KB of SRAM for the 3-connection pool.
-    // No-op when BUILD_WITH_PSRAM is not set or PSRAM init failed.
-    if (psram_available()) {
-        wolfSSL_SetAllocators(psram_alloc, psram_free, psram_realloc);
-    }
+    // wolfSSL deliberately uses the default SRAM heap, NOT psram_alloc:
+    // the PSRAM bump allocator never reclaims (psram_free is a mark-only
+    // no-op), but wolfSSL mallocs/frees on every TLS handshake — routing it
+    // there leaked PSRAM per HTTPS connection until psram_alloc returned
+    // NULL and TLS died.  If SRAM pressure returns, the correct fix is
+    // WOLFSSL_STATIC_MEMORY with a fixed PSRAM arena that wolfSSL manages
+    // internally — not wolfSSL_SetAllocators over the bump allocator.
 
     // Initialise wolfSSL TLS context (once per boot)
     wolfSSL_Init();

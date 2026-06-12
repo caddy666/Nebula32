@@ -599,6 +599,7 @@ int main(void) {
 
     // ---- Core 0 main loop ----
     absolute_time_t s_nudge_next = make_timeout_time_us(2000000);
+    absolute_time_t s_vis_next_frame = make_timeout_time_us(0);
 
     while (true) {
         watchdog_update();  // prevent reboot; stalled main loop → hard reset
@@ -641,9 +642,19 @@ int main(void) {
 
             if (is_audio && vis_audio_get_samples(s_vis_samples)) {
                 fft_process(s_vis_samples, s_vis_spectrum, s_vis_peaks, s_vis_waveform);
-                effects_render(&s_vis_ctx);
-                s_vis_ctx.frame++;
-                s_vis_active = true;
+                // Cap rendering at 30 fps.  A 256-sample batch lands every
+                // ~5.8 ms of audio but a full frame push takes ~15 ms, so
+                // unpaced rendering ran back-to-back and starved the
+                // webserver/COMMO polls above.  The FFT still runs per batch
+                // (cheap at -O3; keeps spectrum/peaks fresh and the ring
+                // drained).  frame advances by 2 per rendered frame to keep
+                // animation speed at its historical ~60 ticks/s.
+                if (absolute_time_diff_us(get_absolute_time(), s_vis_next_frame) <= 0) {
+                    effects_render(&s_vis_ctx);
+                    s_vis_ctx.frame += 2;
+                    s_vis_active = true;
+                    s_vis_next_frame = make_timeout_time_us(33333);
+                }
             }
         } else if (s_vis_active) {
             // Playback stopped — restore cover art

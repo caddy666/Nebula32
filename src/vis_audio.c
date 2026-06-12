@@ -1,5 +1,6 @@
 #include "vis_audio.h"
 #include "fft.h"
+#include "sram_attr.h"
 #include <string.h>
 #include <stdatomic.h>
 
@@ -30,7 +31,7 @@ static int     s_acc_pos = 0;     /* next write position in s_acc */
 static _Atomic int s_wr = 0;     /* next slot to write (ISR)  */
 static _Atomic int s_rd = 0;     /* next slot to read  (main) */
 
-void vis_audio_push_sector(const uint8_t *buf) {
+void __not_in_flash_func(vis_audio_push_sector)(const uint8_t *buf) {
     /* Walk the interleaved stereo buffer, extracting left-channel int16_t. */
     for (int i = 0; i < STEREO_PAIRS; i++) {
         /* Each stereo pair: [L_lo, L_hi, R_lo, R_hi] (little-endian) */

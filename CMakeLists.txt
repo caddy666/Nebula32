@@ -137,7 +137,26 @@ add_subdirectory(libs/pico-mcp23017)
 # user_settings.h in include/ shadows the vendor copy via WOLFSSL_USER_SETTINGS=ON.
 set(WOLFSSL_USER_SETTINGS   ON  CACHE BOOL "" FORCE)
 set(WOLFSSL_SINGLE_THREADED ON  CACHE BOOL "" FORCE)
+# Without this, wolfSSL's install(EXPORT wolfssl-targets) requires every target
+# linked into wolfssl to be exported too — which forbids linking pico-sdk
+# interface targets below.
+set(WOLFSSL_INSTALL         "no" CACHE STRING "" FORCE)
 add_subdirectory(libs/wolfssl-master EXCLUDE_FROM_ALL)
+# WOLFSSL_USER_SETTINGS makes every wolfcrypt source #include "user_settings.h",
+# but the vendor target has no path to our shadow copy in include/ — inject it
+# here rather than editing vendor files.  wolfio.c's WOLFSSL_LWIP_NATIVE path
+# additionally needs lwIP headers, whose arch/cc.h pulls pico.h and pico/rand.h —
+# link the *_headers interface targets (headers only: linking pico_lwip_core
+# itself would compile a second copy of the lwIP sources into wolfssl and
+# collide with Nebula32's own lwIP objects).
+if(TARGET wolfssl)
+    target_include_directories(wolfssl PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+    target_link_libraries(wolfssl PRIVATE
+        pico_lwip_core_headers
+        pico_lwip_arch_headers   # arch/cc.h port glue
+        pico_base_headers
+        pico_rand_headers)
+endif()
 
 # =============================================================================
 # Main executable
@@ -256,6 +275,7 @@ target_link_libraries(Nebula32
     hardware_watchdog       # watchdog_reboot() for fw_update self-reboot
     hardware_i2c            # I2C0 for MCP23017 GPIO expander
     hardware_spi            # SPI1 for ST7789 display
+    hardware_interp         # INTERP0 blend mode for effects.c gradient lerp
     no-OS-FatFS-SD-SDIO-SPI-RPi-Pico   # SD card FatFS (from no-OS-FatFS library)
     pico_mcp23017           # MCP23017 I2C GPIO expander (adamboardman library)
 
@@ -272,7 +292,16 @@ if(PICO_BOARD STREQUAL "pico2_w")
     target_sources(Nebula32 PRIVATE
         libs/wolfssl-master/wolfcrypt/src/port/rpi_pico/pico.c
     )
-    target_compile_definitions(Nebula32 PRIVATE PICO_CYW43_SUPPORTED=1)
+    # Vendor bug: pico.c uses BAD_FUNC_ARG without including error-crypt.h.
+    # Force-include it rather than editing the vendor file.
+    set_source_files_properties(libs/wolfssl-master/wolfcrypt/src/port/rpi_pico/pico.c
+        PROPERTIES COMPILE_OPTIONS "-include;wolfssl/wolfcrypt/error-crypt.h")
+    # WOLFSSL_USER_SETTINGS: the vendor CMake defines this only on its own
+    # target — Nebula32's wolfSSL-consuming TUs (webserver.c and the pico.c
+    # TRNG port above) need it too or settings.h skips user_settings.h.
+    target_compile_definitions(Nebula32 PRIVATE
+        PICO_CYW43_SUPPORTED=1
+        WOLFSSL_USER_SETTINGS)
 
     # TLS certificate check — runs every pico2_w build.
     # Generates certs/server.{crt,key}.der and include/tls_cert.h if missing or expiring.
@@ -307,7 +336,9 @@ if(BUILD_WITH_PSRAM)
     if(TARGET hardware_psram)
         target_link_libraries(Nebula32 hardware_psram)
     endif()
-    message(STATUS "PSRAM: enabled — sector cache expanded to ${SECTOR_BUFFER_COUNT_PSRAM} slots")
+    # Slot count is a C define (SECTOR_BUFFER_COUNT_PSRAM in include/psram.h),
+    # not a CMake variable — don't try to interpolate it here.
+    message(STATUS "PSRAM: enabled — sector cache expanded (see SECTOR_BUFFER_COUNT_PSRAM in include/psram.h)")
 endif()
 
 # ---- stdio via USB CDC (disable UART to free those pins for user GPIOs) ----
@@ -329,5 +360,16 @@ target_compile_options(Nebula32 PRIVATE
     -Wno-unused-parameter   # Several callbacks take unused context pointers
     -O2                     # Optimise for speed (important for Core 1 latency)
     -fstack-usage           # Emit .su files — per-function stack depth for RP2350 SRAM auditing
+)
+
+# Pure-compute kernels (no I/O, loop-dominated) get -O3: the unrolling pays off
+# and the extra code size stays off the XIP-resident hot path.  Everything else
+# keeps -O2 to limit XIP cache pressure.  -flto is deliberately NOT used: it
+# breaks pico-sdk's linker symbol wrapping (--wrap=printf etc.).
+set_source_files_properties(
+    src/ecc.c       # ECMA-130 P/Q parity — byte-loop dominated
+    src/fft.c       # 256-pt Q15 radix-2 butterflies
+    src/effects.c   # per-pixel scanline rendering
+    PROPERTIES COMPILE_OPTIONS "-O3"
 )
 

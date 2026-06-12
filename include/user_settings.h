@@ -44,6 +44,7 @@ static inline time_t nebula32_xtime(time_t *t) {
 #define SINGLE_THREADED          /* no mutex — poll-mode lwIP, Core 0 only */
 #define WOLFSSL_SMALL_STACK      /* heap-allocate large temporaries (< 100 B on stack) */
 #define WOLFSSL_USER_IO          /* disable Berkeley socket I/O; lwipCtx provides I/O */
+#define WOLFSSL_NO_SOCK          /* no <sys/socket.h> on bare-metal — skips BSD includes in wolfio.h */
 #define WOLFSSL_GENERAL_ALIGNMENT 4
 #define SIZEOF_LONG_LONG          8
 
@@ -121,6 +122,7 @@ static inline time_t nebula32_xtime(time_t *t) {
  * Filesystem / stdio — not available in embedded firmware
  * ------------------------------------------------------------------------- */
 #define NO_FILESYSTEM
+#define NO_WOLFSSL_DIR           /* wc_port.h's dirent.h block is gated on this, not NO_FILESYSTEM */
 #define NO_WRITEV
 #define NO_MAIN_DRIVER
 #define NO_DEV_RANDOM
@@ -128,7 +130,9 @@ static inline time_t nebula32_xtime(time_t *t) {
 /* -------------------------------------------------------------------------
  * Misc
  * ------------------------------------------------------------------------- */
+#ifndef WOLFSSL_IGNORE_FILE_WARN  /* wolfSSL's CMake also passes this via -D */
 #define WOLFSSL_IGNORE_FILE_WARN  /* suppress "file included but not needed" warnings */
+#endif
 #define BENCH_EMBEDDED            /* reduced benchmark sizes */
 
 #ifdef __cplusplus

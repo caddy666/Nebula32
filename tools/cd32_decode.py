@@ -33,6 +33,14 @@ Protocol facts baked in from firmware sources:
   commo_bridge.c:  STATUS packet = 15 bytes + additive checksum = 16 wire bytes
                    Q-channel pkt = 15 bytes + additive checksum = 16 wire bytes
   commo.h:         STATUS_PACKET_LENGTH=15, Q_PACKET_LENGTH=15
+
+Chinon legacy-drive frames (original CHINON O-658-2 drive, real captures only —
+the Pico ODE never emits these):
+  0x27 <status>            frame header + status (0x38=OK, 0xD8=focus error,
+                           0xE0=sled error, 0xF8=no disc)
+  0x27 0x01 <ASCII id>     drive identification string ("CHINON  O-658-2 24...")
+  Note: 0x27+0xD8 == 0xFF, which coincidentally satisfies the Pico ODE additive
+  checksum — these frames cannot be rejected by checksum alone.
 """
 
 import sys
@@ -101,6 +109,18 @@ PLAYER_STATUS = {0x00: "READY_OK", 0x01: "BUSY", 0x02: "READY_ERR"}
 
 STATUS_PACKET_LEN = 15   # excludes trailing additive checksum
 Q_PACKET_LEN      = 15   # excludes trailing additive checksum
+
+# Chinon legacy-drive frame constants (original CHINON O-658-2 drive).
+# Status byte hierarchy from akiko.cpp / CD32 ROM analysis.
+CHINON_FRAME_HDR = 0x27
+CHINON_STATUS = {
+    0x38: ("OK",        "drive ready — focus locked, tracking"),
+    0xD8: ("FOCUS_ERR", "focus failure / sync-pattern timeout"),
+    0xE0: ("SLED_ERR",  "sled error"),
+    0xF8: ("NO_DISC",   "no disc"),
+}
+CHINON_ID_MIN =  4   # min printable chars to classify as an ID string
+CHINON_ID_MAX = 32   # max ID chars consumed (must fit under MAX_PENDING+2)
 
 # ---------------------------------------------------------------------------
 # ANSI colour helpers
@@ -408,6 +428,65 @@ def _try_qchan(buf):
         "raw":   " ".join("%02X" % b for b in raw_b),
     }
 
+def _try_chinon(buf):
+    """
+    Try to parse buf as a Chinon legacy-drive frame (0x27 header).
+    Forms:
+      27 <status>            2 bytes; status must be in CHINON_STATUS
+      27 01 <ASCII id>       variable; ID run ends at the first non-printable
+                             byte (typically the next host command's opcode)
+                             or at CHINON_ID_MAX chars
+    Returns (n_consumed, pkt) or (0, None).  (0, None) with a 0x27 head byte
+    also means "wait for more bytes" while an ID string is still arriving.
+    """
+    if not buf:
+        return 0, None
+    ts0, b0 = buf[0]
+    if b0 != CHINON_FRAME_HDR:
+        return 0, None
+    if len(buf) < 2:
+        return 0, None   # wait for the status / 0x01 byte
+    b1 = buf[1][1]
+
+    if b1 in CHINON_STATUS:
+        name, desc = CHINON_STATUS[b1]
+        return 2, {
+            "type":        "CHINON",
+            "ts":          ts0,
+            "status":      b1,
+            "status_name": name,
+            "desc":        desc,
+            "id_str":      None,
+            "raw":         "%02X %02X" % (b0, b1),
+        }
+
+    if b1 == 0x01:
+        chars      = []
+        terminated = False
+        for _, b in buf[2:]:
+            if 0x20 <= b <= 0x7E and len(chars) < CHINON_ID_MAX:
+                chars.append(b)
+            else:
+                terminated = True
+                break
+        if not terminated and len(chars) < CHINON_ID_MAX:
+            return 0, None   # ID string may still be arriving
+        if len(chars) < CHINON_ID_MIN:
+            return 0, None   # too short — let the raw-byte fallback handle it
+        total = 2 + len(chars)
+        raw_b = [b for _, b in buf[:total]]
+        return total, {
+            "type":        "CHINON",
+            "ts":          ts0,
+            "status":      0x01,
+            "status_name": "ID",
+            "desc":        "drive identification",
+            "id_str":      "".join(chr(c) for c in chars),
+            "raw":         " ".join("%02X" % b for b in raw_b),
+        }
+
+    return 0, None
+
 class PacketDecoder:
     """
     Accumulates bytes and tries to classify them into packets.
@@ -417,9 +496,13 @@ class PacketDecoder:
       0x00 + 15 more                → STATUS response  (16 bytes)
       0x01 + 15 more                → Q-channel        (16 bytes)
       0x00..0x1C + cmd_length       → HOST command
+      0x27 + status / 0x01+ASCII    → Chinon legacy-drive frame
       anything else                 → raw BYTE after MAX_PENDING threshold
     """
-    MAX_PENDING = 20   # emit raw byte if buffer grows beyond this
+    # Emit raw byte if buffer grows beyond this.  Must exceed the longest
+    # waiting classifier: a Chinon ID frame is 2 + CHINON_ID_MAX = 34 bytes,
+    # otherwise the fallback would pop the 0x27 header mid-frame.
+    MAX_PENDING = 40
 
     def __init__(self):
         self.buf     = []   # list of (ts, byte)
@@ -458,6 +541,11 @@ class PacketDecoder:
 
         # Try Q-channel response
         n, pkt = _try_qchan(self.buf)
+        if pkt:
+            return n, pkt
+
+        # Try Chinon legacy-drive frame (0x27 header, original drive captures)
+        n, pkt = _try_chinon(self.buf)
         if pkt:
             return n, pkt
 
@@ -513,6 +601,19 @@ def format_packet(pkt, show_raw=False):
             out += "\n" + col("              raw: " + pkt["raw"], C.DIM)
         return out
 
+    if t == "CHINON":
+        if pkt["id_str"] is not None:
+            line  = "[%s]  DRIVE→HOST  CHINON ID             \"%s\"" % (time, pkt["id_str"])
+            color = C.MAGENTA
+        else:
+            line  = "[%s]  DRIVE→HOST  CHINON FRAME          status=0x%02X [%s]  %s" % (
+                    time, pkt["status"], pkt["status_name"], pkt["desc"])
+            color = C.GREEN if pkt["status_name"] == "OK" else C.RED
+        out = col(line, color)
+        if show_raw:
+            out += "\n" + col("              raw: " + pkt["raw"], C.DIM)
+        return out
+
     if t == "BYTE":
         b    = pkt["value"]
         desc = OPCODES.get(b, (None,))[0]
@@ -552,6 +653,15 @@ Drive → host response packets (start byte):
   0x01  Q-CHANNEL — 15 bytes + checksum (16 total)
         bytes[1..12]: 12-byte subcode Q data
         field layout: ctrl/adr track index rel_MSF zero abs_MSF CRC16
+
+Chinon legacy-drive frames (0x27 header — original CHINON O-658-2 drive only;
+the Pico ODE never emits these):
+  0x27 0x38  OK         drive ready — focus locked, tracking
+  0x27 0xD8  FOCUS_ERR  focus failure / sync-pattern timeout
+  0x27 0xE0  SLED_ERR   sled error
+  0x27 0xF8  NO_DISC    no disc
+  0x27 0x01 <ASCII>     drive identification string ("CHINON  O-658-2 24...")
+  Gotcha: 0x27+0xD8 == 0xFF, coincidentally a valid additive checksum pair.
 
 Checksum (host commands and drive responses alike):
   Additive complement: sum(all_data_bytes) + checksum_byte == 0xFF  (mod 256)
@@ -642,6 +752,7 @@ def main():
                       col("   QCHANNEL", C.BLUE) +
                       col("   STATUS+DRQ", C.CYAN) +
                       col("   ERR", C.RED) +
+                      col("   CHINON ID", C.MAGENTA) +
                       col("   raw byte", C.DIM), C.DIM))
             print(col(bar, C.DIM))
 

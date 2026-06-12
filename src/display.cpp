@@ -17,6 +17,7 @@ extern "C" {
 #include "hardware/spi.h"
 #include "hardware/gpio.h"
 #include "hardware/clocks.h"
+#include "hardware/dma.h"
 #include "ff.h"           // FatFS for JPEG file access
 #include "display.h"
 #include "effects.h"
@@ -82,13 +83,37 @@ static inline void cs_hi(void) { gpio_put(ST7789_CS_PIN, 1); }
 static inline void dc_lo(void) { gpio_put(ST7789_DC_PIN, 0); }
 static inline void dc_hi(void) { gpio_put(ST7789_DC_PIN, 1); }
 
+// ---------------------------------------------------------------------------
+// SPI TX DMA — async scanline pushes
+// ---------------------------------------------------------------------------
+// One bounce buffer holds the in-flight scanline so the caller (effects.c
+// renders into its own line[] buffer) can start composing the next line while
+// the previous one is still clocking out.  Every command write drains the DMA
+// and the SPI FIFO first, so byte ordering on the wire is preserved.  CS must
+// stay low until the drain completes — deasserting it mid-burst would abort
+// the RAMWR write — so cs_hi() is deferred to _spi_dma_drain().
+
+static int      s_spi_dma_ch = -1;
+static uint16_t s_dma_bounce[DISPLAY_WIDTH];
+static bool     s_dma_cs_pending = false;
+
+static void _spi_dma_drain(void) {
+    if (!s_dma_cs_pending) return;
+    dma_channel_wait_for_finish_blocking(s_spi_dma_ch);
+    while (spi_is_busy(spi1)) tight_loop_contents();
+    cs_hi();
+    s_dma_cs_pending = false;
+}
+
 static void st_cmd(uint8_t c) {
+    _spi_dma_drain();
     cs_lo(); dc_lo();
     spi_write_blocking(spi1, &c, 1);
     cs_hi();
 }
 
 static void st_cmd_d(uint8_t c, const uint8_t *d, size_t n) {
+    _spi_dma_drain();
     cs_lo();
     dc_lo();
     spi_write_blocking(spi1, &c, 1);
@@ -161,8 +186,22 @@ static void st7789_write_block(int x, int y, int w, int h, const uint16_t *pixel
     uint8_t cmd = ST_RAMWR;
     spi_write_blocking(spi1, &cmd, 1);
     dc_hi();
-    spi_write_blocking(spi1, (const uint8_t *)pixels, (size_t)(w * h * 2));
-    cs_hi();
+    size_t n_bytes = (size_t)(w * h * 2);
+    if (s_spi_dma_ch >= 0 && n_bytes <= sizeof(s_dma_bounce)) {
+        // Async: bounce-copy then DMA — the caller may reuse 'pixels'
+        // immediately.  cs_hi() is deferred to the next _spi_dma_drain(),
+        // which the CASET write of the following block performs.
+        memcpy(s_dma_bounce, pixels, n_bytes);
+        dma_channel_set_read_addr(s_spi_dma_ch, s_dma_bounce, false);
+        dma_channel_set_trans_count(s_spi_dma_ch, n_bytes, true);
+        s_dma_cs_pending = true;
+    } else {
+        // Payload exceeds one scanline (JPEGDEC MCU blocks): blocking write —
+        // JPEGDEC reuses its pixel buffer as soon as the draw callback returns,
+        // so an async DMA read from it would race the decoder.
+        spi_write_blocking(spi1, (const uint8_t *)pixels, n_bytes);
+        cs_hi();
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -328,6 +367,17 @@ extern "C" void display_init(void) {
     gpio_set_function(ST7789_MOSI_PIN, GPIO_FUNC_SPI);
     spi_init(spi1, 62500000);
     spi_set_format(spi1, 8, SPI_CPOL_0, SPI_CPHA_0, SPI_MSB_FIRST);
+
+    // SPI TX DMA channel for async scanline pushes (paced by the SPI TX DREQ)
+    s_spi_dma_ch = dma_claim_unused_channel(true);
+    dma_channel_config dcfg = dma_channel_get_default_config(s_spi_dma_ch);
+    channel_config_set_transfer_data_size(&dcfg, DMA_SIZE_8);
+    channel_config_set_read_increment(&dcfg, true);
+    channel_config_set_write_increment(&dcfg, false);
+    channel_config_set_dreq(&dcfg, spi_get_dreq(spi1, true));
+    dma_channel_configure(s_spi_dma_ch, &dcfg,
+                          &spi_get_hw(spi1)->dr,  // write: SPI1 data register
+                          nullptr, 0, false);     // read addr/count set per push
 
     st7789_init_display();
     st7789_fill(0x0000);  // black

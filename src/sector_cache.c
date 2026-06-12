@@ -28,6 +28,7 @@
 
 #include "sector_cache.h"
 #include "disc_image.h"
+#include "sram_attr.h"
 #include "logger.h"      // SD card activity logging
 #include "psram.h"
 #include "pico/stdlib.h"
@@ -129,8 +130,8 @@ bool sector_cache_ready(sector_cache_t *cache, uint32_t lba) {
 //
 // Linear scan is O(SECTOR_BUFFER_COUNT) = O(8) — negligible compared to the
 // ~6.7 ms between sector deliveries at 2× speed.
-bool sector_cache_get(sector_cache_t *cache, uint32_t lba,
-                      uint8_t *buf_out, uint32_t *bytes_out) {
+bool __not_in_flash_func(sector_cache_get)(sector_cache_t *cache, uint32_t lba,
+                                           uint8_t *buf_out, uint32_t *bytes_out) {
     for (uint32_t i = 0; i < cache->slot_count; i++) {
         sector_slot_t *slot = &cache->slots[i];
         // Acquire load: ensures slot->data and slot->valid_bytes are visible
@@ -157,7 +158,7 @@ bool sector_cache_get(sector_cache_t *cache, uint32_t lba,
 //
 // Example: after delivering sector 200, call release_before(201).
 // Slots for sectors 197-200 (if present) are freed for reuse.
-void sector_cache_release_before(sector_cache_t *cache, uint32_t current_lba) {
+void __not_in_flash_func(sector_cache_release_before)(sector_cache_t *cache, uint32_t current_lba) {
     for (uint32_t i = 0; i < cache->slot_count; i++) {
         sector_slot_t *slot = &cache->slots[i];
         if (__atomic_load_n(&slot->valid, __ATOMIC_ACQUIRE) && slot->lba < current_lba) {

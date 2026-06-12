@@ -1,6 +1,7 @@
 #include "effects.h"
 #include "display.h"
 #include "pico/stdlib.h"
+#include "hardware/interp.h"
 #include <math.h>
 #include <string.h>
 #include <stdlib.h>
@@ -32,13 +33,38 @@ static const uint8_t COP_G[] = { 0x00, 0x00, 0x10, 0x30, 0x60, 0x90, 0xD0, 0xFF 
 static const uint8_t COP_B[] = { 0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0x40, 0xFF };
 #define COP_STEPS 7
 
+/* INTERP0 blend mode: peek[1] = base0 + ((base1-base0) * accum1[7:0]) >> 8 —
+ * the exact arithmetic of the previous C lerp (COP tables are ascending, so
+ * the unsigned default is safe).  Thread-context only: the Core 0 ISRs never
+ * touch interp, so no interp_save/restore is needed. */
+static bool interp_ready = false;
+
+static void ensure_interp(void) {
+    if (interp_ready) return;
+    interp_claim_lane_mask(interp0, 0x3);
+    interp_config cfg = interp_default_config();
+    interp_config_set_blend(&cfg, true);
+    interp_set_config(interp0, 0, &cfg);
+    cfg = interp_default_config();
+    interp_set_config(interp0, 1, &cfg);
+    interp_ready = true;
+}
+
+static inline uint8_t lerp8(uint8_t a, uint8_t b, uint8_t t) {
+    interp0->base[0]  = a;
+    interp0->base[1]  = b;
+    interp0->accum[1] = t;
+    return (uint8_t)interp0->peek[1];
+}
+
 static uint16_t copper_color(uint8_t frac) {
     uint8_t seg  = (uint8_t)((uint16_t)frac * COP_STEPS >> 8);
     uint8_t t    = (uint8_t)((uint16_t)frac * COP_STEPS - (uint16_t)seg * 256);
     if (seg >= COP_STEPS) { seg = COP_STEPS - 1; t = 255; }
-    uint8_t r = (uint8_t)(COP_R[seg] + (((int)COP_R[seg+1] - COP_R[seg]) * t >> 8));
-    uint8_t g = (uint8_t)(COP_G[seg] + (((int)COP_G[seg+1] - COP_G[seg]) * t >> 8));
-    uint8_t b = (uint8_t)(COP_B[seg] + (((int)COP_B[seg+1] - COP_B[seg]) * t >> 8));
+    ensure_interp();
+    uint8_t r = lerp8(COP_R[seg], COP_R[seg+1], t);
+    uint8_t g = lerp8(COP_G[seg], COP_G[seg+1], t);
+    uint8_t b = lerp8(COP_B[seg], COP_B[seg+1], t);
     return rgb(r, g, b);
 }
 
