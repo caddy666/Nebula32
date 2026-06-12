@@ -12,7 +12,7 @@ now with 100% more TLS than before...added some PSRAM - 8mb. seems to work a lot
 Grüße an a1k.org, ich sehe euch. Es ist amüsant, dass du das so genau vorhergesagt hast. Offenbar dachten wir alle dasselbe.
 
 605 unit tests, 0 failures. All 7 new tests pass - at some point i'll get around to building the hardware....but until then might as well get as many of these pesky bugs out before hand. also, i might be doing this the wrong way around, but meh. its a first try...
-
+this better be good - there are 20+ gb of tests, the bloody firmware is less than 350k.
 
 ## How It Works
 
