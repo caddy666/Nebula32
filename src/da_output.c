@@ -206,8 +206,8 @@ void da_start_play(sector_cache_t *cache, uint32_t start_lba) {
     // Pre-fill both ping-pong buffers
     uint32_t bytes;
     s_buf_lba[0] = s_next_lba;
-    if (!sector_cache_get(s_cache, s_next_lba, s_raw, &bytes)) {
-        LOG_WARN_MSG("DA sector miss LBA=%lu at play start", (unsigned long)s_next_lba);
+    if (!sector_cache_get(s_cache, s_next_lba, s_raw, &bytes) || bytes == 0) {
+        LOG_WARN_MSG("DA sector miss or SD error LBA=%lu at play start", (unsigned long)s_next_lba);
         s_playing = false;
         return;
     }
@@ -216,7 +216,7 @@ void da_start_play(sector_cache_t *cache, uint32_t start_lba) {
     sector_cache_release_before(s_cache, s_next_lba);  // free just-consumed slot
 
     s_buf_lba[1] = s_next_lba;
-    if (sector_cache_get(s_cache, s_next_lba, s_raw, &bytes)) {
+    if (sector_cache_get(s_cache, s_next_lba, s_raw, &bytes) && bytes > 0) {
         expand_to_i2s24(s_raw, s_buf[1]);
         s_next_lba++;
         sector_cache_release_before(s_cache, s_next_lba);
@@ -283,12 +283,17 @@ static void __isr _dma_irq_handler(void) {
     // for that sector NOW so the subcode PIO has data from the first bit-clock.
     _push_subcode(s_buf_lba[done_buf ^ 1]);
 
-    uint32_t bytes_unused;
-    if (sector_cache_get(s_cache, s_next_lba, s_raw, &bytes_unused)) {
-        if (__atomic_load_n(&s_audio_mode, __ATOMIC_RELAXED)) {
-            vis_audio_push_sector(s_raw);  // visualiser needs raw PCM bytes
+    uint32_t bytes;
+    if (sector_cache_get(s_cache, s_next_lba, s_raw, &bytes)) {
+        if (bytes > 0) {
+            if (__atomic_load_n(&s_audio_mode, __ATOMIC_RELAXED)) {
+                vis_audio_push_sector(s_raw);
+            }
+            expand_to_i2s24(s_raw, s_buf[done_buf]);
+        } else {
+            // SD error sentinel (valid slot, bytes=0): output silence for this sector
+            memset(s_buf[done_buf], 0, SECTOR_DMA_WORDS * sizeof(uint32_t));
         }
-        expand_to_i2s24(s_raw, s_buf[done_buf]);
         s_buf_lba[done_buf] = s_next_lba;
         s_next_lba++;
         sector_cache_release_before(s_cache, s_next_lba);  // free just-consumed slot
@@ -357,7 +362,6 @@ void da_pause(void) {
 
 void da_resume(void) {
     if (!s_playing || !s_paused || !s_cache) return;
-    s_paused = false;
 
     // Resume from the earliest of the two loaded buffers — that's the last sector
     // that was actually handed to DMA.  Using s_next_lba-2 is wrong if the cache
@@ -384,7 +388,7 @@ void da_resume(void) {
 
     uint32_t bytes;
     s_buf_lba[0] = s_next_lba;
-    if (sector_cache_get(s_cache, s_next_lba, s_raw, &bytes)) {
+    if (sector_cache_get(s_cache, s_next_lba, s_raw, &bytes) && bytes > 0) {
         expand_to_i2s24(s_raw, s_buf[0]);
         s_next_lba++;
         sector_cache_release_before(s_cache, s_next_lba);
@@ -392,7 +396,7 @@ void da_resume(void) {
         memset(s_buf[0], 0, sizeof(s_buf[0]));
     }
     s_buf_lba[1] = s_next_lba;
-    if (sector_cache_get(s_cache, s_next_lba, s_raw, &bytes)) {
+    if (sector_cache_get(s_cache, s_next_lba, s_raw, &bytes) && bytes > 0) {
         expand_to_i2s24(s_raw, s_buf[1]);
         s_next_lba++;
         sector_cache_release_before(s_cache, s_next_lba);
@@ -408,6 +412,11 @@ void da_resume(void) {
     irq_set_enabled(DMA_IRQ_0, true);
 
     _push_subcode(s_buf_lba[0]);
+    // Clear s_paused only now — DMA is armed and IRQ is enabled.
+    // Setting it earlier would allow a stale deferred IRQ to enter the ISR
+    // body before channels are reconfigured, calling set_read_addr on a
+    // not-yet-configured channel.
+    s_paused = false;
     dma_channel_start(s_dma_ch);
 
     printf("[DA] resumed at LBA=%lu\n", (unsigned long)resume_lba);

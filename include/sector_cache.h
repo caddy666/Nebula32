@@ -16,8 +16,9 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include "disc_image.h"
+#include "psram.h"
 
-#define SECTOR_BUFFER_COUNT  8      // Ring buffer depth
+#define SECTOR_BUFFER_COUNT  8      // Ring buffer depth (SRAM fallback)
 #define SECTOR_RAW_SIZE      2352   // Maximum raw sector bytes
 
 // Ping-pong DMA needs at least 2 slots; raw sector size is a Red Book constant.
@@ -34,7 +35,8 @@ typedef struct {
 } sector_slot_t;
 
 typedef struct {
-    sector_slot_t  slots[SECTOR_BUFFER_COUNT];
+    sector_slot_t *slots;          // Points to SRAM fallback or PSRAM array
+    uint32_t       slot_count;     // SECTOR_BUFFER_COUNT (SRAM) or larger (PSRAM)
     uint32_t       next_fetch_lba; // LBA the prefetch thread will fetch next
     uint32_t       flush_gen;      // Incremented on flush; Core 1 discards stale reads
     disc_image_t  *disc;           // Pointer to the open disc image

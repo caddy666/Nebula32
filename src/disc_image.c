@@ -126,6 +126,7 @@ bool disc_open(disc_image_t *disc, const char *path) {
 
 void disc_close(disc_image_t *disc) {
     if (disc->format == DISC_FORMAT_VDIR) {
+        vdisc_invalidate_fil();
         disc->vdisc = NULL;
         return;
     }
@@ -317,8 +318,14 @@ bool disc_parse_bin(disc_image_t *disc, const char *cue_path) {
             next_lba = disc->tracks[i].start_lba;
         } else {
             FSIZE_t fsize = f_size(&disc->image_file);
-            next_lba = trk->start_lba + (uint32_t)((fsize - trk->file_offset)
-                       / trk->sector_size);
+            // Guard: malformed CUE where file_offset exceeds the actual file
+            // size would underflow (both unsigned), producing a huge next_lba.
+            if (fsize > trk->file_offset) {
+                next_lba = trk->start_lba + (uint32_t)((fsize - trk->file_offset)
+                           / trk->sector_size);
+            } else {
+                next_lba = trk->start_lba;  // file truncated — zero-length track
+            }
         }
         trk->length_sectors = (next_lba > trk->start_lba)
                             ? (next_lba - trk->start_lba) : 0;

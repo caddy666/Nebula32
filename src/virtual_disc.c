@@ -361,28 +361,47 @@ static void build_dir_sector(const vdisc_t *vd, uint32_t dir_idx, uint8_t *buf) 
 }
 
 // ---------------------------------------------------------------------------
+// Single-handle FIL cache — avoids f_open/f_close on every sector for the
+// common case of sequential reads from one file (e.g. a software data blob).
+// Called exclusively from Core 1; no locking needed.
+// ---------------------------------------------------------------------------
+static FIL      s_cached_fil;
+static uint32_t s_cached_entry = UINT32_MAX;
+static bool     s_fil_open     = false;
+
+void vdisc_invalidate_fil(void) {
+    if (s_fil_open) {
+        f_close(&s_cached_fil);
+        s_fil_open     = false;
+        s_cached_entry = UINT32_MAX;
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Read file data sector
 // ---------------------------------------------------------------------------
 static void read_file_sector(const vdisc_t *vd, uint32_t entry_idx,
                               uint32_t sector_offset, uint8_t *buf) {
-    char path[MAX_PATH_LEN];
-    entry_path(vd, entry_idx, path, sizeof(path));
-
-    FIL fp;
-    FRESULT fr = f_open(&fp, path, FA_READ);
-    if (fr != FR_OK) {
-        return;  // buf already zeroed by caller
+    if (s_cached_entry != entry_idx) {
+        if (s_fil_open) {
+            f_close(&s_cached_fil);
+            s_fil_open = false;
+        }
+        char path[MAX_PATH_LEN];
+        entry_path(vd, entry_idx, path, sizeof(path));
+        if (f_open(&s_cached_fil, path, FA_READ) != FR_OK) {
+            s_cached_entry = UINT32_MAX;
+            return;  // buf already zeroed by caller
+        }
+        s_cached_entry = entry_idx;
+        s_fil_open     = true;
     }
 
     FSIZE_t file_off = (FSIZE_t)sector_offset * 2048u;
-    f_lseek(&fp, file_off);
+    f_lseek(&s_cached_fil, file_off);
 
     UINT br = 0;
-    f_read(&fp, buf, 2048, &br);
-    // Zero-pad remainder (already done by caller's memset before this call,
-    // but only if br < 2048 the remaining bytes beyond br are already zero)
-
-    f_close(&fp);
+    f_read(&s_cached_fil, buf, 2048, &br);
 }
 
 // ---------------------------------------------------------------------------

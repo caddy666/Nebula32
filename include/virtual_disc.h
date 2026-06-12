@@ -22,6 +22,9 @@ typedef struct {
     vdisc_entry_t   table[VDISC_MAX_ENTRIES];
 } vdisc_t;
 
+// Close the cached FIL handle (call before unmounting or switching discs).
+void vdisc_invalidate_fil(void);
+
 // Mount partition 2 ("1:/") as a virtual ISO 9660 disc.
 // Scans the directory tree and assigns LBAs to all entries.
 // Returns false if partition 2 cannot be opened or entry/depth limit exceeded.

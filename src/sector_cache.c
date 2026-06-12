@@ -29,11 +29,15 @@
 #include "sector_cache.h"
 #include "disc_image.h"
 #include "logger.h"      // SD card activity logging
+#include "psram.h"
 #include "pico/stdlib.h"
 #include "pico/assert.h"
 
 #include <string.h>
 #include <stdio.h>
+
+// SRAM fallback slot array — used when PSRAM is absent or allocation fails.
+static sector_slot_t s_sram_slots[SECTOR_BUFFER_COUNT];
 
 // ---------------------------------------------------------------------------
 // sector_cache_init
@@ -41,17 +45,38 @@
 void sector_cache_init(sector_cache_t *cache, disc_image_t *disc) {
     hard_assert(cache != NULL, "sector_cache_init: cache is NULL");
     memset(cache, 0, sizeof(*cache));
-    cache->disc           = disc;
-    cache->next_fetch_lba = 0;
-    cache->sector_mode    = SECTOR_MODE_DATA;
-    // All slots start invalid (memset zeroed them, and valid==false==0)
+
+#ifdef BUILD_WITH_PSRAM
+    void *psram_slots = psram_alloc(
+        (size_t)SECTOR_BUFFER_COUNT_PSRAM * sizeof(sector_slot_t));
+    if (psram_slots) {
+        cache->slots      = (sector_slot_t *)psram_slots;
+        cache->slot_count = SECTOR_BUFFER_COUNT_PSRAM;
+        printf("[CACHE] %u slots in PSRAM (%u KB read-ahead)\n",
+               SECTOR_BUFFER_COUNT_PSRAM,
+               (unsigned)((size_t)SECTOR_BUFFER_COUNT_PSRAM
+                          * sizeof(sector_slot_t) / 1024u));
+    } else {
+        cache->slots      = s_sram_slots;
+        cache->slot_count = SECTOR_BUFFER_COUNT;
+        printf("[CACHE] PSRAM alloc failed — %u SRAM slots\n",
+               SECTOR_BUFFER_COUNT);
+    }
+#else
+    cache->slots      = s_sram_slots;
+    cache->slot_count = SECTOR_BUFFER_COUNT;
+#endif
+
+    memset(cache->slots, 0, cache->slot_count * sizeof(sector_slot_t));
+    cache->disc        = disc;
+    cache->sector_mode = SECTOR_MODE_DATA;
 }
 
 // ---------------------------------------------------------------------------
 // sector_cache_is_full  (Core 1, called before deciding to sleep)
 // ---------------------------------------------------------------------------
 bool sector_cache_is_full(sector_cache_t *cache) {
-    for (int i = 0; i < SECTOR_BUFFER_COUNT; i++) {
+    for (uint32_t i = 0; i < cache->slot_count; i++) {
         if (!__atomic_load_n(&cache->slots[i].valid, __ATOMIC_ACQUIRE))
             return false;
     }
@@ -68,7 +93,7 @@ void sector_cache_flush(sector_cache_t *cache) {
     // Bump generation so any in-flight Core 1 read discards its result.
     // ACQ_REL ensures the increment is visible to Core 1 before we clear valid flags.
     __atomic_fetch_add(&cache->flush_gen, 1u, __ATOMIC_ACQ_REL);
-    for (int i = 0; i < SECTOR_BUFFER_COUNT; i++) {
+    for (uint32_t i = 0; i < cache->slot_count; i++) {
         __atomic_store_n(&cache->slots[i].valid, false, __ATOMIC_RELEASE);
     }
 }
@@ -89,7 +114,7 @@ void sector_cache_seek(sector_cache_t *cache, uint32_t lba) {
 // Returns true if the cache holds a valid entry for `lba`, WITHOUT copying
 // any data.  Used by the test suite to verify prefetch state.
 bool sector_cache_ready(sector_cache_t *cache, uint32_t lba) {
-    for (int i = 0; i < SECTOR_BUFFER_COUNT; i++) {
+    for (uint32_t i = 0; i < cache->slot_count; i++) {
         sector_slot_t *slot = &cache->slots[i];
         if (__atomic_load_n(&slot->valid, __ATOMIC_ACQUIRE) && slot->lba == lba)
             return true;
@@ -106,7 +131,7 @@ bool sector_cache_ready(sector_cache_t *cache, uint32_t lba) {
 // ~6.7 ms between sector deliveries at 2× speed.
 bool sector_cache_get(sector_cache_t *cache, uint32_t lba,
                       uint8_t *buf_out, uint32_t *bytes_out) {
-    for (int i = 0; i < SECTOR_BUFFER_COUNT; i++) {
+    for (uint32_t i = 0; i < cache->slot_count; i++) {
         sector_slot_t *slot = &cache->slots[i];
         // Acquire load: ensures slot->data and slot->valid_bytes are visible
         // if the RELEASE store that set valid=true has already happened.
@@ -133,7 +158,7 @@ bool sector_cache_get(sector_cache_t *cache, uint32_t lba,
 // Example: after delivering sector 200, call release_before(201).
 // Slots for sectors 197-200 (if present) are freed for reuse.
 void sector_cache_release_before(sector_cache_t *cache, uint32_t current_lba) {
-    for (int i = 0; i < SECTOR_BUFFER_COUNT; i++) {
+    for (uint32_t i = 0; i < cache->slot_count; i++) {
         sector_slot_t *slot = &cache->slots[i];
         if (__atomic_load_n(&slot->valid, __ATOMIC_ACQUIRE) && slot->lba < current_lba) {
             __atomic_store_n(&slot->valid, false, __ATOMIC_RELEASE);
@@ -155,9 +180,9 @@ void sector_cache_prefetch_tick(sector_cache_t *cache) {
 
     // ---- Find a free slot ----
     int free_slot = -1;
-    for (int i = 0; i < SECTOR_BUFFER_COUNT; i++) {
+    for (uint32_t i = 0; i < cache->slot_count; i++) {
         if (!__atomic_load_n(&cache->slots[i].valid, __ATOMIC_ACQUIRE)) {
-            free_slot = i;
+            free_slot = (int)i;
             break;
         }
     }
@@ -203,13 +228,16 @@ void sector_cache_prefetch_tick(sector_cache_t *cache) {
     } else {
         slot->error       = true;
         slot->valid_bytes = 0;
-        // Mark the slot valid so sector_cache_get() returns true with bytes=0,
-        // distinguishing a permanent read error from "not yet prefetched" (false).
-        // The caller is responsible for treating bytes=0 as an error sentinel.
-        __atomic_store_n(&slot->valid, true, __ATOMIC_RELEASE);
         LOG_ERROR_MSG("cache prefetch SD read fail at LBA=%lu (after retry)",
                       (unsigned long)fetch_lba);
         printf("[CACHE] Read error at LBA %u\n", (unsigned)fetch_lba);
-        __atomic_store_n(&cache->next_fetch_lba, fetch_lba + 1, __ATOMIC_RELEASE);
+        // Mirror the success path: only commit if Core 0 hasn't flushed/seeked
+        // since we started.  Without this check, a seek during the retry window
+        // commits a stale error sentinel at the post-seek slot index, causing a
+        // false permanent-miss on the first sector of the new seek position.
+        if (__atomic_load_n(&cache->flush_gen, __ATOMIC_ACQUIRE) == my_gen) {
+            __atomic_store_n(&slot->valid, true, __ATOMIC_RELEASE);
+            __atomic_store_n(&cache->next_fetch_lba, fetch_lba + 1, __ATOMIC_RELEASE);
+        }
     }
 }

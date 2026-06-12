@@ -58,6 +58,8 @@ typedef struct wolfssl_ctx_t WOLFSSL_CTX;
 #define WOLFSSL_ERROR_WANT_WRITE  (-3)
 #define SSL_FILETYPE_ASN1          2
 static inline void wolfSSL_Init(void) {}
+static inline int wolfSSL_SetAllocators(void *mf, void *ff, void *rf)
+    { (void)mf;(void)ff;(void)rf; return 0; }
 static inline WOLFSSL_CTX *wolfTLSv1_3_server_method(void) { return NULL; }
 static inline WOLFSSL_CTX *wolfSSL_CTX_new(WOLFSSL_CTX *m) { (void)m; return NULL; }
 static inline void wolfSSL_CTX_free(WOLFSSL_CTX *c) { (void)c; }
@@ -90,6 +92,8 @@ static const unsigned long sizeof_ecc_key_der_256 = 0;
 #include <stdlib.h>
 
 #ifdef PICO_CYW43_SUPPORTED
+
+#include "psram.h"   // wolfSSL allocator routing to PSRAM when available
 
 // ---------------------------------------------------------------------------
 // External state from main.c
@@ -135,13 +139,14 @@ static struct tcp_pcb *s_listener = NULL;
 
 // Per-connection context
 typedef struct {
-    char     request[512];     // Accumulate incoming HTTP request
+    char     request[1024];    // Accumulate incoming HTTP request
     int      req_len;
     bool     headers_done;
     bool     in_use;           // Pool slot occupancy flag
     // TLS state (WOLFSSL_LWIP_NATIVE)
     WOLFSSL *ssl;              // Per-connection TLS session
     bool     tls_ready;        // true after wolfSSL_accept() succeeds
+    char     resp_buf[4096];   // Per-connection response buffer (avoids shared-static race)
 } http_conn_t;
 
 // Shared TLS context (loaded once in webserver_init)
@@ -178,11 +183,29 @@ static void conn_free(http_conn_t *conn) {
 static void read_wifi_config(void) {
     const logger_config_t *cfg = logger_get_config();
     strncpy(s_ssid, cfg->wifi_ssid,     sizeof(s_ssid));
+    s_ssid[sizeof(s_ssid) - 1] = '\0';
     strncpy(s_pass, cfg->wifi_password, sizeof(s_pass));
-    if (cfg->wifi_hostname[0] != '\0')
+    s_pass[sizeof(s_pass) - 1] = '\0';
+    if (cfg->wifi_hostname[0] != '\0') {
         strncpy(s_host, cfg->wifi_hostname, sizeof(s_host));
+        s_host[sizeof(s_host) - 1] = '\0';
+    }
     strncpy(s_fw_token, cfg->fw_token, sizeof(s_fw_token));
     s_fw_token[sizeof(s_fw_token) - 1] = '\0';
+
+    // S2: reject fw_token values that aren't exactly 32 lowercase hex chars.
+    // A malformed token could be injected raw into the JS string in build_html_page();
+    // clearing it here forces regeneration of a safe token via generate_and_save_token().
+    {
+        bool valid = (strlen(s_fw_token) == 32);
+        for (int i = 0; valid && i < 32; i++) {
+            char c = s_fw_token[i];
+            if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')))
+                valid = false;
+        }
+        if (!valid)
+            s_fw_token[0] = '\0';
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -202,16 +225,36 @@ static void generate_and_save_token(void) {
              (unsigned long)r[0], (unsigned long)r[1],
              (unsigned long)r[2], (unsigned long)r[3]);
 
-    FIL f;
-    if (f_open(&f, "0:/nebula32.cfg", FA_OPEN_APPEND | FA_WRITE) == FR_OK) {
-        char line[48];
-        int  len = snprintf(line, sizeof(line), "fw_token = %s\n", s_fw_token);
-        UINT bw;
-        f_write(&f, line, (UINT)len, &bw);
-        f_close(&f);
-        printf("[WEB] Generated fw_token and saved to nebula32.cfg\n");
-    } else {
-        printf("[WEB] Warning: could not save fw_token to nebula32.cfg\n");
+    // S5: check whether a fw_token key already exists (even if empty) before
+    // appending.  A blank value in the config causes s_fw_token to be empty on
+    // load, triggering this function, which would otherwise append a second key
+    // and grow the file unboundedly across reboots.
+    bool key_exists = false;
+    {
+        FIL fr;
+        if (f_open(&fr, "0:/nebula32.cfg", FA_READ) == FR_OK) {
+            char scan_line[64];
+            while (f_gets(scan_line, sizeof(scan_line), &fr)) {
+                char *p = scan_line;
+                while (*p == ' ' || *p == '\t') p++;
+                if (strncmp(p, "fw_token", 8) == 0) { key_exists = true; break; }
+            }
+            f_close(&fr);
+        }
+    }
+
+    if (!key_exists) {
+        FIL f;
+        if (f_open(&f, "0:/nebula32.cfg", FA_OPEN_APPEND | FA_WRITE) == FR_OK) {
+            char line[48];
+            int  len = snprintf(line, sizeof(line), "fw_token = %s\n", s_fw_token);
+            UINT bw;
+            f_write(&f, line, (UINT)len, &bw);
+            f_close(&f);
+            printf("[WEB] Generated fw_token and saved to nebula32.cfg\n");
+        } else {
+            printf("[WEB] Warning: could not save fw_token to nebula32.cfg\n");
+        }
     }
 }
 #endif // WEBSERVER_TEST_BUILD
@@ -761,12 +804,26 @@ static void build_json_status(char *buf, int bufsz) {
 // Returns the response as a static buffer or NULL to stream a file.
 // 'conn' holds the accumulated request.
 
-static char s_resp_buf[4096];
+// S3: constant-time 33-byte token comparison (including NUL) to prevent
+// timing-oracle attacks on the firmware-flash authorisation token.
+static bool token_equal_ct(const char *a, const char *b) {
+    unsigned int diff = 0;
+    for (int i = 0; i < 33; i++)
+        diff |= (unsigned char)a[i] ^ (unsigned char)b[i];
+    return diff == 0;
+}
 
 static void handle_request(struct tcp_pcb *pcb, http_conn_t *conn) {
     char *req   = conn->request;
     bool  is_get  = (strncmp(req, "GET ",  4) == 0);
     bool  is_post = (strncmp(req, "POST ", 5) == 0);
+    if (!is_get && !is_post) {
+        static const char *m405 =
+            "HTTP/1.1 405 Method Not Allowed\r\n"
+            "Allow: GET, POST\r\nConnection: close\r\n\r\n";
+        wolfSSL_write(conn->ssl, m405, (int)strlen(m405));
+        return;
+    }
     char *path_start = req + (is_get ? 4 : 5);
     char  path[256]  = "";
 
@@ -783,21 +840,39 @@ static void handle_request(struct tcp_pcb *pcb, http_conn_t *conn) {
 
     // ── GET / ── Main HTML page
     if (is_get && (strcmp(path, "/") == 0 || strcmp(path, "/index.html") == 0)) {
-        char *html = build_html_page();
-        wolfSSL_write(conn->ssl, html, (int)strlen(html));
+        const char *html = build_html_page();
+        int total = (int)strlen(html);
+        int sent  = 0;
+        while (sent < total) {
+            int chunk = total - sent;
+            if (chunk > 4096) chunk = 4096;
+            int wr;
+            int retries = 0;
+            do {
+                wr = wolfSSL_write(conn->ssl, html + sent, chunk);
+                if (wr <= 0) {
+                    if (wolfSSL_get_error(conn->ssl, wr) != WOLFSSL_ERROR_WANT_WRITE)
+                        goto html_done;
+                    cyw43_arch_poll();
+                }
+            } while (wr <= 0 && ++retries < 20);
+            if (wr <= 0) break;
+            sent += wr;
+        }
+        html_done:;
         return;
     }
 
     // ── GET /api/status ── JSON status
     if (is_get && strcmp(path, "/api/status") == 0) {
-        build_json_status(s_resp_buf, sizeof(s_resp_buf));
-        wolfSSL_write(conn->ssl, s_resp_buf, (int)strlen(s_resp_buf));
+        build_json_status(conn->resp_buf, sizeof(conn->resp_buf));
+        wolfSSL_write(conn->ssl, conn->resp_buf, (int)strlen(conn->resp_buf));
         return;
     }
 
     // ── GET /api/images ── JSON image list
     if (is_get && strcmp(path, "/api/images") == 0) {
-        int pos = snprintf(s_resp_buf, sizeof(s_resp_buf),
+        int pos = snprintf(conn->resp_buf, sizeof(conn->resp_buf),
             "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
             "Connection: close\r\n\r\n[");
         for (uint32_t j = 0; j < s_image_count && j < 99; j++) {
@@ -805,15 +880,15 @@ static void handle_request(struct tcp_pcb *pcb, http_conn_t *conn) {
             basename_no_ext(s_image_paths[j], base, sizeof(base));
             json_escape(base_esc, sizeof(base_esc), base);
             bool hc = cover_exists(s_image_paths[j], cp, sizeof(cp));
-            pos += snprintf(s_resp_buf + pos, sizeof(s_resp_buf) - pos,
+            pos += snprintf(conn->resp_buf + pos, sizeof(conn->resp_buf) - pos,
                 "%s{\"index\":%lu,\"name\":\"%s\",\"has_cover\":%s,\"loaded\":%s}",
                 j > 0 ? "," : "",
                 (unsigned long)j, base_esc,
                 hc ? "true" : "false",
                 (j == s_loaded_index) ? "true" : "false");
         }
-        pos += snprintf(s_resp_buf + pos, sizeof(s_resp_buf) - pos, "]");
-        wolfSSL_write(conn->ssl, s_resp_buf, pos);
+        pos += snprintf(conn->resp_buf + pos, sizeof(conn->resp_buf) - pos, "]");
+        wolfSSL_write(conn->ssl, conn->resp_buf, pos);
         return;
     }
 
@@ -826,17 +901,17 @@ static void handle_request(struct tcp_pcb *pcb, http_conn_t *conn) {
             s_load_index   = idx;
             s_load_pending = true;
             LOG_INFO_MSG("HTTP", "web load request: image %lu", (unsigned long)idx);
-            snprintf(s_resp_buf, sizeof(s_resp_buf),
+            snprintf(conn->resp_buf, sizeof(conn->resp_buf),
                 "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
                 "Connection: close\r\n\r\n"
                 "{\"ok\":true,\"index\":%lu}", (unsigned long)idx);
         } else {
-            snprintf(s_resp_buf, sizeof(s_resp_buf),
+            snprintf(conn->resp_buf, sizeof(conn->resp_buf),
                 "HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\n"
                 "Connection: close\r\n\r\n"
                 "{\"ok\":false,\"error\":\"index out of range\"}");
         }
-        wolfSSL_write(conn->ssl, s_resp_buf, (int)strlen(s_resp_buf));
+        wolfSSL_write(conn->ssl, conn->resp_buf, (int)strlen(conn->resp_buf));
         return;
     }
 
@@ -844,19 +919,19 @@ static void handle_request(struct tcp_pcb *pcb, http_conn_t *conn) {
     if (is_post && strcmp(path, "/api/page/next") == 0) {
         s_page_delta   = +1;
         s_page_request = true;
-        snprintf(s_resp_buf, sizeof(s_resp_buf),
+        snprintf(conn->resp_buf, sizeof(conn->resp_buf),
             "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
             "Connection: close\r\n\r\n{\"ok\":true,\"direction\":\"next\"}");
-        wolfSSL_write(conn->ssl, s_resp_buf, (int)strlen(s_resp_buf));
+        wolfSSL_write(conn->ssl, conn->resp_buf, (int)strlen(conn->resp_buf));
         return;
     }
     if (is_post && strcmp(path, "/api/page/prev") == 0) {
         s_page_delta   = -1;
         s_page_request = true;
-        snprintf(s_resp_buf, sizeof(s_resp_buf),
+        snprintf(conn->resp_buf, sizeof(conn->resp_buf),
             "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
             "Connection: close\r\n\r\n{\"ok\":true,\"direction\":\"prev\"}");
-        wolfSSL_write(conn->ssl, s_resp_buf, (int)strlen(s_resp_buf));
+        wolfSSL_write(conn->ssl, conn->resp_buf, (int)strlen(conn->resp_buf));
         return;
     }
 
@@ -864,10 +939,10 @@ static void handle_request(struct tcp_pcb *pcb, http_conn_t *conn) {
     if (is_post && strcmp(path, "/api/eject") == 0) {
         s_load_index   = UINT32_MAX;
         s_load_pending = true;
-        snprintf(s_resp_buf, sizeof(s_resp_buf),
+        snprintf(conn->resp_buf, sizeof(conn->resp_buf),
             "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
             "Connection: close\r\n\r\n{\"ok\":true}");
-        wolfSSL_write(conn->ssl, s_resp_buf, (int)strlen(s_resp_buf));
+        wolfSSL_write(conn->ssl, conn->resp_buf, (int)strlen(conn->resp_buf));
         return;
     }
 
@@ -875,20 +950,20 @@ static void handle_request(struct tcp_pcb *pcb, http_conn_t *conn) {
     if (is_get && strcmp(path, "/api/fw/list") == 0) {
         static char fw_paths[8][MAX_PATH_LEN];  // O1: 2 KB off the lwIP callback stack
         uint32_t n = sd_scan_uf2_files(fw_paths, 8, "0:/", 0);
-        int pos = snprintf(s_resp_buf, sizeof(s_resp_buf),
+        int pos = snprintf(conn->resp_buf, sizeof(conn->resp_buf),
             "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
             "Connection: close\r\n\r\n{\"files\":[");
-        for (uint32_t i = 0; i < n && pos < (int)sizeof(s_resp_buf) - 4; i++) {
+        for (uint32_t i = 0; i < n && pos < (int)sizeof(conn->resp_buf) - 4; i++) {
             // Strip the "0:/" prefix for the client
             const char *name = fw_paths[i];
             if (name[0] == '0' && name[1] == ':' && name[2] == '/') name += 3;
             char esc[MAX_PATH_LEN * 2];
             json_escape(esc, sizeof(esc), name);
-            pos += snprintf(s_resp_buf + pos, sizeof(s_resp_buf) - pos,
+            pos += snprintf(conn->resp_buf + pos, sizeof(conn->resp_buf) - pos,
                 "%s\"%s\"", i ? "," : "", esc);
         }
-        snprintf(s_resp_buf + pos, sizeof(s_resp_buf) - pos, "]}");
-        wolfSSL_write(conn->ssl, s_resp_buf, (int)strlen(s_resp_buf));
+        snprintf(conn->resp_buf + pos, sizeof(conn->resp_buf) - pos, "]}");
+        wolfSSL_write(conn->ssl, conn->resp_buf, (int)strlen(conn->resp_buf));
         return;
     }
 
@@ -897,7 +972,7 @@ static void handle_request(struct tcp_pcb *pcb, http_conn_t *conn) {
         // Validate firmware-flash token before doing anything else.
         char provided_token[33] = "";
         extract_request_token(req, path, provided_token, sizeof(provided_token));
-        if (s_fw_token[0] == '\0' || strcmp(provided_token, s_fw_token) != 0) {
+        if (s_fw_token[0] == '\0' || !token_equal_ct(provided_token, s_fw_token)) {
             static const char *unauth =
                 "HTTP/1.1 403 Forbidden\r\nContent-Type: application/json\r\n"
                 "Connection: close\r\n\r\n"
@@ -938,12 +1013,12 @@ static void handle_request(struct tcp_pcb *pcb, http_conn_t *conn) {
         tcp_output(pcb);   // flush ack immediately — reboot follows
         // fw_flash_and_reboot never returns on success; returns error code on failure
         fw_result_t fr = fw_flash_and_reboot(full_path);
-        snprintf(s_resp_buf, sizeof(s_resp_buf),
+        snprintf(conn->resp_buf, sizeof(conn->resp_buf),
             "HTTP/1.1 500 Internal Server Error\r\n"
             "Content-Type: application/json\r\n"
             "Connection: close\r\n\r\n{\"ok\":false,\"error\":\"%s\"}",
             fw_result_str(fr));
-        wolfSSL_write(conn->ssl, s_resp_buf, (int)strlen(s_resp_buf));
+        wolfSSL_write(conn->ssl, conn->resp_buf, (int)strlen(conn->resp_buf));
         return;
     }
 
@@ -968,14 +1043,14 @@ static void handle_request(struct tcp_pcb *pcb, http_conn_t *conn) {
         if (fr == FR_OK) {
             FSIZE_t fsize = f_size(&cover_file);
             // Send HTTP header
-            int hlen = snprintf(s_resp_buf, sizeof(s_resp_buf),
+            int hlen = snprintf(conn->resp_buf, sizeof(conn->resp_buf),
                 "HTTP/1.1 200 OK\r\n"
                 "Content-Type: image/jpeg\r\n"
                 "Content-Length: %lu\r\n"
                 "Cache-Control: max-age=3600\r\n"
                 "Connection: close\r\n\r\n",
                 (unsigned long)fsize);
-            wolfSSL_write(conn->ssl, s_resp_buf, hlen);
+            wolfSSL_write(conn->ssl, conn->resp_buf, hlen);
 
             // Stream file in 512-byte chunks; retry on WANT_WRITE (TLS send buffer full)
             static uint8_t chunk[512];
@@ -1021,10 +1096,10 @@ static void handle_request(struct tcp_pcb *pcb, http_conn_t *conn) {
     for (const char *c = path; *c && sp < sizeof(safe_path) - 1; c++)
         safe_path[sp++] = (*c >= 0x20 && *c < 0x7f) ? *c : '?';
     safe_path[sp] = '\0';
-    snprintf(s_resp_buf, sizeof(s_resp_buf),
+    snprintf(conn->resp_buf, sizeof(conn->resp_buf),
         "HTTP/1.1 404 Not Found\r\nContent-Type: text/plain\r\n"
         "Connection: close\r\n\r\nNot found: %s", safe_path);
-    wolfSSL_write(conn->ssl, s_resp_buf, (int)strlen(s_resp_buf));
+    wolfSSL_write(conn->ssl, conn->resp_buf, (int)strlen(conn->resp_buf));
 }
 
 // ---------------------------------------------------------------------------
@@ -1156,6 +1231,13 @@ bool webserver_init(void) {
     snprintf(s_ip_str, sizeof(s_ip_str), "%s", ip4addr_ntoa(ip));
     printf("[WEB] Connected! IP: %s\n", s_ip_str);
     LOG_INFO_MSG("WEB ", "WiFi connected, IP=%s", s_ip_str);
+
+    // Route wolfSSL heap allocations to PSRAM when available.
+    // Recovers ~120-180 KB of SRAM for the 3-connection pool.
+    // No-op when BUILD_WITH_PSRAM is not set or PSRAM init failed.
+    if (psram_available()) {
+        wolfSSL_SetAllocators(psram_alloc, psram_free, psram_realloc);
+    }
 
     // Initialise wolfSSL TLS context (once per boot)
     wolfSSL_Init();

@@ -285,6 +285,31 @@ if(PICO_BOARD STREQUAL "pico2_w")
     add_dependencies(Nebula32 tls_cert_check)
 endif()
 
+# ---- Optional QSPI PSRAM (RP2350 CS1, e.g. APS6404L 8 MB) ----
+# Enable on custom hardware that wires a PSRAM chip to the RP2350 QMI CS1 pin.
+# Standard Pico 2 / Pico 2 W builds leave this OFF — all code compiles to no-ops.
+#
+# Usage:
+#   cmake .. -DPICO_BOARD=pico2 -DBUILD_WITH_PSRAM=ON
+#   cmake .. -DPICO_BOARD=pico2_w -DBUILD_WITH_PSRAM=ON
+#
+# Before enabling, edit src/psram.c:
+#   PSRAM_CS1_PIN  — GPIO wired to PSRAM /CE on your PCB
+#   PSRAM_CLKDIV   — QSPI clock divider (2 = 67.5 MHz for APS6404L at 135 MHz)
+#   PSRAM_RXDELAY  — RX sample delay half-cycles (2–4 typical)
+#   QMI timing constants in psram_fw_init() for your specific chip
+option(BUILD_WITH_PSRAM "Enable QSPI PSRAM on CS1 (custom hardware only)" OFF)
+if(BUILD_WITH_PSRAM)
+    target_compile_definitions(Nebula32 PRIVATE BUILD_WITH_PSRAM=1)
+    target_sources(Nebula32 PRIVATE src/psram.c)
+    # SDK 2.x provides hardware_psram; if your SDK version lacks it, remove this line
+    # and configure the QMI registers directly in src/psram.c (which the code already does).
+    if(TARGET hardware_psram)
+        target_link_libraries(Nebula32 hardware_psram)
+    endif()
+    message(STATUS "PSRAM: enabled — sector cache expanded to ${SECTOR_BUFFER_COUNT_PSRAM} slots")
+endif()
+
 # ---- stdio via USB CDC (disable UART to free those pins for user GPIOs) ----
 pico_enable_stdio_usb(Nebula32 1)
 pico_enable_stdio_uart(Nebula32 0)

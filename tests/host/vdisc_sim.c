@@ -1,4 +1,5 @@
 #include "vdisc_sim.h"
+#include "virtual_disc.h"
 #include <string.h>
 #include <strings.h>   // strcasecmp
 #include <stdlib.h>    // NULL
@@ -122,6 +123,7 @@ void vdisc_sim_register_file(const char *path, const uint8_t *data, uint32_t siz
 }
 
 void vdisc_sim_reset(void) {
+    vdisc_invalidate_fil();
     memset(s_entries,  0, sizeof(s_entries));
     memset(s_open_dirs, 0, sizeof(s_open_dirs));
     s_entry_count = 0;

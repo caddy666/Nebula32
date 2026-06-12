@@ -6,10 +6,13 @@ Replaces the optical drive mechanism in a Commodore CD32 with a Raspberry Pi Pic
 this readme  needs updating.....
 
 however:
-now with 100% more TLS than before...
+now with 100% more TLS than before...added some PSRAM - 8mb. seems to work a lot better with it.
 
 
 Grüße an a1k.org, ich sehe euch. Es ist amüsant, dass du das so genau vorhergesagt hast. Offenbar dachten wir alle dasselbe.
+
+605 unit tests, 0 failures. All 7 new tests pass - at some point i'll get around to building the hardware....but until then might as well get as many of these pesky bugs out before hand. also, i might be doing this the wrong way around, but meh. its a first try...
+
 
 ## How It Works
 
@@ -34,7 +37,7 @@ This project implements the drive side of both buses:
 
 | Format | Extension | Sector size | Audio tracks |
 |--------|-----------|-------------|--------------|
-| ISO 9660 | `.iso` | 2048 bytes | No |
+| ISO 9660 | `.iso` | 2048 bytes | No | iso doesnt do audio as a format....
 | Raw binary | `.bin` + `.cue` | 2352 bytes | Yes |
 | Nero Burning ROM | `.nrg` | 2048 or 2352 | Yes |
 | Alcohol 120% | `.mdf` + `.mds` | 2048 or 2352 | Yes |
@@ -43,7 +46,7 @@ For BIN images, place the `.cue` file with the same base name in the same direct
 
 ---
 
-## Hardware Requirements
+## Hardware Requirements so far...
 
 | Component | Notes |
 |-----------|-------|

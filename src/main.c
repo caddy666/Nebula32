@@ -59,6 +59,7 @@
 #include "ui.h"
 #include "webserver.h"
 #include "commo_bridge.h"
+#include "psram.h"
 #include "gpio_map.h"
 #include "timer.h"
 #include "display.h"
@@ -383,6 +384,10 @@ int main(void) {
         // Timing will be slightly off but the PLL will get as close as possible.
     }
 
+    // Initialise QSPI PSRAM on CS1 before any psram_alloc() call.
+    // No-op when BUILD_WITH_PSRAM is not set.
+    psram_fw_init();
+
     stdio_init_all();
     sleep_ms(2000);   // Wait for USB CDC enumeration
 
@@ -587,10 +592,16 @@ int main(void) {
                            / (da_is_double_speed() ? 16u : 32u) / 2u));
     printf("[MAIN] Type H for console help\n\n");
 
+    // P3: arm hardware watchdog — 10 s window kicks at every main-loop iteration.
+    // Enabled here (after all slow boot operations including WiFi connect) so
+    // the 30 s WiFi timeout and SD scan don't inadvertently trip it.
+    watchdog_enable(10000, 1);
+
     // ---- Core 0 main loop ----
     absolute_time_t s_nudge_next = make_timeout_time_us(2000000);
 
     while (true) {
+        watchdog_update();  // prevent reboot; stalled main loop → hard reset
         handle_console();
 
         // M17SINE phase-lock: trim DA clkdiv every 2 s during audio playback

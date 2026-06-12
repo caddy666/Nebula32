@@ -23,6 +23,7 @@
 #include <CppUTest/TestHarness.h>
 #include <string.h>
 #include <stdint.h>
+#include <stdlib.h>
 extern "C" {
 #include "sector_cache.h"
 #include "disc_image.h"
@@ -238,4 +239,137 @@ TEST(SectorCache, IsFull_FalseWithOneSlotInvalid)
     }
     cache.slots[3].valid = false;   /* punch a hole */
     CHECK_FALSE(sector_cache_is_full(&cache));
+}
+
+/* Without PSRAM the init path must fall back to the SRAM pool and report
+ * exactly SECTOR_BUFFER_COUNT slots — nothing more, nothing less.          */
+TEST(SectorCache, SramFallback_SlotCountIsBufferCount)
+{
+    LONGS_EQUAL(SECTOR_BUFFER_COUNT, (long)cache.slot_count);
+    CHECK(cache.slots != NULL);
+}
+
+/* =========================================================================
+ * PsramCache — simulates a successful PSRAM alloc by post-init swapping the
+ * slots pointer to a larger heap-allocated array and raising slot_count to
+ * PSRAM_SIM_COUNT (32).  Every production function must honour cache->slot_count
+ * rather than the compile-time SECTOR_BUFFER_COUNT constant.
+ * ======================================================================= */
+
+static const uint32_t PSRAM_SIM_COUNT = 32u;
+
+static void psram_inject(sector_cache_t *c, uint32_t slot_idx,
+                          uint32_t lba, uint8_t fill, uint32_t vbytes)
+{
+    sector_slot_t *s = &c->slots[slot_idx];
+    s->lba         = lba;
+    s->valid_bytes = vbytes;
+    s->error       = false;
+    memset(s->data, fill, vbytes > 0 ? vbytes : 1);
+    s->valid = true;
+}
+
+TEST_GROUP(PsramCache)
+{
+    sector_cache_t  cache;
+    disc_image_t    disc;
+    sector_slot_t  *psram_sim;
+
+    void setup() {
+        memset(&disc, 0, sizeof(disc));
+        disc.file_open = false;
+        sector_cache_init(&cache, &disc);
+        /* Simulate psram_alloc() success: replace slots with a larger heap block,
+         * matching what sector_cache_init() does under BUILD_WITH_PSRAM.         */
+        psram_sim        = (sector_slot_t *)calloc(PSRAM_SIM_COUNT,
+                                                    sizeof(sector_slot_t));
+        cache.slots      = psram_sim;
+        cache.slot_count = PSRAM_SIM_COUNT;
+    }
+
+    void teardown() {
+        free(psram_sim);
+        psram_sim = NULL;
+    }
+};
+
+/* All 32 slot indices are accessible: a sector injected at the last slot is
+ * found by sector_cache_get().  Any function still using SECTOR_BUFFER_COUNT
+ * (8) as its loop bound would miss this slot.                               */
+TEST(PsramCache, AllSlotsAddressable)
+{
+    psram_inject(&cache, PSRAM_SIM_COUNT - 1, 999u, 0xDE, SECTOR_RAW_SIZE);
+
+    uint8_t buf[SECTOR_RAW_SIZE];
+    uint32_t bytes = 0;
+    CHECK_TRUE(sector_cache_get(&cache, 999u, buf, &bytes));
+    LONGS_EQUAL(SECTOR_RAW_SIZE, (long)bytes);
+    BYTES_EQUAL(0xDE, buf[0]);
+    BYTES_EQUAL(0xDE, buf[SECTOR_RAW_SIZE - 1]);
+}
+
+/* is_full() must scan all slot_count slots — it should return false while
+ * only the first SECTOR_BUFFER_COUNT (8) are valid, and true only once all
+ * PSRAM_SIM_COUNT slots are filled.                                         */
+TEST(PsramCache, IsFullRequiresAllSimSlots)
+{
+    /* Fill only the SRAM-era count — is_full() must still return false. */
+    for (uint32_t i = 0; i < SECTOR_BUFFER_COUNT; i++)
+        psram_inject(&cache, i, i, 0xAA, SECTOR_RAW_SIZE);
+    CHECK_FALSE(sector_cache_is_full(&cache));
+
+    /* Fill the remainder — now every slot is valid. */
+    for (uint32_t i = SECTOR_BUFFER_COUNT; i < PSRAM_SIM_COUNT; i++)
+        psram_inject(&cache, i, i, 0xBB, SECTOR_RAW_SIZE);
+    CHECK_TRUE(sector_cache_is_full(&cache));
+}
+
+/* flush() must invalidate all slot_count slots, including those beyond the
+ * original SECTOR_BUFFER_COUNT boundary.                                    */
+TEST(PsramCache, FlushInvalidatesAllSimSlots)
+{
+    for (uint32_t i = 0; i < PSRAM_SIM_COUNT; i++)
+        psram_inject(&cache, i, i * 10u, 0xFF, SECTOR_RAW_SIZE);
+
+    sector_cache_flush(&cache);
+
+    for (uint32_t i = 0; i < PSRAM_SIM_COUNT; i++)
+        CHECK_FALSE(cache.slots[i].valid);
+    CHECK(cache.flush_gen > 0u);
+}
+
+/* seek() flushes all slot_count slots and resets next_fetch_lba.           */
+TEST(PsramCache, SeekFlushesAllSimSlots)
+{
+    for (uint32_t i = 0; i < PSRAM_SIM_COUNT; i++)
+        psram_inject(&cache, i, i * 5u, 0xCC, SECTOR_RAW_SIZE);
+
+    sector_cache_seek(&cache, 12345u);
+
+    LONGS_EQUAL(12345, (long)cache.next_fetch_lba);
+    for (uint32_t i = 0; i < PSRAM_SIM_COUNT; i++)
+        CHECK_FALSE(cache.slots[i].valid);
+}
+
+/* release_before() must walk all slot_count slots: a sector at a high slot
+ * index with LBA below the cursor must be freed.                            */
+TEST(PsramCache, ReleaseBeforeCoversHighSlots)
+{
+    /* Place a sector at a slot index beyond SECTOR_BUFFER_COUNT. */
+    psram_inject(&cache, 24, 100u, 0x11, SECTOR_RAW_SIZE);
+    psram_inject(&cache, 25, 200u, 0x22, SECTOR_RAW_SIZE);
+
+    sector_cache_release_before(&cache, 150u);  /* free LBA < 150 */
+
+    CHECK_FALSE(cache.slots[24].valid);   /* LBA 100 freed */
+    CHECK_TRUE (cache.slots[25].valid);   /* LBA 200 kept  */
+}
+
+/* ready() scans all slot_count slots — a sector injected beyond the 8-slot
+ * boundary is still found by the presence check.                            */
+TEST(PsramCache, ReadyFindsHighSlot)
+{
+    psram_inject(&cache, 20, 777u, 0x55, SECTOR_RAW_SIZE);
+    CHECK_TRUE (sector_cache_ready(&cache, 777u));
+    CHECK_FALSE(sector_cache_ready(&cache, 778u));
 }
