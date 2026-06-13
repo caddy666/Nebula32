@@ -3,8 +3,9 @@
 # build.sh — configure + build the Nebula32 firmware out-of-source
 # =============================================================================
 # Usage:
-#   ./build.sh                 # standard Pico 2 (no WiFi)      → build/
-#   ./build.sh pico2_w         # Pico 2 W (WiFi + wolfSSL TLS)  → build-pico2w/
+#   ./build.sh                    # standard Pico 2 (no WiFi)         → build/
+#   ./build.sh pico2_w            # Pico 2 W (WiFi + wolfSSL TLS)     → build-pico2w/
+#   ./build.sh core2350b          # Waveshare Core2350B0 + RM2 WiFi   → build-core2350b/
 #   ./build.sh pico2 -DBUILD_WITH_COMMO=ON     # extra args pass through to cmake
 #   ./build.sh pico2_w -DBUILD_WITH_PSRAM=ON
 #
@@ -18,9 +19,10 @@ BOARD="${1:-pico2}"
 [ $# -gt 0 ] && shift
 
 case "$BOARD" in
-    pico2)   BUILD_DIR="build" ;;
-    pico2_w) BUILD_DIR="build-pico2w" ;;
-    *) echo "usage: $0 [pico2|pico2_w] [extra -D cmake args...]" >&2; exit 1 ;;
+    pico2)       BUILD_DIR="build" ;;
+    pico2_w)     BUILD_DIR="build-pico2w" ;;
+    core2350b)   BUILD_DIR="build-core2350b"; BOARD="pico2_w" ;;
+    *) echo "usage: $0 [pico2|pico2_w|core2350b] [extra -D cmake args...]" >&2; exit 1 ;;
 esac
 
 # Remove leftovers of any accidental in-source configure (git-ignored junk).

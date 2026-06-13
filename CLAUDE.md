@@ -44,27 +44,58 @@ CXD2545Q → SUB_DATA / SUB_CLK / SUB_WFCLK / SUB_SCOR ──→ Akiko (pin 90/�
 reads a serial bit stream from the DA lines and a serial subcode stream from the
 SUB lines. The COMMO 3-wire bus is the command/status channel.
 
-### 26-pin CD connector — complete signal list
+### Full GPIO map — Core2350B0 (RP2350B)
 
-| Pin | Signal     | Pico GPIO | Direction | Notes |
-|-----|------------|-----------|-----------|-------|
-| 5   | M17SINE    | 9         | IN        | 16.9344 MHz master clock reference |
-| 7   | RESET      | 14        | IN        | Active-low reset from CD32 |
-| 8   | DA_LRCLK   | 2         | OUT       | I2S word-select (44.1 kHz) |
-| 9   | DA_DATA    | 0         | OUT       | I2S serial data — audio + sector bits |
-| 11  | DA_BCLK    | 1         | OUT       | I2S bit clock (~2.12 MHz measured) |
-| 12  | DA_C2PO    | 3         | OUT       | C2 error pointer (drive low = no errors) |
-| 13  | DA_EMPH    | 4         | OUT       | Pre-emphasis flag (drive low = no emphasis) |
-| 14  | SUB_WFCLK  | 7         | OUT       | Subcode word-frame clock |
-| 15  | SUB_SCOR   | 8         | OUT       | Subcode sync correlator |
-| 17  | SUB_DATA   | 5         | OUT       | Subcode serial data |
-| 18  | SUB_CLK    | 6         | OUT       | Subcode clock |
-| 20  | IF_CLK     | 15        | BIDIR     | COMMO clock (idles high, active-low pulses) |
-| 21  | IF_DATA    | 16        | BIDIR     | COMMO data (setup ≥150 ns before CLK edge) |
-| 23  | PASSIVE    | 13        | OUT       | Drive passive/standby status |
-| 24  | ACTIVE     | 10        | OUT       | Drive active/spinning status; also drives front-panel drive LED |
-| 25  | IF_DIR     | 17        | OUT       | COMMO direction control |
-| 26  | DOOR       | 11        | IN        | Door/tray switch |
+| GPIO | Signal        | Dir    | Conn | Notes |
+|------|---------------|--------|------|-------|
+| 0    | DA_DATA       | OUT    | 9    | I2S serial data (PIO0 SM0) |
+| 1    | DA_BCLK       | OUT    | 11   | I2S bit clock (~2.12 MHz) |
+| 2    | DA_LRCLK      | OUT    | 8    | I2S word-select (44.1 kHz) |
+| 3    | DA_C2PO       | OUT    | 12   | C2 error pointer (low = ok) |
+| 4    | DA_EMPH       | OUT    | 13   | Pre-emphasis flag (low = none) |
+| 5    | SUB_DATA      | OUT    | 17   | Subcode serial (PIO0 SM1) |
+| 6    | SUB_CLK       | OUT    | 18   | Subcode clock |
+| 7    | SUB_WFCLK     | OUT    | 14   | Subcode word-frame clock |
+| 8    | SUB_SCOR      | OUT    | 15   | Subcode sync correlator |
+| 9    | M17SINE       | IN     | 5    | 16.9344 MHz ref (GPIN0) |
+| 10   | ACTIVE        | OUT    | 24   | Drive active/spinning |
+| 11   | DOOR          | IN     | 26   | Door/tray switch (active-low) |
+| 12   | (compat)      | IN     | —    | Upstream SCOR IRQ compat; never fires |
+| 13   | PASSIVE       | OUT    | 23   | Drive passive/standby |
+| 14   | RESET         | IN     | 7    | Active-low /RESET from CD32 |
+| 15   | (free)        | —      | —    | Spare GPIO |
+| 16   | UART0_TX      | OUT    | —    | Debug serial TX (stdio mirror) |
+| 17   | UART0_RX      | IN     | —    | Debug serial RX |
+| 18   | (free)        | —      | —    | Spare GPIO |
+| 19   | (free)        | —      | —    | Spare GPIO |
+| 20   | UART1_TX      | OUT    | —    | Auxiliary serial TX |
+| 21   | UART1_RX      | IN     | —    | Auxiliary serial RX |
+| 22   | (free)        | —      | —    | Spare GPIO |
+| 23   | WL_ON         | OUT    | —    | WiFi RM2 power/enable |
+| 24   | WL_DIN        | OUT    | —    | WiFi RM2 SPI MOSI |
+| 25   | WL_CS         | —      | —    | WiFi RM2 SPI CS / blue LED (CYW43439) |
+| 26   | MCP23017_SDA  | BIDIR  | —    | I2C1 SDA — rotary encoder |
+| 27   | MCP23017_SCL  | OUT    | —    | I2C1 SCL |
+| 28   | (free)        | —      | —    | Spare GPIO |
+| 29   | WL_CLK        | OUT    | —    | WiFi RM2 SPI CLK |
+| 30   | SDIO_CLK      | OUT    | —    | SD card clock (D0−2 constraint) |
+| 31   | SDIO_CMD      | BIDIR  | —    | SD card command |
+| 32   | SDIO_D0       | BIDIR  | —    | SD card data 0 |
+| 33   | SDIO_D1       | BIDIR  | —    | SD card data 1 |
+| 34   | SDIO_D2       | BIDIR  | —    | SD card data 2 |
+| 35   | SDIO_D3       | BIDIR  | —    | SD card data 3 |
+| 36   | (free)        | —      | —    | Spare GPIO |
+| 37   | (free)        | —      | —    | Spare GPIO |
+| 38   | (free)        | —      | —    | Spare GPIO |
+| 39   | LED_RED       | OUT    | —    | Red LED (RM2 direct GPIO) |
+| 40   | ST7789_DC     | OUT    | —    | Display data/command |
+| 41   | ST7789_CS     | OUT    | —    | Display chip-select (SPI1 CSn) |
+| 42   | ST7789_SCK    | OUT    | —    | Display SPI clock (SPI1 SCK) |
+| 43   | ST7789_MOSI   | OUT    | —    | Display SPI data (SPI1 TX) |
+| 44   | IF_CLK        | BIDIR  | 20   | COMMO clock (PIO1 SM0/SM1) |
+| 45   | IF_DATA       | BIDIR  | 21   | COMMO data |
+| 46   | IF_DIR        | OUT    | 25   | COMMO direction control |
+| 47   | PSRAM_CS      | OUT    | —    | QSPI PSRAM CS1 |
 
 ### DA timing — confirmed from 100M-row logic-analyzer capture (digital.csv)
 
@@ -175,14 +206,15 @@ CMake: `add_subdirectory(libs/wolfssl-master EXCLUDE_FROM_ALL)` + `wolfssl pico_
 
 ---
 
-## PIO resource allocation (merged build)
+## PIO resource allocation (Core2350B0 build)
 
 | PIO | SM | Program | Pins | Purpose |
 |-----|----|---------|------|---------|
 | PIO0 | 0 | `da_output.pio` | GPIO 0-2 | DA_DATA/BCLK/LRCLK output |
 | PIO0 | 1 | `subcode_encoder.pio` | GPIO 5-8 | SUB_DATA/CLK/WFCLK/SCOR |
-| PIO1 | 0 | `commo.pio` | GPIO 15-17 | COMMO RX |
-| PIO1 | 1 | `commo.pio` | GPIO 15-17 | COMMO TX |
+| PIO1 | 0 | `commo.pio` | GPIO 44-46 | COMMO RX (moved from 15-17) |
+| PIO1 | 1 | `commo.pio` | GPIO 44-46 | COMMO TX |
+| PIO1 | 2/3 | SDIO (library) | GPIO 30-35 | SD card (claimed via pio_claim_unused_sm) |
 
 All four PIO programs are always loaded. The upstream servo PIO programs
 (cxd2500_tx.pio, dsic2.pio, qchannel_rx.pio) have been deleted.

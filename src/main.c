@@ -8,20 +8,21 @@
 //             web server, rotary encoder UI, display, logger flush
 //   Core 1 — Sector prefetch loop: SD card → sector_cache ring buffer
 //
-// BOOT SEQUENCE:
-//   1. Clock RP2350 to 135,475,200 Hz (= 16.9344 MHz × 8 — exact DA timing)
-//   2. Stdio init (USB CDC)
+// BOOT SEQUENCE (Core2350B0):
+//   1. Clock RP2350B to 135,475,200 Hz (= 16.9344 MHz × 8 — exact DA timing)
+//   2. Stdio init (USB CDC + UART0 GPIO 16/17)
 //   3. Load persistent config from flash
-//   4. Mount SD card via 4-bit SDIO; scan disc images
+//   4. Mount SD card via 4-bit SDIO (GPIO 30-35); scan disc images
 //   5. Initialise logger (reads nebula32.cfg, opens cd32_cd.log)
 //   6. Open selected disc image; initialise sector_cache
 //   7. Initialise DA output PIO (GPIO 0-2) — starts clocking I2S to Akiko
 //   8. Initialise subcode encoder PIO (GPIO 5-8)
-//   9. Initialise I2C0 (MCP23017 rotary encoder, GPIO 28-29)
-//  10. Initialise ST7789 display (SPI1, GPIO 13/24/26/27)
-//  11. Initialise COMMO bus bridge (PIO1 SM0/SM1, GPIO 15-17)
-//  12. Launch Core 1 (sector prefetch)
-//  13. Core 0 enters main polling loop
+//   9. Initialise I2C1 (MCP23017 rotary encoder, GPIO 26-27)
+//  10. Initialise UART1 auxiliary serial (GPIO 20-21)
+//  11. Initialise ST7789 display (SPI1, GPIO 40-43)
+//  12. Initialise COMMO bus bridge (PIO1 SM0/SM1, GPIO 44-46)
+//  13. Launch Core 1 (sector prefetch)
+//  14. Core 0 enters main polling loop
 //
 // DA SIGNAL PATH:
 //   SD card → disc_read_sector() → sector_cache ring buffer (Core 1 prefetch)
@@ -524,14 +525,22 @@ int main(void) {
         }
     }
 
-    // ---- I2C0 for MCP23017 (SDA=GPIO28, SCL=GPIO29 @ 400 kHz) ----
-    i2c_init(i2c0, 400 * 1000);
+    // ---- I2C1 for MCP23017 (SDA=GPIO26, SCL=GPIO27 @ 400 kHz) ----
+    // Moved from I2C0/GPIO 28-29: GPIO 29 is now WiFi RM2 SPI CLK.
+    i2c_init(i2c1, 400 * 1000);
     gpio_set_function(MCP23017_SDA_PIN, GPIO_FUNC_I2C);
     gpio_set_function(MCP23017_SCL_PIN, GPIO_FUNC_I2C);
     gpio_pull_up(MCP23017_SDA_PIN);
     gpio_pull_up(MCP23017_SCL_PIN);
-    printf("[MAIN] I2C0 ready (GPIO%d/GPIO%d)\n",
+    printf("[MAIN] I2C1 ready (GPIO%d/GPIO%d)\n",
            MCP23017_SDA_PIN, MCP23017_SCL_PIN);
+
+    // ---- UART1 auxiliary serial (GPIO 20/21) ----
+    uart_init(uart1, 115200);
+    gpio_set_function(PIN_UART1_TX, GPIO_FUNC_UART);
+    gpio_set_function(PIN_UART1_RX, GPIO_FUNC_UART);
+    printf("[MAIN] UART1 ready (GPIO%d/GPIO%d @ 115200)\n",
+           PIN_UART1_TX, PIN_UART1_RX);
 
     // ---- ST7789 240×240 display (SPI1) ----
     display_init();
@@ -554,9 +563,6 @@ int main(void) {
     gpio_init(PIN_DOOR);
     gpio_set_dir(PIN_DOOR, GPIO_IN);
     gpio_pull_up(PIN_DOOR);
-    gpio_init(PIN_SCOR);
-    gpio_set_dir(PIN_SCOR, GPIO_IN);
-    gpio_pull_up(PIN_SCOR);
     timer_init();
 
     // ---- COMMO bus bridge ----

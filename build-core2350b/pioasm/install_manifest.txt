@@ -1,0 +1,5 @@
+/home/caddy/pico-claude/Nebula32/build-core2350b/pioasm-install/pioasm/pioasm
+/home/caddy/pico-claude/Nebula32/build-core2350b/pioasm-install/pioasm/pioasmTargets.cmake
+/home/caddy/pico-claude/Nebula32/build-core2350b/pioasm-install/pioasm/pioasmTargets-release.cmake
+/home/caddy/pico-claude/Nebula32/build-core2350b/pioasm-install/pioasm/pioasmConfig.cmake
+/home/caddy/pico-claude/Nebula32/build-core2350b/pioasm-install/pioasm/pioasmConfigVersion.cmake

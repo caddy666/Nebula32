@@ -13,7 +13,7 @@
 #include <string.h>
 
 #ifndef LED_PIN
-#define LED_PIN 25
+#define LED_PIN LED_RED_PIN   /* GPIO 39 — red LED on RM2, direct GPIO */
 #endif
 
 // External image list (defined in main.c)

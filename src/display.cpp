@@ -33,16 +33,16 @@ extern "C" {
 // Pin assignments (compile-time constants from CMakeLists.txt)
 // ---------------------------------------------------------------------------
 #ifndef ST7789_DC_PIN
-#define ST7789_DC_PIN   24
+#define ST7789_DC_PIN   40
 #endif
 #ifndef ST7789_CS_PIN
-#define ST7789_CS_PIN   13
+#define ST7789_CS_PIN   41
 #endif
 #ifndef ST7789_SCK_PIN
-#define ST7789_SCK_PIN  26
+#define ST7789_SCK_PIN  42
 #endif
 #ifndef ST7789_MOSI_PIN
-#define ST7789_MOSI_PIN 27
+#define ST7789_MOSI_PIN 43
 #endif
 
 #define DISPLAY_WIDTH   240

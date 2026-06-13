@@ -12,8 +12,8 @@
 //   INTA → GPIO MCP23017_INT_PIN on Pico (open-drain, pull up on Pico side)
 //
 // I2C BUS:
-//   i2c0 must be initialised by main() before calling rotary_init().
-//   SDA = GPIO 28 (PIN_MCP23017_SDA), SCL = GPIO 29 (PIN_MCP23017_SCL) @ 400 kHz.
+//   i2c1 must be initialised by main() before calling rotary_init().
+//   SDA = GPIO 26 (PIN_MCP23017_SDA), SCL = GPIO 27 (PIN_MCP23017_SCL) @ 400 kHz.
 //
 // INTERRUPT STRATEGY:
 //   The GPIO IRQ on MCP23017_INT_PIN only sets a flag (no I2C in IRQ context).
@@ -36,7 +36,7 @@ extern "C" {
 #include <stdio.h>
 }
 
-// MCP23017 is on I2C0 (GPIO 28/29) now that SPI1 occupies GPIO 26/27.
+// MCP23017 is on I2C1 (GPIO 26/27). GPIO 29 is now WiFi RM2 SPI CLK.
 
 // ---------------------------------------------------------------------------
 // MCP23017 GPA pin assignments
@@ -110,11 +110,11 @@ static bool s_poll_init = false;
 // rotary_init
 // ---------------------------------------------------------------------------
 extern "C" void rotary_init(void) {
-    printf("[ROT] MCP23017 encoder init on I2C0 0x%02X (GPA0=CLK GPA1=DT GPA2=SW)\n",
+    printf("[ROT] MCP23017 encoder init on I2C1 0x%02X (GPA0=CLK GPA1=DT GPA2=SW)\n",
            MCP23017_I2C_ADDR);
 
-    // Static instance on I2C0 — lives for the duration of the program
-    static Mcp23017 mcp_inst(i2c0, MCP23017_I2C_ADDR);
+    // Static instance on I2C1 — lives for the duration of the program
+    static Mcp23017 mcp_inst(i2c1, MCP23017_I2C_ADDR);
     s_mcp = &mcp_inst;
 
     s_mcp->setup(false, false);      // no interrupt mirroring needed (polled)
@@ -131,7 +131,7 @@ extern "C" void rotary_init(void) {
     s_last_poll_time = get_absolute_time();
     s_poll_init      = true;
 
-    LOG_INFO_MSG("ROT ", "MCP23017 polled rotary ready (I2C0 0x%02X)", MCP23017_I2C_ADDR);
+    LOG_INFO_MSG("ROT ", "MCP23017 polled rotary ready (I2C1 0x%02X)", MCP23017_I2C_ADDR);
     printf("[ROT] Ready (polled)\n");
 }
 

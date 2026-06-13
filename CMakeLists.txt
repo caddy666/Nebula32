@@ -14,35 +14,43 @@ set(CMAKE_CXX_STANDARD 17)
 pico_sdk_init()
 
 # =============================================================================
-# Board target
+# Board target — Waveshare Core2350B0 (RP2350B) + RM2 WiFi module
 # =============================================================================
-# For the standard Pico 2 (no WiFi):
-#   cmake .. -DPICO_PLATFORM=rp2350
+# Target hardware: Waveshare Core2350B0 with external RM2 (CYW43439) WiFi.
 #
-# For the Pico 2 W (with CYW43439 WiFi — required for the web interface):
-#   cmake .. -DPICO_PLATFORM=rp2350 -DPICO_BOARD=pico2_w
+# Build with WiFi (required for web interface):
+#   cmake .. -DPICO_PLATFORM=rp2350 -DPICO_BOARD=pico2_w -DBUILD_WITH_PSRAM=ON
 #
-# When building for non-W Pico 2, comment out the pico_cyw43_arch_lwip_poll
-# and pico_lwip library lines in target_link_libraries below.
-# webserver_init() will return false silently — everything else still works.
+# Note: pico2_w targets RP2350A in the SDK board file.  The Core2350B0 uses
+# RP2350B (GPIO 0–47).  GPIOs 30–47 are accessed directly — they work on the
+# physical RP2350B regardless of the board file.  A custom board file
+# (boards/core2350b0_w.h) can be added later for full SDK-level GPIO awareness.
+#
+# Build without WiFi (COMMO + SD only, no web interface):
+#   cmake .. -DPICO_PLATFORM=rp2350 -DPICO_BOARD=pico2 -DBUILD_WITH_PSRAM=ON
 # =============================================================================
 
 # =============================================================================
 # Upstream cd32_pico integration options
 # =============================================================================
 # BUILD_WITH_COMMO: Enable the COMMO 3-wire serial bus driver.
-#   Required for real CD32 hardware connection (GPIO 15/16/17).
+#   Required for real CD32 hardware connection (GPIO 44/45/46).
 #   When OFF: COMMO bridge compiles but does nothing (safe default).
-option(BUILD_WITH_COMMO   "Enable upstream COMMO 3-wire bus (real CD32 hardware)" OFF)
+set(BUILD_WITH_COMMO   ON)
 
 # BUILD_WITH_ROTARY: Enable the MCP23017-based rotary encoder disc selector.
-#   Runs over I2C1 (GPIO 26/27) — no conflict with COMMO bus (GPIO 15-17).
-option(BUILD_WITH_ROTARY  "Enable rotary encoder (development/standalone)"        ON)
-#PICO_BOARD=pico2
-# GPIO 0-17: cd32_pico hardware interface (gpio_map.h is authoritative).
-# GPIO 18-29: ODE peripherals (SDIO, display, MCP23017 rotary encoder).
-# COMMO (GPIO 15-17) is a self-contained module; rotary encoder is on the
-# MCP23017 I2C expander (GPIO 28-29), so COMMO and rotary never conflict.
+#   Runs over I2C1 (GPIO 26/27) — no conflict with COMMO bus (GPIO 44-46).
+set(BUILD_WITH_ROTARY  ON)
+
+# GPIO 0-14:  CD32 connector signals (gpio_map.h is authoritative).
+# GPIO 16-17: UART0 TX/RX (debug serial — stdio).
+# GPIO 20-21: UART1 TX/RX (auxiliary serial).
+# GPIO 23-25,29: WiFi RM2 (CYW43439).
+# GPIO 26-27: I2C1 SDA/SCL (MCP23017 rotary encoder).
+# GPIO 30-35: SDIO (SD card).
+# GPIO 40-43: ST7789 display (SPI1).
+# GPIO 44-46: COMMO 3-wire bus (PIO1 SM0/SM1) — moved from 15-17 for UART.
+# GPIO 47:    PSRAM CS1.
 
 # =============================================================================
 # Compile-time pin / buffer configuration
@@ -52,7 +60,7 @@ option(BUILD_WITH_ROTARY  "Enable rotary encoder (development/standalone)"      
 # The compile definitions below cover ODE peripherals (GPIO 18-29) and
 # CD32 26-pin drive connector signals — see gpio_map.h for the full layout.
 add_compile_definitions(
-    # ---- CD32 26-pin drive connector signals (GPIO 0-17) ----
+    # ---- CD32 26-pin drive connector signals (GPIO 0-14) ----
     DA_DATA_PIN=0           # DA serial data  (connector pin 9)
     DA_BCLK_PIN=1           # DA bit clock    (connector pin 11)
     DA_LRCLK_PIN=2          # DA LR clock     (connector pin 8)
@@ -64,35 +72,42 @@ add_compile_definitions(
     SUB_SCOR_PIN=8          # Subcode SCOR    (connector pin 15)
     M17SINE_PIN=9           # 16.9344 MHz ref (connector pin 5, GPIN0 input)
     ACTIVE_PIN=10           # Drive active    (connector pin 24, output)
-    #PASSIVE_PIN=13          # Drive passive  not actually connected to anytihng - reuse this pin. (connector pin 23, output)
     CXD_RESET_PIN=14        # /RESET from host (connector pin 7, input)
 
-    # ---- SD card — 4-bit SDIO (GPIO 18-23) ----
+    # ---- Debug UARTs ----
+    PICO_DEFAULT_UART=0       # stdio on UART0
+    PICO_DEFAULT_UART_TX_PIN=16  # GPIO 16 — matches PIN_UART0_TX in gpio_map.h
+    PICO_DEFAULT_UART_RX_PIN=17  # GPIO 17 — matches PIN_UART0_RX in gpio_map.h
+
+    # ---- SD card — 4-bit SDIO (GPIO 30-35) ----
+    # CLK must be D0−2 (mod 32): with D0=32, CLK=(32+30)%32=30. Verified.
     # Matches PIN_SDIO_* in gpio_map.h.
-    SDIO_CLK_PIN=18
-    SDIO_CMD_PIN=19
-    SDIO_D0_PIN=20
-    SDIO_D1_PIN=21
-    SDIO_D2_PIN=22
-    SDIO_D3_PIN=23
+    SDIO_CLK_PIN=30
+    SDIO_CMD_PIN=31
+    SDIO_D0_PIN=32
+    SDIO_D1_PIN=33
+    SDIO_D2_PIN=34
+    SDIO_D3_PIN=35
 
-    # ---- ST7789 240x240 display — hardware SPI1 (GPIO 13, 24, 26-27) ----
-    # CS is on GPIO 13 (free in cd32_pico layout).
-    # GPIO 25 is free (onboard LED not used in merged firmware).
-    # GPIO 26/27: SPI1 SCK and MOSI.
+    # ---- ST7789 240x240 display — hardware SPI1 (GPIO 40-43) ----
+    # SPI1 CSn→41, SCK→42, TX→43 are all valid RP2350 SPI1 function pins.
+    # DC is plain GPIO (no SPI function constraint) → GPIO 40.
     # Matches PIN_ST7789_* in gpio_map.h.
-    ST7789_DC_PIN=24          # Data/Command select (GPIO out)
-    ST7789_CS_PIN=13          # Chip select, active-low (GPIO out)
-    ST7789_SCK_PIN=26         # SPI1 clock
-    ST7789_MOSI_PIN=27        # SPI1 MOSI (DIN)
+    ST7789_DC_PIN=40          # Data/Command select (GPIO out)
+    ST7789_CS_PIN=41          # Chip select, active-low (SPI1 CSn)
+    ST7789_SCK_PIN=42         # SPI1 clock
+    ST7789_MOSI_PIN=43        # SPI1 MOSI (DIN) — only valid option: 39=LED, 47=PSRAM
 
-    # ---- MCP23017 I2C GPIO expander — rotary encoder (GPIO 28-29) ----
-    # I2C0 on GPIO 28/29 (SPI1 occupies 26/27, ruling out I2C1).
-    # Encoder CLK/DT/SW connect to MCP23017 GPA0-GPA2.
+    # ---- MCP23017 I2C GPIO expander — rotary encoder (I2C1, GPIO 26-27) ----
+    # Moved from I2C0/GPIO 28-29: GPIO 29 is now WiFi RM2 SPI CLK.
+    # I2C1 SDA=26, SCL=27 are valid I2C1 function pins on RP2350.
     # Matches PIN_MCP23017_* in gpio_map.h.
-    MCP23017_SDA_PIN=28       # I2C0 SDA → MCP23017 SDA
-    MCP23017_SCL_PIN=29       # I2C0 SCL → MCP23017 SCL
+    MCP23017_SDA_PIN=26       # I2C1 SDA → MCP23017 SDA
+    MCP23017_SCL_PIN=27       # I2C1 SCL → MCP23017 SCL
     MCP23017_I2C_ADDR=0x20    # MCP23017 address (A2=A1=A0=GND)
+
+    # ---- Red LED (RM2 direct GPIO) ----
+    LED_RED_PIN=39            # matches PIN_LED_RED in gpio_map.h
 
     # ---- Buffer sizing ----
     SECTOR_BUFFER_COUNT=8   # Number of 2352-byte sectors in the prefetch ring
@@ -273,7 +288,8 @@ target_link_libraries(Nebula32
     hardware_flash          # flash_range_erase/program for config persistence and fw_update
     hardware_sync           # save_and_disable_interrupts for flash writes
     hardware_watchdog       # watchdog_reboot() for fw_update self-reboot
-    hardware_i2c            # I2C0 for MCP23017 GPIO expander
+    hardware_i2c            # I2C1 for MCP23017 GPIO expander
+    hardware_uart           # UART0 debug + UART1 auxiliary
     hardware_spi            # SPI1 for ST7789 display
     hardware_interp         # INTERP0 blend mode for effects.c gradient lerp
     no-OS-FatFS-SD-SDIO-SPI-RPi-Pico   # SD card FatFS (from no-OS-FatFS library)
@@ -327,7 +343,7 @@ endif()
 #   PSRAM_CLKDIV   — QSPI clock divider (2 = 67.5 MHz for APS6404L at 135 MHz)
 #   PSRAM_RXDELAY  — RX sample delay half-cycles (2–4 typical)
 #   QMI timing constants in psram_fw_init() for your specific chip
-option(BUILD_WITH_PSRAM "Enable QSPI PSRAM on CS1 (custom hardware only)" OFF)
+set(BUILD_WITH_PSRAM ON)
 if(BUILD_WITH_PSRAM)
     target_compile_definitions(Nebula32 PRIVATE BUILD_WITH_PSRAM=1)
     target_sources(Nebula32 PRIVATE src/psram.c)
@@ -341,9 +357,11 @@ if(BUILD_WITH_PSRAM)
     message(STATUS "PSRAM: enabled — sector cache expanded (see SECTOR_BUFFER_COUNT_PSRAM in include/psram.h)")
 endif()
 
-# ---- stdio via USB CDC (disable UART to free those pins for user GPIOs) ----
+# ---- stdio: USB CDC primary + UART0 mirror (GPIO 16/17) ----
+# Both enabled: printf goes to USB CDC for interactive console
+# AND to UART0 for bench debugging via a USB-serial adapter on GPIO 16/17.
 pico_enable_stdio_usb(Nebula32 1)
-pico_enable_stdio_uart(Nebula32 0)
+pico_enable_stdio_uart(Nebula32 1)
 
 # ---- Extra outputs: .uf2 for drag-and-drop flashing, .bin, .hex ----
 pico_add_extra_outputs(Nebula32)

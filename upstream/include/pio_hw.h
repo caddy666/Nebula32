@@ -9,10 +9,11 @@
  *    SM1 — subcode_encoder.pio   GPIO 5-8   SUB_DATA / SUB_CLK / SUB_WFCLK / SUB_SCOR
  *
  *  PIO1:
- *    SM0 — commo.pio             GPIO 15-17 IF_CLK / IF_DATA / IF_DIR  (RX)
- *    SM1 — commo.pio             GPIO 15-17 (shared)                    (TX)
+ *    SM0 — commo.pio             GPIO 44-46 IF_CLK / IF_DATA / IF_DIR  (RX)
+ *    SM1 — commo.pio             GPIO 44-46 (shared)                    (TX)
+ *    SM2/3 — SDIO (library)      GPIO 30-35 (via pio_claim_unused_sm)
  *
- * GPIO map (26-pin Commodore CD32 connector signal names):
+ * GPIO map — Core2350B0 (RP2350B):
  *   0  = PIN_DA_DATA    (conn 9  — I2S serial data out)
  *   1  = PIN_DA_BCLK    (conn 11 — I2S bit clock out)
  *   2  = PIN_DA_LRCLK   (conn 8  — I2S word-select out)
@@ -21,15 +22,18 @@
  *   5  = PIN_SUB_DATA   (conn 17 — subcode data out)
  *   6  = PIN_SUB_CLK    (conn 18 — subcode clock out)
  *   7  = PIN_SUB_WFCLK  (conn 14 — subcode word-frame clock out)
- *   8  = PIN_SUB_SCOR   (conn 15 — subcode sync correlator out)
- *   9  = PIN_M17SINE    (conn 5  — 16.9344 MHz master clock in)
+ *   8  = PIN_SUB_SCOR / PIN_SCOR  (conn 15 — SCOR out; PIN_SCOR aliases here so upstream timer.c references the real pin)
+ *   9  = PIN_M17SINE    (conn 5  — 16.9344 MHz master clock in, GPIN0)
  *  10  = PIN_ACTIVE     (conn 24 — drive active/spinning out)
  *  11  = PIN_DOOR       (conn 26 — door/tray switch in)
- *  12  = PIN_SCOR       (free GPIO — upstream SCOR IRQ compat, never fires in ODE)
  *  14  = PIN_RESET      (conn 7  — active-low /RESET from CD32 in)
- *  15  = PIN_IF_CLK     (conn 20 — COMMO clock,  alias PIN_COMMO_CLK)
- *  16  = PIN_IF_DATA    (conn 21 — COMMO data,   alias PIN_COMMO_DATA)
- *  17  = PIN_IF_DIR     (conn 25 — COMMO dir,    alias PIN_COMMO_DIR)
+ *  16  = PIN_UART0_TX   (debug serial TX — stdio mirror)
+ *  17  = PIN_UART0_RX   (debug serial RX)
+ *  20  = PIN_UART1_TX   (auxiliary serial TX)
+ *  21  = PIN_UART1_RX   (auxiliary serial RX)
+ *  44  = PIN_IF_CLK     (conn 20 — COMMO clock,  alias PIN_COMMO_CLK)
+ *  45  = PIN_IF_DATA    (conn 21 — COMMO data,   alias PIN_COMMO_DATA)
+ *  46  = PIN_IF_DIR     (conn 25 — COMMO dir,    alias PIN_COMMO_DIR)
  */
 
 #pragma once

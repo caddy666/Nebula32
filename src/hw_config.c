@@ -12,14 +12,15 @@
 // The SDIO pins must be consecutive (D0..D3) — a hardware requirement of the
 // RP2350 SDIO PIO program in the library.
 //
-// GPIO assignments:
-//   GPIO 18 — SDIO_CLK
-//   GPIO 19 — SDIO_CMD
-//   GPIO 20 — SDIO_D0
-//   GPIO 21 — SDIO_D1
-//   GPIO 22 — SDIO_D2
-//   GPIO 23 — SDIO_D3
+// GPIO assignments (Core2350B0):
+//   GPIO 30 — SDIO_CLK  (D0−2 = 32−2; required by SDIO PIO mod-32 offset)
+//   GPIO 31 — SDIO_CMD  (D0−1)
+//   GPIO 32 — SDIO_D0
+//   GPIO 33 — SDIO_D1   (auto: D0+1)
+//   GPIO 34 — SDIO_D2   (auto: D0+2)
+//   GPIO 35 — SDIO_D3   (auto: D0+3)
 //
+// Moved from GPIO 18-23 to free those pins: GPIO 23-25,29 are now WiFi RM2.
 // These match the defines in CMakeLists.txt.  If you change the wiring,
 // update both CMakeLists.txt (for application code) and this file (for the
 // library initialisation).
@@ -40,13 +41,13 @@
 //               Reduce to 10 MHz if you see CRC errors during mount.
 // ---------------------------------------------------------------------------
 static sd_sdio_if_t sdio_if = {
-    .CLK_gpio  = 18,            // SDIO clock
-    .CMD_gpio  = 19,            // SDIO command
-    .D0_gpio   = 20,            // SDIO data 0
-    .D1_gpio   = 21,            // SDIO data 1 (must be D0+1)
-    .D2_gpio   = 22,            // SDIO data 2 (must be D0+2)
-    .D3_gpio   = 23,            // SDIO data 3 (must be D0+3)
-    .SDIO_PIO  = pio1,          // Use PIO1 
+    .CLK_gpio  = 30,            // SDIO clock  (D0−2; SDIO PIO mod-32 constraint)
+    .CMD_gpio  = 31,            // SDIO command (D0−1)
+    .D0_gpio   = 32,            // SDIO data 0
+    .D1_gpio   = 33,            // SDIO data 1 (must be D0+1)
+    .D2_gpio   = 34,            // SDIO data 2 (must be D0+2)
+    .D3_gpio   = 35,            // SDIO data 3 (must be D0+3)
+    .SDIO_PIO  = pio1,          // PIO1 SM2/SM3 (SM0/SM1 used by COMMO on GPIO 44-46)
     .DMA_IRQ_num = DMA_IRQ_1,   // Use DMA_IRQ_1 (DMA_IRQ_0 may be used by audio)
     .baud_rate = 25 * 1000 * 1000,  // 25 MHz initial speed
     // .baud_rate = 50 * 1000 * 1000,  // Uncomment for 50 MHz (SDHC/SDXC cards)

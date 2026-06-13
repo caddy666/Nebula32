@@ -83,7 +83,7 @@ static void _qmi_cs1_cmd(uint8_t cmd) {
 
 void psram_fw_init(void) {
     // 1. Assign GPIO to XIP_CS1 function
-    gpio_set_function(PSRAM_CS1_PIN, GPIO_FUNC_XIP_CS1N);
+    gpio_set_function(PSRAM_CS1_PIN, GPIO_FUNC_XIP_CS1);
 
     // 2. Enter direct-mode to issue reset commands to the PSRAM chip
     qmi_hw->direct_csr = QMI_DIRECT_CSR_EN_BITS;
