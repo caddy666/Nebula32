@@ -24,9 +24,15 @@
 #include "cd_types.h"
 #include "disc_image.h"
 #include "sd_card_api.h"
+#include "gpio_map.h"
+#ifdef BUILD_WITH_PSRAM
+#include "psram.h"
+#endif
 
 #include "pico/stdlib.h"
+#include "hardware/clocks.h"
 #include "hardware/gpio.h"
+#include "hardware/i2c.h"
 #include "hardware/pio.h"
 
 #include <stdio.h>
@@ -51,7 +57,146 @@ static int s_fail = 0;
     printf("\n--- %s ---\n", name)
 
 // ---------------------------------------------------------------------------
-// Test 1: GPIO configuration
+// Test 1: System clock
+// ---------------------------------------------------------------------------
+static void test_sys_clock(void) {
+    TEST_SECTION("System Clock");
+    uint32_t hz = clock_get_hz(clk_sys);
+    printf("         sys_clk = %lu Hz\n", (unsigned long)hz);
+    TEST_ASSERT(hz >= 135000000u && hz <= 136000000u,
+                "sys_clk in range 135.0-136.0 MHz (target 135,475,200)");
+}
+
+// ---------------------------------------------------------------------------
+// Test 2: GPIO mux assignments — verify peripheral remapping (non-destructive)
+// ---------------------------------------------------------------------------
+static void test_gpio_mux(void) {
+    TEST_SECTION("GPIO Mux Assignments");
+
+    // DA I2S output — PIO0 (GPIO 0-2 via pio_gpio_init; 3/4 plain gpio_init)
+    TEST_ASSERT(gpio_get_function(PIN_DA_DATA)  == GPIO_FUNC_PIO0, "GPIO0  (DA_DATA)    = PIO0");
+    TEST_ASSERT(gpio_get_function(PIN_DA_BCLK)  == GPIO_FUNC_PIO0, "GPIO1  (DA_BCLK)    = PIO0");
+    TEST_ASSERT(gpio_get_function(PIN_DA_LRCLK) == GPIO_FUNC_PIO0, "GPIO2  (DA_LRCLK)   = PIO0");
+    TEST_ASSERT(gpio_get_function(PIN_DA_C2PO)  == GPIO_FUNC_SIO,  "GPIO3  (DA_C2PO)    = SIO (plain output)");
+    TEST_ASSERT(gpio_get_function(PIN_DA_EMPH)  == GPIO_FUNC_SIO,  "GPIO4  (DA_EMPH)    = SIO (plain output)");
+
+    // Subcode — PIO0 (GPIO 5-6); WFCLK/SCOR plain gpio_init outputs
+    TEST_ASSERT(gpio_get_function(PIN_SUB_DATA)  == GPIO_FUNC_PIO0, "GPIO5  (SUB_DATA)   = PIO0");
+    TEST_ASSERT(gpio_get_function(PIN_SUB_CLK)   == GPIO_FUNC_PIO0, "GPIO6  (SUB_CLK)    = PIO0");
+    TEST_ASSERT(gpio_get_function(PIN_SUB_WFCLK) == GPIO_FUNC_SIO,  "GPIO7  (SUB_WFCLK)  = SIO (plain output)");
+    TEST_ASSERT(gpio_get_function(PIN_SUB_SCOR)  == GPIO_FUNC_SIO,  "GPIO8  (SUB_SCOR)   = SIO (plain output)");
+
+    // M17SINE master clock — GPCK (clock input)
+    TEST_ASSERT(gpio_get_function(PIN_M17SINE) == GPIO_FUNC_GPCK, "GPIO9  (M17SINE)    = GPCK");
+
+    // UART0 debug (GPIO 16/17) and UART1 auxiliary (GPIO 20/21)
+    TEST_ASSERT(gpio_get_function(PIN_UART0_TX) == GPIO_FUNC_UART, "GPIO16 (UART0_TX)   = UART");
+    TEST_ASSERT(gpio_get_function(PIN_UART0_RX) == GPIO_FUNC_UART, "GPIO17 (UART0_RX)   = UART");
+    TEST_ASSERT(gpio_get_function(PIN_UART1_TX) == GPIO_FUNC_UART, "GPIO20 (UART1_TX)   = UART");
+    TEST_ASSERT(gpio_get_function(PIN_UART1_RX) == GPIO_FUNC_UART, "GPIO21 (UART1_RX)   = UART");
+
+    // MCP23017 I2C1 (GPIO 26/27 — moved from I2C0/GPIO 28-29)
+    TEST_ASSERT(gpio_get_function(PIN_MCP23017_SDA) == GPIO_FUNC_I2C, "GPIO26 (MCP_SDA)    = I2C");
+    TEST_ASSERT(gpio_get_function(PIN_MCP23017_SCL) == GPIO_FUNC_I2C, "GPIO27 (MCP_SCL)    = I2C");
+
+    // SDIO 4-bit (GPIO 30-35 via PIO1 — library uses pio_claim_unused_sm on PIO1)
+    TEST_ASSERT(gpio_get_function(PIN_SDIO_CLK) == GPIO_FUNC_PIO1, "GPIO30 (SDIO_CLK)   = PIO1");
+    TEST_ASSERT(gpio_get_function(PIN_SDIO_CMD) == GPIO_FUNC_PIO1, "GPIO31 (SDIO_CMD)   = PIO1");
+    TEST_ASSERT(gpio_get_function(PIN_SDIO_D0)  == GPIO_FUNC_PIO1, "GPIO32 (SDIO_D0)    = PIO1");
+
+    // ST7789 display: DC/CS are plain GPIO, SCK/MOSI are SPI1
+    TEST_ASSERT(gpio_get_function(PIN_ST7789_DC)   == GPIO_FUNC_SIO, "GPIO40 (ST7789_DC)  = SIO (plain GPIO)");
+    TEST_ASSERT(gpio_get_function(PIN_ST7789_CS)   == GPIO_FUNC_SIO, "GPIO41 (ST7789_CS)  = SIO (plain GPIO)");
+    TEST_ASSERT(gpio_get_function(PIN_ST7789_SCK)  == GPIO_FUNC_SPI, "GPIO42 (ST7789_SCK) = SPI");
+    TEST_ASSERT(gpio_get_function(PIN_ST7789_MOSI) == GPIO_FUNC_SPI, "GPIO43 (ST7789_MOSI)= SPI");
+
+    // COMMO bus (GPIO 44-46 — moved from GPIO 15-17; all PIO1 via pio_gpio_init)
+    TEST_ASSERT(gpio_get_function(PIN_IF_CLK)  == GPIO_FUNC_PIO1, "GPIO44 (IF_CLK)     = PIO1");
+    TEST_ASSERT(gpio_get_function(PIN_IF_DATA) == GPIO_FUNC_PIO1, "GPIO45 (IF_DATA)    = PIO1");
+    TEST_ASSERT(gpio_get_function(PIN_IF_DIR)  == GPIO_FUNC_PIO1, "GPIO46 (IF_DIR)     = PIO1");
+
+    // PSRAM QMI CS1 (GPIO 47)
+    TEST_ASSERT(gpio_get_function(47u) == GPIO_FUNC_XIP_CS1, "GPIO47 (PSRAM_CS)   = XIP_CS1");
+}
+
+// ---------------------------------------------------------------------------
+// Test 3: PIO configuration registers (non-destructive reads)
+// ---------------------------------------------------------------------------
+static void test_pio_config(void) {
+    TEST_SECTION("PIO Configuration");
+
+    // PIO0 SM0 — DA output clkdiv integer = 32 → BCLK ≈ 2.117 MHz (1× CD-DA)
+    // clkdiv register [31:16] = integer part, [15:8] = 1/256 fractional
+    uint32_t da_clkdiv_int  = pio0->sm[0].clkdiv >> 16;
+    uint32_t da_clkdiv_frac = (pio0->sm[0].clkdiv >> 8) & 0xFFu;
+    printf("         PIO0 SM0 (DA) clkdiv = %lu.%lu\n",
+           (unsigned long)da_clkdiv_int, (unsigned long)da_clkdiv_frac);
+    TEST_ASSERT(da_clkdiv_int == 32u,
+                "PIO0 SM0 (DA output) CLKDIV int = 32 (2.117 MHz BCLK)");
+
+    // PIO0 SM1 — subcode encoder clkdiv integer = 24 → 176,400 bps bit clock
+    // 135,475,200 / (176,400 × 32) = 24.0 exactly
+#if BUILD_WITH_COMMO
+    uint32_t sub_clkdiv_int  = pio0->sm[1].clkdiv >> 16;
+    uint32_t sub_clkdiv_frac = (pio0->sm[1].clkdiv >> 8) & 0xFFu;
+    printf("         PIO0 SM1 (subcode) clkdiv = %lu.%lu\n",
+           (unsigned long)sub_clkdiv_int, (unsigned long)sub_clkdiv_frac);
+    TEST_ASSERT(sub_clkdiv_int == 24u,
+                "PIO0 SM1 (subcode encoder) CLKDIV int = 24 (176,400 bps)");
+#endif
+
+    // PIO1 SM0 — COMMO RX: IN_BASE should be PIN_IF_CLK (GPIO 44)
+    // PINCTRL register [19:15] = IN_BASE (5 bits)
+    uint32_t commo_in_base = (pio1->sm[0].pinctrl >> 15) & 0x1Fu;
+    printf("         PIO1 SM0 (COMMO RX) IN_BASE = GPIO%lu (expect %d)\n",
+           (unsigned long)commo_in_base, PIN_IF_CLK);
+    TEST_ASSERT(commo_in_base == (uint32_t)PIN_IF_CLK,
+                "PIO1 SM0 (COMMO RX) IN_BASE = GPIO44 (IF_CLK — remapped from GPIO15)");
+
+    // PIO1 SM1 — COMMO TX side-set base should also be PIN_IF_CLK (GPIO 44)
+    // PINCTRL register [14:10] = SIDESET_BASE (5 bits)
+    uint32_t commo_side_base = (pio1->sm[1].pinctrl >> 10) & 0x1Fu;
+    printf("         PIO1 SM1 (COMMO TX) SIDESET_BASE = GPIO%lu (expect %d)\n",
+           (unsigned long)commo_side_base, PIN_IF_CLK);
+    TEST_ASSERT(commo_side_base == (uint32_t)PIN_IF_CLK,
+                "PIO1 SM1 (COMMO TX) SIDESET_BASE = GPIO44 (IF_CLK)");
+}
+
+// ---------------------------------------------------------------------------
+// Test 4: PSRAM (QMI CS1 on GPIO 47)
+// ---------------------------------------------------------------------------
+static void test_psram(void) {
+    TEST_SECTION("PSRAM (GPIO47 QMI CS1)");
+#ifdef BUILD_WITH_PSRAM
+    TEST_ASSERT(psram_available(), "PSRAM initialised (psram_available() = true)");
+    void *p = psram_alloc(4096);
+    TEST_ASSERT(p != NULL, "PSRAM alloc 4 KB returns non-NULL pointer");
+    // Bump allocator never reclaims; psram_free() just clears the magic guard.
+    if (p) psram_free(p);
+#else
+    printf("  [SKIP] BUILD_WITH_PSRAM not set\n");
+#endif
+}
+
+// ---------------------------------------------------------------------------
+// Test 5: I2C1 bus — MCP23017 rotary encoder ACKs (GPIO 26/27)
+// ---------------------------------------------------------------------------
+static void test_i2c1_bus(void) {
+    TEST_SECTION("I2C1 Bus (MCP23017 @ 0x20)");
+    uint8_t dummy = 0;
+    // i2c1 must be initialised before selftest_run() is called.
+    // NACK (rc < 0) means the MCP23017 is absent or not wired — soft fail.
+    int rc = i2c_read_blocking(i2c1, MCP23017_I2C_ADDR, &dummy, 1, false);
+    printf("         i2c_read_blocking(i2c1, 0x%02X) = %d\n",
+           MCP23017_I2C_ADDR, rc);
+    TEST_ASSERT(rc >= 0, "MCP23017 ACKs on I2C1 (GPIO 26/27)");
+}
+
+// ---------------------------------------------------------------------------
+// Test 6: GPIO configuration (pin integrity — pull-up / pull-down)
+// NOTE: This test reconfigures GPIO 0-8 as software inputs, overriding PIO.
+//       It must run LAST. Normal firmware operation requires a power-cycle
+//       after selftest to restore PIO ownership of these pins.
 // ---------------------------------------------------------------------------
 static void test_gpio(void) {
     TEST_SECTION("GPIO Configuration");
@@ -80,11 +225,11 @@ static void test_gpio(void) {
     }
 
     // /RESET input — pull up (host drives low to reset; should be high normally)
-    gpio_init(CXD_RESET_PIN);
-    gpio_set_dir(CXD_RESET_PIN, GPIO_IN);
-    gpio_pull_up(CXD_RESET_PIN);
+    gpio_init(PIN_RESET);
+    gpio_set_dir(PIN_RESET, GPIO_IN);
+    gpio_pull_up(PIN_RESET);
     sleep_us(10);
-    bool reset_idle_high = gpio_get(CXD_RESET_PIN);
+    bool reset_idle_high = gpio_get(PIN_RESET);
     TEST_ASSERT(reset_idle_high,
                 "/RESET idle is high (no unexpected ground on pin)");
 }
@@ -145,8 +290,16 @@ bool selftest_run(void) {
     printf("║  CD32 ODE Self-Test                      ║\n");
     printf("╚══════════════════════════════════════════╝\n");
 
-    test_gpio();
+    // Non-destructive hardware config checks (all peripherals already init'd)
+    test_sys_clock();
+    test_gpio_mux();
+    test_pio_config();
+    test_psram();
+    test_i2c1_bus();
     test_sd_card();
+    // GPIO pull integrity MUST run last: reconfigures GPIO 0-8 as SW inputs,
+    // overriding PIO0 ownership.  Power-cycle required to restore normal DA output.
+    test_gpio();
 
     printf("\n══════════════════════════════════════════\n");
     printf("  Results: %d passed, %d failed\n", s_pass, s_fail);

@@ -513,18 +513,6 @@ int main(void) {
         }
     }
 
-    // ---- Self-test prompt ----
-    printf("[MAIN] Press '#' within 3 seconds for self-test mode...\n");
-    absolute_time_t st_deadline = make_timeout_time_us(3000000);
-    while (absolute_time_diff_us(get_absolute_time(), st_deadline) > 0) {
-        int c = getchar_timeout_us(100000);
-        if (c == '#') {
-            selftest_run();
-            printf("[MAIN] Self-test complete.  Continuing boot...\n\n");
-            break;
-        }
-    }
-
     // ---- I2C1 for MCP23017 (SDA=GPIO26, SCL=GPIO27 @ 400 kHz) ----
     // Moved from I2C0/GPIO 28-29: GPIO 29 is now WiFi RM2 SPI CLK.
     i2c_init(i2c1, 400 * 1000);
@@ -567,6 +555,23 @@ int main(void) {
 
     // ---- COMMO bus bridge ----
     commo_bridge_init();
+
+    // ---- Self-test prompt (all peripherals now initialised) ----
+    // Runs after I2C1, UART1, COMMO, PSRAM, SD, DA PIO, subcode PIO are all up.
+    // selftest_run() reconfigures GPIO 0-8 at the end (pin pull integrity test),
+    // which overrides PIO0 — power-cycle required after selftest for normal operation.
+    printf("[MAIN] Press '#' within 3 seconds for self-test mode...\n");
+    {
+        absolute_time_t st_deadline = make_timeout_time_us(3000000);
+        while (absolute_time_diff_us(get_absolute_time(), st_deadline) > 0) {
+            int c = getchar_timeout_us(100000);
+            if (c == '#') {
+                selftest_run();
+                printf("[MAIN] Self-test complete.  Power-cycle to restore DA output.\n\n");
+                while (true) tight_loop_contents();   // halt — PIO0 now broken
+            }
+        }
+    }
 
     // ---- HTTP web server (Pico 2 W) ----
     webserver_init();

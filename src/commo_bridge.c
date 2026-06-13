@@ -274,8 +274,8 @@ static void _send_toc_packets(void) {
 //   3. PIO1 IRQ routed to the COMMO RX/TX interrupt handler
 //   4. Upstream command-handler pipeline (Init_command_handler)
 //
-// timer_init(), DOOR (GPIO 11), and SCOR (GPIO 12) are configured by
-// main.c before this is called.
+// timer_init() and DOOR (GPIO 11) are configured by main.c before this is called.
+// PIN_SCOR = PIN_SUB_SCOR = GPIO 8 (the real SCOR output; IRQ gated by BUILD_WITH_COMMO).
 //
 // Critically, we do NOT call the full pio_hw_init() or driver_init() because
 // those would try to add programs to PIO0 SM0/SM1 (CXD2500BQ, DSIC2, QCHAN)
@@ -295,8 +295,8 @@ void commo_bridge_init(void) {
     return;
 #endif
 
-    // PIN_DOOR (GPIO 11), PIN_SCOR/GPIO 12, and timer_init() are configured
-    // unconditionally in main.c before this function is called.
+    // PIN_DOOR (GPIO 11) and timer_init() are configured in main.c before this call.
+    // PIN_SCOR = PIN_SUB_SCOR = GPIO 8.
 
     // ACTIVE (conn 24, GPIO 10): drive-active output to CD32 mainboard.
     // Start low (drive idle — motor not yet spinning).

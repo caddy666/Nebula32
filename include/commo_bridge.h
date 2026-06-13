@@ -34,9 +34,9 @@
 //   DRIVE→HOST: status packets (15 bytes), Q-channel packets, ID packets
 //
 // COMMO GPIO ASSIGNMENTS (see gpio_map.h PIN_IF_CLK/DATA/DIR):
-//   GPIO 15 (conn 20): IF_CLK  — idles high, active-low pulses
-//   GPIO 16 (conn 21): IF_DATA — bidirectional
-//   GPIO 17 (conn 25): IF_DIR  — output: 0=receive, 1=transmit
+//   GPIO 44 (conn 20): IF_CLK  — idles high, active-low pulses
+//   GPIO 45 (conn 21): IF_DATA — bidirectional
+//   GPIO 46 (conn 25): IF_DIR  — output: 0=receive, 1=transmit
 //
 
 // =============================================================================
@@ -50,7 +50,7 @@
 // Build-time selection
 // ---------------------------------------------------------------------------
 // Set by CMakeLists.txt add_compile_definitions().
-// Rotary encoder runs via MCP23017 on I2C0 (GPIO 28/29) — no GPIO conflict with COMMO.
+// Rotary encoder runs via MCP23017 on I2C1 (GPIO 26/27) — no GPIO conflict with COMMO.
 #ifndef BUILD_WITH_COMMO
 #define BUILD_WITH_COMMO   1
 #endif

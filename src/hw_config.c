@@ -70,7 +70,7 @@ static sd_card_t sd_cards[] = {
         .use_card_detect    = false,
         // If your SD module has a card-detect pin, uncomment and configure:
         // .use_card_detect = true,
-        // .card_detect_gpio = 17,
+        // .card_detect_gpio = 18,  // GPIO 18 is free on Core2350B0
         // .card_detected_true = 0,
     },
 };

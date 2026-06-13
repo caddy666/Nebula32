@@ -9,13 +9,13 @@
 // Library: no-OS-FatFS-SD-SDIO-SPI-RPi-Pico by Carl Kugler
 //   https://github.com/carlk3/no-OS-FatFS-SD-SDIO-SPI-RPi-Pico
 //
-// Hardware wiring (as defined in CMakeLists.txt):
-//   GPIO 18 — SDIO_CLK    (SD card CLK)
-//   GPIO 19 — SDIO_CMD    (SD card CMD)
-//   GPIO 20 — SDIO_D0     (SD card DAT0)
-//   GPIO 21 — SDIO_D1     (SD card DAT1)
-//   GPIO 22 — SDIO_D2     (SD card DAT2)
-//   GPIO 23 — SDIO_D3     (SD card DAT3 / CS)
+// Hardware wiring (Core2350B0 — see gpio_map.h):
+//   GPIO 30 — SDIO_CLK    (SD card CLK)
+//   GPIO 31 — SDIO_CMD    (SD card CMD)
+//   GPIO 32 — SDIO_D0     (SD card DAT0)
+//   GPIO 33 — SDIO_D1     (SD card DAT1)
+//   GPIO 34 — SDIO_D2     (SD card DAT2)
+//   GPIO 35 — SDIO_D3     (SD card DAT3 / CS)
 //
 // 4-bit SDIO achieves ~20–25 MB/s — comfortably faster than the 300 KB/s
 // required for real-time 2x CD-ROM streaming (2352 bytes × 150/sec ≈ 353 KB/s).

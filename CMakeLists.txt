@@ -55,10 +55,11 @@ set(BUILD_WITH_ROTARY  ON)
 # =============================================================================
 # Compile-time pin / buffer configuration
 # =============================================================================
-# Pin definitions for the cd32_pico hardware interface (GPIO 0-17) live in
+# Pin definitions for the full GPIO map (GPIO 0-47, Core2350B0 / RP2350B) live in
 # upstream/include/gpio_map.h, which is on the include path for all sources.
-# The compile definitions below cover ODE peripherals (GPIO 18-29) and
-# CD32 26-pin drive connector signals — see gpio_map.h for the full layout.
+# The compile definitions below duplicate the numeric values for code that
+# uses -D defines rather than including gpio_map.h directly (da_output.c,
+# display.cpp, hw_config.c etc.).  Values must stay in sync with gpio_map.h.
 add_compile_definitions(
     # ---- CD32 26-pin drive connector signals (GPIO 0-14) ----
     DA_DATA_PIN=0           # DA serial data  (connector pin 9)
@@ -72,7 +73,7 @@ add_compile_definitions(
     SUB_SCOR_PIN=8          # Subcode SCOR    (connector pin 15)
     M17SINE_PIN=9           # 16.9344 MHz ref (connector pin 5, GPIN0 input)
     ACTIVE_PIN=10           # Drive active    (connector pin 24, output)
-    CXD_RESET_PIN=14        # /RESET from host (connector pin 7, input)
+    # PIN_RESET=14 is defined in gpio_map.h — no duplicate compile-define needed
 
     # ---- Debug UARTs ----
     PICO_DEFAULT_UART=0       # stdio on UART0

@@ -12,6 +12,12 @@ CMakeCache.txt
 CMakeFiles/
 cmake_install.cmake
 build/
+build-*/
+
+# Python bytecode
+__pycache__/
+*.pyc
+*.pyo
 
 # pioasm-generated PIO headers (regenerated at build time)
 *.pio.h

@@ -221,19 +221,6 @@ bs2_default_library/fast:
 .PHONY : bs2_default_library/fast
 
 #=============================================================================
-# Target rules for targets named pioasmBuild
-
-# Build rule for target.
-pioasmBuild: cmake_check_build_system
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 pioasmBuild
-.PHONY : pioasmBuild
-
-# fast build rule for target.
-pioasmBuild/fast:
-	$(MAKE) $(MAKESILENT) -f pico-sdk/src/rp2_common/pico_cyw43_driver/CMakeFiles/pioasmBuild.dir/build.make pico-sdk/src/rp2_common/pico_cyw43_driver/CMakeFiles/pioasmBuild.dir/build
-.PHONY : pioasmBuild/fast
-
-#=============================================================================
 # Target rules for targets named cyw43_driver_picow_cyw43_bus_pio_spi_pio_h
 
 # Build rule for target.
@@ -6159,7 +6146,6 @@ help:
 	@echo "... cyw43_driver_picow_cyw43_bus_pio_spi_pio_h"
 	@echo "... no-OS-FatFS-SD-SDIO-SPI-RPi-Pico_rp2040_sdio_pio_h"
 	@echo "... pico_status_led_ws2812_pio_h"
-	@echo "... pioasmBuild"
 	@echo "... tls_cert_check"
 	@echo "... Nebula32"
 	@echo "... bs2_default"

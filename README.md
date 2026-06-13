@@ -20,7 +20,7 @@ this better be good - there are 20+ gb of tests, the bloody firmware is less tha
 
 The Commodore CD32 drive communicates with the host Amiga chipset (Akiko, U5) over two serial interfaces:
 
-- **COMMO 3-wire bus** (GPIO 15/16/17) — command and status channel. The host issues opcodes (seek, play, TOC read) and the drive responds with status packets. This uses an upstream port of the original Philips/Commodore 8051 drive MCU firmware running on the RP2350's PIO.
+- **COMMO 3-wire bus** (GPIO 44/45/46) — command and status channel. The host issues opcodes (seek, play, TOC read) and the drive responds with status packets. This uses an upstream port of the original Philips/Commodore 8051 drive MCU firmware running on the RP2350's PIO.
 - **DA serial bus** (GPIO 0/1/2) — I2S bit stream carrying sector data and CD audio. Akiko and the LC78835M DAC both read this stream directly. BCLK runs at 2.12 MHz (1×) or 4.23 MHz (2×); LRCLK at 44.1 kHz. Each I2S frame is 48 BCLK cycles (24 bits L + 24 bits R), not 32.
 
 This project implements the drive side of both buses:
@@ -81,8 +81,8 @@ For BIN images, place the `.cue` file with the same base name in the same direct
 | GPIO 11     | DOOR        | IN        | Door/tray switch |
 | GPIO 13     | PASSIVE     | OUT       | Drive passive/standby status |
 | GPIO 14     | /RESET      | IN        | Active-low reset from CD32 |
-| GPIO 15     | IF_CLK      | BIDIR     | COMMO clock |
-| GPIO 16     | IF_DATA     | BIDIR     | COMMO data |
-| GPIO 17     | IF_DIR      | OUT       | COMMO direction control |
+| GPIO 44     | IF_CLK      | BIDIR     | COMMO clock |
+| GPIO 45     | IF_DATA     | BIDIR     | COMMO data |
+| GPIO 46     | IF_DIR      | OUT       | COMMO direction control |
 
 

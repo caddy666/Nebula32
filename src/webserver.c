@@ -983,8 +983,9 @@ static void handle_request(struct tcp_pcb *pcb, http_conn_t *conn) {
         // Strip query string from fname before filename validation.
         const char *fname_raw = path + 14;
         char fname[MAX_PATH_LEN];
+        size_t fn_max = sizeof(path) - 14u - 1u; // bytes remaining in path[] after prefix
         size_t fn_len = 0;
-        while (fname_raw[fn_len] && fname_raw[fn_len] != '?' && fn_len < sizeof(fname) - 1)
+        while (fname_raw[fn_len] && fname_raw[fn_len] != '?' && fn_len < fn_max)
             fn_len++;
         memcpy(fname, fname_raw, fn_len);
         fname[fn_len] = '\0';

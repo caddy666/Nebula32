@@ -5,11 +5,11 @@
 // Drives a 240x240 ST7789 over hardware SPI1.
 // Cover art JPEGs are decoded with JPEGDEC and streamed tile-by-tile.
 //
-// WIRING:
-//   GPIO 24 → ST7789 DC   (data/command select)
-//   GPIO 25 → ST7789 CS   (chip select, active low)
-//   GPIO 26 → ST7789 SCK  (SPI1 clock, up to 75 MHz on RP2350)
-//   GPIO 27 → ST7789 DIN  (SPI1 MOSI)
+// WIRING (Core2350B0 — see gpio_map.h):
+//   GPIO 40 → ST7789 DC   (data/command select)
+//   GPIO 41 → ST7789 CS   (chip select, active low)
+//   GPIO 42 → ST7789 SCK  (SPI1 clock, up to 75 MHz on RP2350)
+//   GPIO 43 → ST7789 DIN  (SPI1 MOSI)
 //   ST7789 RST → 3.3 V    (no software reset needed)
 //   ST7789 BL  → 3.3 V    (backlight always on; add PWM later if needed)
 //

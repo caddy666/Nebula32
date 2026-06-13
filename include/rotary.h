@@ -17,8 +17,8 @@
 //     Encoder SW  (push-button) → MCP23017 GPA2  (active low)
 //     MCP23017 INTA → Pico GPIO (open-drain, pulled up on Pico side)
 //
-//   MCP23017 is on I2C0 (GPIO 28 = SDA, GPIO 29 = SCL) @ 400 kHz.
-//   GPIO 15/16/17 are reserved for the COMMO bus (IF_CLK/IF_DATA/IF_DIR).
+//   MCP23017 is on I2C1 (GPIO 26 = SDA, GPIO 27 = SCL) @ 400 kHz.
+//   GPIO 44/45/46 are reserved for the COMMO bus (IF_CLK/IF_DATA/IF_DIR).
 //
 // ALGORITHM:
 //   Uses a 2-bit Gray-code state machine to decode quadrature pulses.
