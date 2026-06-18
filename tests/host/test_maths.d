@@ -1,4 +1,3 @@
-test_maths.o: test_maths.cpp ../../upstream/include/defs.h \
- ../../upstream/include/maths.h
-../../upstream/include/defs.h:
-../../upstream/include/maths.h:
+test_maths.o: test_maths.cpp ../../include/defs.h ../../include/maths.h
+../../include/defs.h:
+../../include/maths.h:

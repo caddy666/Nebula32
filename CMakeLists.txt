@@ -56,7 +56,7 @@ set(BUILD_WITH_ROTARY  ON)
 # Compile-time pin / buffer configuration
 # =============================================================================
 # Pin definitions for the full GPIO map (GPIO 0-47, Core2350B0 / RP2350B) live in
-# upstream/include/gpio_map.h, which is on the include path for all sources.
+# include/gpio_map.h, which is on the include path for all sources.
 # The compile definitions below duplicate the numeric values for code that
 # uses -D defines rather than including gpio_map.h directly (da_output.c,
 # display.cpp, hw_config.c etc.).  Values must stay in sync with gpio_map.h.
@@ -235,22 +235,12 @@ add_executable(Nebula32
     src/effects.c
     src/vis_audio.c
 
-    # ---- COMMO bus bridge (upstream cd32_pico integration) ----
+    # ---- COMMO bus: bridge, state machine, BCD arithmetic, timers ----
     src/commo_bridge.c
-
-    # ---- Upstream: COMMO serial bus state machine ----
-    upstream/core/commo.c
-    upstream/core/commo_hal_pico.c
-    upstream/core/dispatcher.c
-    upstream/core/cmd_hndl.c
-    upstream/core/sts_q_id.c
-
-    # ---- Upstream: BCD/time arithmetic and software timers ----
-    upstream/utils/maths.c
-    upstream/utils/timer.c
-
-    # ---- Upstream player shim: satisfies player_interface linkage for upstream cmd_hndl.c ----
-    src/upstream_player_shim.c
+    src/commo.c
+    src/commo_hal_pico.c
+    src/maths.c
+    src/timer.c
 
 )
 
@@ -260,14 +250,12 @@ pico_generate_pio_header(Nebula32
 pico_generate_pio_header(Nebula32
     ${CMAKE_CURRENT_SOURCE_DIR}/pio/subcode_encoder.pio)
 
-# ---- Upstream PIO programs (COMMO bus) ----
 pico_generate_pio_header(Nebula32
-    ${CMAKE_CURRENT_SOURCE_DIR}/upstream/pio/commo.pio)
+    ${CMAKE_CURRENT_SOURCE_DIR}/pio/commo.pio)
 
 # ---- Include directories ----
 target_include_directories(Nebula32 PRIVATE
     include
-    upstream/include          # upstream defs.h, gpio_map.h, commo.h, etc.
     ${FATFS_SDK_PATH}/include
     ${FATFS_SDK_PATH}/src/include
     ${FATFS_SDK_PATH}/src/ff15/source

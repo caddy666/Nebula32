@@ -134,17 +134,17 @@ Data transitions on the **falling** BCLK edge; Akiko samples on the **rising** e
 
 | File | Status | Notes |
 |------|--------|-------|
-| `upstream/core/commo.c` | ✅ Correct | COMMO command/status protocol; last_command cleared on CMD_ERROR; vestigial commo_hal_data_is_low() during TX documented; HAL-refactored — hardware calls replaced with commo_hal.h interface |
-| `upstream/core/commo_hal_pico.c` | ✅ Correct | Real PIO + GPIO implementation of commo_hal.h; linked in firmware only |
-| `upstream/include/commo_hal.h` | ✅ Correct | HAL interface: commo_hal_rxd/txd/data_is_low/release — 4 functions isolating commo.c from hardware |
+| `src/commo.c` | ✅ Correct | COMMO command/status protocol; last_command cleared on CMD_ERROR; vestigial commo_hal_data_is_low() during TX documented; HAL-refactored — hardware calls replaced with commo_hal.h interface |
+| `src/commo_hal_pico.c` | ✅ Correct | Real PIO + GPIO implementation of commo_hal.h; linked in firmware only |
+| `include/commo_hal.h` | ✅ Correct | HAL interface: commo_hal_rxd/txd/data_is_low/release — 4 functions isolating commo.c from hardware |
 | `tests/host/commo_hal_stub.c` | ✅ Correct | Test-harness HAL: byte queue for RX, capture log for TX, controllable data_is_low flag |
 | `tests/host/commo_hal_stub.h` | ✅ Correct | Control API for the stub: reset/push/set_data_low/tx_count/tx_byte |
-| `upstream/core/dispatcher.c` | ✅ Correct | Packet routing |
-| `upstream/core/cmd_hndl.c` | ✅ Correct | Opcode dispatch |
-| `upstream/core/sts_q_id.c` | ✅ Correct | Status/Q-channel buffer |
-| `upstream/utils/maths.c` | ✅ Correct | BCD/time arithmetic; tracks_calc() widened to uint64_t |
-| `upstream/utils/timer.c` | ✅ Correct | 8 ms software timer; delay() zero-entry guard; SCOR IRQ guarded by #if !BUILD_WITH_COMMO (F25) |
-| `upstream/pio/commo.pio` | ✅ Correct | COMMO PIO; RX acknowledge pulse extended to [31] delay ≈ 237 ns (F21) |
+| `src/dispatcher.c` | ✅ Correct | Packet routing |
+| `src/cmd_hndl.c` | ✅ Correct | Opcode dispatch |
+| `src/sts_q_id.c` | ✅ Correct | Status/Q-channel buffer |
+| `src/maths.c` | ✅ Correct | BCD/time arithmetic; tracks_calc() widened to uint64_t |
+| `src/timer.c` | ✅ Correct | 8 ms software timer; delay() zero-entry guard; SCOR IRQ guarded by #if !BUILD_WITH_COMMO (F25) |
+| `pio/commo.pio` | ✅ Correct | COMMO PIO; RX acknowledge pulse extended to [31] delay ≈ 237 ns (F21) |
 | `src/disc_image.c` | ✅ Correct | ISO/BIN/NRG/MDF parsers; CUE PREGAP+INDEX00 fix; NRG lead-out skip fix; NRG chunk_size=0/DAOX-too-short guards; MDF sector_size=0 guard; CUE/MDF track-length underflow clamp; NRG uint64_t aligned memcpy; NRG v1 unaligned reads use memcpy; disc_find_track includes pregap LBAs; NRG v1 file_off uses idx1_lba (F11); disc_build_toc_response emits 4-byte entries [track,min,sec,frame] (F15); file_offset widened to uint64_t (F29+F30) |
 | `src/sector_cache.c` | ✅ Correct | SD prefetch ring buffer + flush_gen race fix; hard_assert null-cache guard in prefetch_tick; __atomic_acquire/release builtins; SD read error retries once before skipping; sector_cache_is_full() added; error slots marked valid with valid_bytes=0 (permanent miss sentinel); sector_cache_get/release_before pinned to SRAM via sram_attr.h |
 | `src/subcode.c` | ✅ Correct | Q-channel generation; dead ORIG function comment removed |
@@ -164,7 +164,7 @@ Data transitions on the **falling** BCLK edge; Akiko samples on the **rising** e
 | `src/da_output.c` | ✅ Correct | DA DMA engine — 24-bit I2S expand, DRQ flag, FIFO drain on stop/pause, M17SINE clkdiv trim; hard_assert on DMA ch claims; s_drq_pending __atomic_*; s_audio_mode __atomic_*; dma_channel_abort in end-of-disc ISR (BUG-2); resume_lba from min(buf_lba) (SMELL-5); NULL s_cache guard in IRQ (F23); subcode PIO clkdiv updated on 2× change (F14); da_get_resume_lba() added (F12); spin-wait after seek in da_resume() (F9); DMA ISR + expand_to_i2s24 + _push_subcode pinned to SRAM (__not_in_flash_func) |
 | `src/rotary_mcp.cpp` | ✅ Correct | MCP23017 encoder + logger toggle button (GPB0) |
 | `src/commo_bridge.c` | ✅ Correct | PLAY_TRACK_OPC BCD decode, TRAY_IN seek, audio mode set, DRQ packet; _send_toc_packets guards first_track==0; PIN_RESET init+poll; send_status/qchannel pkt stack-allocated; _wait_commo_ready 5 ms timeout; FAKE_TIMING enabled + 1.8s spinup (F2); TOC 0xA1 uses ctrl_first (F5); _wait_commo_ready removed from _send_toc_packets (F10); da_get_resume_lba in PAUSE_OFF (F12); Dispatcher/cmd_hndl called only when Path A idle (F13) |
-| `src/upstream_player_shim.c` | ✅ Correct | Linkage shim — provides player_interface globals and no-op player() for upstream cmd_hndl.c |
+| `src/player_shim.c` | ✅ Correct | Linkage shim — provides player_interface globals and no-op player() for cmd_hndl.c |
 | `src/fft.c` | ✅ Correct | 256-point Q15 radix-2 FFT with Hann window |
 | `src/effects.c` | ✅ Correct | 6 demoscene visualiser effects (SPECTRUM/SCOPE/RASTER/COMBO/SPACEBALLS/JUGGLER); JUGGLER is procedural 3-ball cascade with orbital balls and audio-reactive brightness; copper_color() lerps via INTERP0 blend mode (bit-identical to C lerp); builds at -O3 |
 | `src/vis_audio.c` | ✅ Correct | DA DMA snoop — SPSC ring, left-channel extraction; vis_audio_push_sector pinned to SRAM via sram_attr.h |
@@ -212,8 +212,8 @@ CMake: `add_subdirectory(libs/wolfssl-master EXCLUDE_FROM_ALL)` + `wolfssl pico_
 |-----|----|---------|------|---------|
 | PIO0 | 0 | `da_output.pio` | GPIO 0-2 | DA_DATA/BCLK/LRCLK output |
 | PIO0 | 1 | `subcode_encoder.pio` | GPIO 5-8 | SUB_DATA/CLK/WFCLK/SCOR |
-| PIO1 | 0 | `commo.pio` | GPIO 44-46 | COMMO RX (moved from 15-17) |
-| PIO1 | 1 | `commo.pio` | GPIO 44-46 | COMMO TX |
+| PIO1 | 0 | `pio/commo.pio` | GPIO 44-46 | COMMO RX (moved from 15-17) |
+| PIO1 | 1 | `pio/commo.pio` | GPIO 44-46 | COMMO TX |
 | PIO1 | 2/3 | SDIO (library) | GPIO 30-35 | SD card (claimed via pio_claim_unused_sm) |
 
 All four PIO programs are always loaded. The upstream servo PIO programs
@@ -402,11 +402,11 @@ All four captures share the same 10 test names (W0–W9) and assertion threshold
 | MEDIUM-7 | `commo_bridge.c` | `da_set_audio_mode()` called in `PLAY_TRACK_OPC` and `PAUSE_OFF_OPC` |
 | HIGH-3 | `da_output.c` / `commo_bridge.c` | DRQ flag set by DMA ISR; `commo_bridge_poll()` sends `DRIVE_STATUS_DRQ` packet |
 | HIGH-4 | `da_output.pio` / `da_output.c` | 24-bit I2S frames (clkdiv=32), `expand_to_i2s24()` for DMA buffers |
-| UPSTREAM-1 | `upstream/core/commo.c` | `last_command = 0` on CMD_ERROR so retry is treated as NEW_COMMAND |
-| UPSTREAM-2 | `upstream/utils/maths.c` | `isqrt()` + `tracks_calc()` widened to uint64_t; A×T overflowed uint32_t for discs > ~20 min |
-| UPSTREAM-3 | `upstream/utils/timer.c` | `delay()` guard for `delay_byte == 0` on entry; do-while wrapped to 255 and blocked 127.5 ms |
-| UPSTREAM-4 | `upstream/core/play.c` | Pointer truncation: `param1 = (uint8_t)(uintptr_t)&store` → side-channel `play_subcode_result` pointer |
-| UPSTREAM-5 | `upstream/core/play.c` | `jump_time()` overshoot: `compare_time` guard before `subtract_time`; underflow wrapped `delta.frm` to 75−N |
+| UPSTREAM-1 | `src/commo.c` | `last_command = 0` on CMD_ERROR so retry is treated as NEW_COMMAND |
+| UPSTREAM-2 | `src/maths.c` | `isqrt()` + `tracks_calc()` widened to uint64_t; A×T overflowed uint32_t for discs > ~20 min |
+| UPSTREAM-3 | `src/timer.c` | `delay()` guard for `delay_byte == 0` on entry; do-while wrapped to 255 and blocked 127.5 ms |
+| UPSTREAM-4 | `upstream/core/play.c` (deleted) | Pointer truncation: `param1 = (uint8_t)(uintptr_t)&store` → side-channel `play_subcode_result` pointer |
+| UPSTREAM-5 | `upstream/core/play.c` (deleted) | `jump_time()` overshoot: `compare_time` guard before `subtract_time`; underflow wrapped `delta.frm` to 75−N |
 
 ---
 

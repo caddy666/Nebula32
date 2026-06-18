@@ -22,8 +22,10 @@ run() {
 
 run "vendor libs clean"                     bash check-vendor-clean.sh
 run "codebase status coverage"              bash check-codebase-status.sh
+run "CMake source wiring"                   bash check-cmake-srcs.sh
 run "GPIO connector table sync"             bash check-gpio-sync.sh
 run "PIO file coverage"                     bash check-pio-files.sh
+run "test group documentation"              bash check-test-docs.sh
 run "build + warn + cppcheck + cd32_tests"  make -j"$(nproc)" check
 run "parser_tests"                          bash -c 'make -j"$(nproc)" parser_tests && ./parser_tests -v'
 run "vdisc_tests"                           bash -c 'make -j"$(nproc)" vdisc_tests && ./vdisc_tests -v'

@@ -171,7 +171,7 @@
 #define PIN_IF_DATA   45   /**< conn 21 — COMMO data   (bidir)               */
 #define PIN_IF_DIR    46   /**< conn 25 — COMMO direction control out         */
 
-/* Aliases expected by upstream/core/commo.c and commo_bridge.c */
+/* Aliases expected by src/commo.c and src/commo_bridge.c */
 #define PIN_COMMO_CLK  PIN_IF_CLK
 #define PIN_COMMO_DATA PIN_IF_DATA
 #define PIN_COMMO_DIR  PIN_IF_DIR

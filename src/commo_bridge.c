@@ -37,18 +37,15 @@
 #include "logger.h"
 #include "upstream_types.h"
 
-// Upstream COMMO interface (bare includes resolve via upstream/include in CMakeLists path)
-#include "commo.h"        // COMMO_INTERFACE, NEW_CMD_RECEIVED, GET_BUFFER, etc.
-#include "defs.h"         // interface_field_t, opcodes, cd_time_t, IDLE_OPC, READY
+// COMMO interface (headers live in include/)
+#include "commo.h"        // commo_ctx_t, commo_init, commo_tick, commo_cmd_pending, etc.
+#include "defs.h"         // cd_time_t, opcodes (opc constants)
 #include "pio_hw.h"       // PIO_COMMO_RX/TX, SM_COMMO_RX/TX, g_offset_commo_* externs
-#include "cmd_hndl.h"     // command_handler(), Init_command_handler()
-#include "sts_q_id.h"     // Store_update_status(), Get_update_status()
-#include "player.h"       // player_interface extern, player_error, process_id
 #include "gpio_map.h"     // PIN_IF_CLK/DATA/DIR → PIN_COMMO_CLK/DATA/DIR aliases
                           // PIN_ACTIVE, PIN_DOOR, PIN_SCOR
 #include "timer.h"        // timer_init()
 
-// Generated PIO header from upstream/pio/commo.pio (built by pioasm)
+// Generated PIO header from pio/commo.pio (built by pioasm)
 #include "commo.pio.h"    // commo_rx_program, commo_tx_program, commo_program_init()
 
 #include "pico/stdlib.h"
@@ -58,9 +55,6 @@
 #include <string.h>
 #include <stdio.h>
 
-// External upstream globals (defined in upstream_player_shim.c)
-extern interface_field_t player_interface;
-
 // External ODE globals (defined in main.c)
 extern disc_image_t   g_disc;
 extern sector_cache_t g_cache;
@@ -68,8 +62,8 @@ extern sector_cache_t g_cache;
 // ---------------------------------------------------------------------------
 // PIO program offset globals
 // ---------------------------------------------------------------------------
-// upstream/include/pio_hw.h declares all six offsets as extern.
-// upstream/hal/pio_hw.c (deleted — contained real-hardware init for
+// include/pio_hw.h declares all six offsets as extern.
+// pio_hw.c (deleted — contained real-hardware init for
 // CXD2500BQ/DSIC2/QCHAN) would have defined them, but its pio_hw_init()
 // would claim PIO0 SM0–SM3 which the ODE already owns.
 //
@@ -125,6 +119,7 @@ static void    _send_toc_packets(void);
 // ---------------------------------------------------------------------------
 // Internal state
 // ---------------------------------------------------------------------------
+static commo_ctx_t   s_commo_ctx;                    // COMMO state machine context
 static bool          s_active             = false;
 static uint8_t       s_last_cmd_echo      = 0;
 static drive_state_t s_drive_state        = DRIVE_IDLE;
@@ -180,7 +175,7 @@ static void _update_active_pin(void) {
 static void _wait_commo_ready(void) {
     const uint32_t timeout_us = 5000;    // 5 ms — still >> 1.2 ms at 100 kbps
     uint32_t waited = 0;
-    while (SEND_STRING_READY() == COMMO_BUSY && waited < timeout_us) {
+    while (!commo_send_ready(&s_commo_ctx) && waited < timeout_us) {
         sleep_us(10);
         waited += 10;
     }
@@ -329,11 +324,8 @@ void commo_bridge_init(void) {
     irq_set_exclusive_handler(PIO1_IRQ_0, s_pio1_irq_handler);
     irq_set_enabled(PIO1_IRQ_0, true);
 
-    // Step 4: Initialise the upstream command handler pipeline
-    // (dispatcher + cmd_hndl + sts_q_id — no hardware, pure state machines)
-    player_interface.p_status  = READY;
-    player_interface.a_command = IDLE_OPC;
-    Init_command_handler();
+    // Step 4: Initialise the COMMO state machine
+    commo_init(&s_commo_ctx);
 
     s_active = true;
 
@@ -347,8 +339,7 @@ void commo_bridge_init(void) {
 // commo_bridge_poll
 // ---------------------------------------------------------------------------
 // Called from Core 0 main loop.  Steps the COMMO state machine and
-// checks for completed command packets.  Also polls player_interface
-// for commands placed there by the upstream cmd_hndl.c pipeline.
+// checks for completed command packets.
 bool commo_bridge_poll(void) {
     if (!s_active) return false;
 
@@ -390,63 +381,38 @@ bool commo_bridge_poll(void) {
     }
     s_door_prev = door_now;
 
-    // ---- Step upstream modules ----
-    // Step the COMMO state machine (serial RX/TX)
-    COMMO_INTERFACE();
+    // ---- Step the COMMO state machine (serial RX/TX) ----
+    commo_tick(&s_commo_ctx);
 
     // ---- Path A: COMMO bus new command received ----
-    bool handled_new_cmd = false;
-    uint8_t cmd_status = NEW_CMD_RECEIVED();
-    if (cmd_status == COMMO_NEW_COMMAND || cmd_status == COMMO_SAME_COMMAND) {
-        handled_new_cmd = true;
-        uint8_t raw_opc = GET_BUFFER(0);
-        uint8_t opc     = raw_opc & COMMO_OPCODE_MASK;
-        uint8_t p1 = GET_BUFFER(1);
-        uint8_t p2 = GET_BUFFER(2);
-        uint8_t p3 = GET_BUFFER(3);
-        s_last_cmd_echo = raw_opc;
+    commo_cmd_t cmd;
+    if (commo_cmd_pending(&s_commo_ctx, &cmd)) {
+        if (cmd.status == COMMO_CMD_NEW || cmd.status == COMMO_CMD_SAME) {
+            uint8_t raw_opc = cmd.bytes[0];
+            uint8_t opc     = raw_opc & COMMO_OPCODE_MASK;
+            uint8_t p1 = cmd.bytes[1];
+            uint8_t p2 = cmd.bytes[2];
+            uint8_t p3 = cmd.bytes[3];
+            s_last_cmd_echo = raw_opc;
 
-        printf("[COMMO] opc=0x%02X p1=%02X p2=%02X p3=%02X\n", opc, p1, p2, p3);
-        LOG_INFO_MSG("COMMO", "opc=0x%02X p1=%02X p2=%02X p3=%02X", opc, p1, p2, p3);
+            printf("[COMMO] opc=0x%02X p1=%02X p2=%02X p3=%02X\n", opc, p1, p2, p3);
+            LOG_INFO_MSG("COMMO", "opc=0x%02X p1=%02X p2=%02X p3=%02X", opc, p1, p2, p3);
 
-        uint8_t status = _handle_opc(opc, p1, p2, p3);
-        // Clear player_interface before Dispatcher/cmd_hndl writes it on
-        // the next tick — prevents Path C from double-processing this command.
-        player_interface.a_command = IDLE_OPC;
-        player_interface.p_status  = READY;
-        FREE_CMD_BUFFER();
-        commo_bridge_send_status(status);
-        return true;
-    }
-
-    // Step the dispatcher and command handler only if Path A did not just
-    // handle a new command — avoids double-processing the same opcode.
-    if (!handled_new_cmd) {
-        Dispatcher();
-        command_handler();
+            uint8_t status = _handle_opc(opc, p1, p2, p3);
+            commo_cmd_consumed(&s_commo_ctx);
+            commo_bridge_send_status(status);
+            return true;
+        } else if (cmd.status == COMMO_CMD_ERROR) {
+            commo_bridge_send_status(_build_status() | DRIVE_STATUS_ERROR);
+            commo_cmd_consumed(&s_commo_ctx);
+            return true;
+        }
     }
 
     // ---- Path B: DRQ — sector delivered, notify host data is ready ----
     if (da_drq_pending()) {
         uint8_t drq_status = _build_status() | DRIVE_STATUS_DRQ;
         commo_bridge_send_status(drq_status);
-        return true;
-    }
-
-    // ---- Path C: upstream cmd_hndl.c wrote into player_interface ----
-    if (player_interface.a_command != IDLE_OPC) {
-        uint8_t opc = player_interface.a_command;
-        printf("[COMMO] player_interface opc=0x%02X\n", opc);
-        LOG_INFO_MSG("COMMO", "player_interface opc=0x%02X", opc);
-
-        uint8_t status = _handle_opc(opc,
-            player_interface.param1,
-            player_interface.param2,
-            player_interface.param3);
-
-        player_interface.p_status  = READY;
-        player_interface.a_command = IDLE_OPC;
-        commo_bridge_send_status(status);
         return true;
     }
 
@@ -639,7 +605,7 @@ void commo_bridge_send_status(uint8_t status_byte) {
 
     // Build 15-byte status packet
     // Byte 0:  0x00 = status packet identifier
-    // Byte 1:  player status (COMMO_READY_WITHOUT_ERROR or COMMO_BUSY)
+    // Byte 1:  player status (0x00=OK, 0x01=error, 0x03=busy)
     // Byte 2:  CXD status byte (our register emulator's status)
     // Byte 3:  echo of last received command opcode
     // Bytes 4-13: zeros
@@ -651,12 +617,13 @@ void commo_bridge_send_status(uint8_t status_byte) {
     pkt[0] = 0x00;   // Status packet type
 
     // Map drive state to COMMO player-status byte
+    // Values match the Philips/Chinon wire format: 0x00=OK, 0x01=error, 0x03=busy
     if (s_drive_state == DRIVE_SEEKING || s_drive_state == DRIVE_SPINUP) {
-        pkt[1] = COMMO_BUSY;
+        pkt[1] = 0x03u;   // BUSY
     } else if (status_byte & DRIVE_STATUS_ERROR) {
-        pkt[1] = COMMO_READY_WITH_ERROR;
+        pkt[1] = 0x01u;   // READY_WITH_ERROR
     } else {
-        pkt[1] = COMMO_READY_WITHOUT_ERROR;
+        pkt[1] = 0x00u;   // READY_WITHOUT_ERROR
     }
 
     pkt[2] = status_byte;
@@ -669,7 +636,7 @@ void commo_bridge_send_status(uint8_t status_byte) {
     }
     pkt[STATUS_PACKET_LENGTH - 1] = chk;
 
-    SEND_STRING(SEND_STRING_COMPLETE, pkt, STATUS_PACKET_LENGTH);
+    commo_send(&s_commo_ctx, pkt, STATUS_PACKET_LENGTH, COMMO_SEND_COMPLETE);
 }
 
 // ---------------------------------------------------------------------------
@@ -681,7 +648,7 @@ void commo_bridge_send_qchannel(const uint8_t *qbuf_12bytes) {
     if (!s_active) return;
 
     // Check COMMO TX is free
-    if (SEND_STRING_READY() == COMMO_BUSY) return;
+    if (!commo_send_ready(&s_commo_ctx)) return;
 
     uint8_t pkt[Q_PACKET_LENGTH];
     memset(pkt, 0, sizeof(pkt));
@@ -694,7 +661,7 @@ void commo_bridge_send_qchannel(const uint8_t *qbuf_12bytes) {
     for (int i = 0; i < Q_PACKET_LENGTH - 1; i++) chk ^= pkt[i];
     pkt[Q_PACKET_LENGTH - 1] = chk;
 
-    SEND_STRING(SEND_STRING_COMPLETE, pkt, Q_PACKET_LENGTH);
+    commo_send(&s_commo_ctx, pkt, Q_PACKET_LENGTH, COMMO_SEND_COMPLETE);
 }
 
 bool commo_bridge_is_active(void) {
@@ -708,12 +675,12 @@ drive_state_t commo_bridge_get_drive_state(void) {
 // =============================================================================
 // PIO HARDWARE ABSTRACTION FUNCTIONS
 // =============================================================================
-// These functions are declared in upstream/include/pio_hw.h and would normally
-// be defined in upstream/hal/pio_hw.c (deleted — contained real-hardware init
+// These functions are declared in include/pio_hw.h and would normally
+// be defined in pio_hw.c (deleted — contained real-hardware init
 // for CXD2500BQ/DSIC2/QCHAN programs on PIO0 SM0–SM3, which are already owned
 // by the ODE's da_output and subcode_encoder PIOs).
 //
-// upstream/core/commo.c calls pio_commo_rx_ready(), pio_commo_rx_get(),
+// src/commo.c calls pio_commo_rx_ready(), pio_commo_rx_get(),
 // pio_commo_tx_byte() and pio_commo_release() to service the COMMO bus.
 // We provide real implementations for those, and no-op stubs for the rest.
 // =============================================================================
@@ -819,10 +786,9 @@ void pio_commo_release(void) {
 // ---------------------------------------------------------------------------
 // CXD / DSIC / QCHAN stubs — real-hardware functions, not used in ODE mode
 // ---------------------------------------------------------------------------
-// These exist only to satisfy linker references from upstream code that
-// might be pulled in accidentally.  upstream/drivers/ (driver.c, servo.c etc.)
-// have been deleted — only commo.c, dispatcher.c, cmd_hndl.c, sts_q_id.c,
-// maths.c, and timer.c are compiled in the ODE build.
+// These exist only to satisfy linker references from the original firmware code
+// that might be pulled in accidentally.  drivers/ (driver.c, servo.c etc.) have
+// been deleted — only commo.c, maths.c, and timer.c are compiled in the ODE build.
 //
 // We log a warning the first time each is called so an incorrect build
 // configuration is obvious at runtime.

@@ -16,7 +16,7 @@ while IFS= read -r pio; do
         echo "UNDOCUMENTED .pio file: $rel"
         errors=$((errors + 1))
     fi
-done < <(find pio upstream/pio -name "*.pio" 2>/dev/null | sort)
+done < <(find pio -name "*.pio" 2>/dev/null | sort)
 
 # 2. Every backtick-quoted .pio reference in CLAUDE.md must resolve to a file on disk.
 # Both full paths (`pio/da_output.pio`) and bare names (`da_output.pio`) are checked.
@@ -29,8 +29,8 @@ while IFS= read -r ref; do
             errors=$((errors + 1))
         fi
     else
-        # Bare name — accept if found anywhere under pio/ or upstream/pio/.
-        if ! find pio upstream/pio -name "$ref" 2>/dev/null | grep -q .; then
+        # Bare name — accept if found anywhere under pio/.
+        if ! find pio -name "$ref" 2>/dev/null | grep -q .; then
             echo "MISSING .pio file referenced in CLAUDE.md (not found): $ref"
             errors=$((errors + 1))
         fi

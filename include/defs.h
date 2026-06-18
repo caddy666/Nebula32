@@ -83,6 +83,21 @@ typedef struct {
 #define MAX_LEGAL_SERVICE_ID      0x1D
 
 /* -------------------------------------------------------------------------
+ * Chinon/Philips host command handler opcodes (status/query/control)
+ * These are sent by the host to the drive in the upper nibble range.
+ * ---------------------------------------------------------------------- */
+#define RESEND              0x80
+#define S_STAT              0x81
+#define S_CMD_ERR           0x82
+#define S_ID                0x83
+#define LED_CNTRL           0x84
+#define SET_ERROR_STATUS    0x85
+#define SEND_AUTO_Q         0x86
+#define SEND_Q              0x87
+#define S_DISK_ERR          0x88
+#define S_CLOSED            0x89
+
+/* -------------------------------------------------------------------------
  * Tray module commands
  * ---------------------------------------------------------------------- */
 #define TRAY_IDLE    0x00

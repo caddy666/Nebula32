@@ -12,7 +12,7 @@
 #include "commo.pio.h"
 #include "gpio_map.h"
 
-uint8_t commo_hal_rxd(void)
+commo_hal_rx_status_t commo_hal_rxd(uint8_t *out)
 {
     commo_rx_enable(PIO_COMMO_RX, SM_COMMO_RX, PIN_COMMO_CLK);
 
@@ -20,9 +20,9 @@ uint8_t commo_hal_rxd(void)
     while (!pio_commo_rx_ready() && --timeout)
         tight_loop_contents();
 
-    if (!pio_commo_rx_ready()) return 0;
-
-    return pio_commo_rx_get();
+    if (!pio_commo_rx_ready()) return COMMO_HAL_RX_TIMEOUT;
+    *out = pio_commo_rx_get();
+    return COMMO_HAL_RX_OK;
 }
 
 void commo_hal_txd(uint8_t b)

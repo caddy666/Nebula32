@@ -14,13 +14,18 @@ Grüße an a1k.org, ich sehe euch. Es ist amüsant, dass du das so genau vorherg
 605 unit tests, 0 failures. All 7 new tests pass - at some point i'll get around to building the hardware....but until then might as well get as many of these pesky bugs out before hand. also, i might be doing this the wrong way around, but meh. its a first try...
 
 
+doing the soldering, finally. fuck me i'm shit at it, shaky hands and tiny components do not go together.
+fucking lost a sot-23, need to re-order it. its smaller than the fibres of the carpet - deffo gone forever.
+but yeah - thats your status update for this week, in case anyone actually cares.
+
+
 this better be good - there are 20+ gb of tests, the bloody firmware is less than 350k.
 
 ## How It Works
 
 The Commodore CD32 drive communicates with the host Amiga chipset (Akiko, U5) over two serial interfaces:
 
-- **COMMO 3-wire bus** (GPIO 44/45/46) — command and status channel. The host issues opcodes (seek, play, TOC read) and the drive responds with status packets. This uses an upstream port of the original Philips/Commodore 8051 drive MCU firmware running on the RP2350's PIO.
+- **COMMO 3-wire bus** (GPIO 44/45/46) — command and status channel. The host issues opcodes (seek, play, TOC read) and the drive responds with status packets. 
 - **DA serial bus** (GPIO 0/1/2) — I2S bit stream carrying sector data and CD audio. Akiko and the LC78835M DAC both read this stream directly. BCLK runs at 2.12 MHz (1×) or 4.23 MHz (2×); LRCLK at 44.1 kHz. Each I2S frame is 48 BCLK cycles (24 bits L + 24 bits R), not 32.
 
 This project implements the drive side of both buses:

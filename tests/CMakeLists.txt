@@ -20,7 +20,6 @@ set(CMAKE_C_STANDARD 11)
 include_directories(
     ${CMAKE_CURRENT_SOURCE_DIR}/stubs          # stub headers override Pico SDK
     ${CMAKE_CURRENT_SOURCE_DIR}/../include     # project headers
-    ${CMAKE_CURRENT_SOURCE_DIR}/../upstream/include  # defs.h, cd_time_t, etc.
 )
 
 add_executable(cd32_tests

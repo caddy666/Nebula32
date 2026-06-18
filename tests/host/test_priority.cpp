@@ -25,7 +25,7 @@
 extern "C" {
 #include "cd_types.h"
 #include "subcode.h"
-#include "cmd_hndl.h"
+#include "defs.h"
 }
 
 /* =========================================================================
@@ -290,9 +290,9 @@ TEST(QSubchannel, IndexByte_Pregap_Is0x00)
 /* =========================================================================
  * 05 — CommandFuzz
  *
- * Validates that a command opcode classifier derived from the constants in
- * cmd_hndl.h handles all 256 possible opcode bytes without undefined
- * behaviour, and that known opcodes map to expected categories.
+ * Validates that a command opcode classifier derived from the Chinon/Philips
+ * protocol constants in defs.h handles all 256 possible opcode bytes without
+ * undefined behaviour, and that known opcodes map to expected categories.
  * ======================================================================= */
 
 typedef enum { OPC_UNKNOWN, OPC_STATUS, OPC_CONTROL, OPC_QUERY } opc_class_t;

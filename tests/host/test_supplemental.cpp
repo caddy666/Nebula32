@@ -249,6 +249,8 @@ static const uint8_t ts_cmd_len_table[16] = {
     1, 2, 1, 1, 12, 2, 1, 1, 4, 1, 1, 1, 1, 2, 1, 1
 };
 
+static commo_ctx_t s_ctx;
+
 static uint8_t ts_checksum_of(const uint8_t *buf, int len)
 {
     uint8_t s = 0;
@@ -259,8 +261,8 @@ static uint8_t ts_checksum_of(const uint8_t *buf, int len)
 static void ts_drive_packet(const uint8_t *bytes, int len)
 {
     for (int i = 0; i < len; i++) commo_hal_stub_push(bytes[i]);
-    commo_hal_stub_set_data_low(1); COMMO_INTERFACE();
-    for (int i = 0; i < len; i++) { commo_hal_stub_set_data_low(1); COMMO_INTERFACE(); }
+    commo_tick(&s_ctx);                                      // IDLE → RXD_OPCODE
+    for (int i = 0; i < len; i++) commo_tick(&s_ctx);       // one tick per byte
 }
 
 // ---------------------------------------------------------------------------
@@ -269,7 +271,7 @@ static void ts_drive_packet(const uint8_t *bytes, int len)
 
 TEST_GROUP(CommoExtended)
 {
-    void setup()    { COMMO_INIT(); commo_hal_stub_reset(); }
+    void setup()    { commo_init(&s_ctx); commo_hal_stub_reset(); }
     void teardown() {}
 };
 
@@ -281,26 +283,29 @@ TEST_GROUP(CommoExtended)
 TEST(CommoExtended, IfClkGlitchRejection)
 {
     // Queue is empty (no RXD data).  data_low=1 fires the opcode read.
-    // commo_hal_rxd() returns 0 → ERR_SEND path, byte_counter=128.
+    // commo_hal_rxd() returns COMMO_HAL_RX_TIMEOUT → ERR_SEND path, byte_counter=128.
     commo_hal_stub_set_data_low(1);
-    COMMO_INTERFACE();   // IDLE → RXD_OPCODE
-    COMMO_INTERFACE();   // RXD_OPCODE: b=0 → ERR_SEND, counter=128
+    commo_tick(&s_ctx);   // IDLE → RXD_OPCODE
+    commo_tick(&s_ctx);   // RXD_OPCODE: TIMEOUT → ERR_SEND, counter=128
 
     // The glitch has no COMMAND yet reported
-    BYTES_EQUAL(COMMO_NO_COMMAND, NEW_CMD_RECEIVED());
+    commo_cmd_t cmd;
+    CHECK_FALSE(commo_cmd_pending(&s_ctx, &cmd));
 
     // ERR_SEND countdown: 129 steps (128 decrements + 1 final step)
-    for (int i = 0; i < 129; i++) COMMO_INTERFACE();
+    for (int i = 0; i < 129; i++) commo_tick(&s_ctx);
 
     // SM reports CMD_ERROR and returns to IDLE
-    BYTES_EQUAL(COMMO_CMD_ERROR, NEW_CMD_RECEIVED());
-    FREE_CMD_BUFFER();
+    CHECK(commo_cmd_pending(&s_ctx, &cmd));
+    LONGS_EQUAL(COMMO_CMD_ERROR, cmd.status);
+    commo_cmd_consumed(&s_ctx);
 
     // A valid command after the glitch recovery must parse correctly
     uint8_t pkt[2] = { 0x03, 0 };
     pkt[1] = ts_checksum_of(pkt, 1);
     ts_drive_packet(pkt, 2);
-    BYTES_EQUAL(COMMO_NEW_COMMAND, NEW_CMD_RECEIVED());
+    CHECK(commo_cmd_pending(&s_ctx, &cmd));
+    LONGS_EQUAL(COMMO_CMD_NEW, cmd.status);
 }
 
 // Test 12: All 256 opcode bytes cycle through the SM without undefined
@@ -309,7 +314,7 @@ TEST(CommoExtended, IfClkGlitchRejection)
 TEST(CommoExtended, UnrecognizedOpcodeFuzz)
 {
     for (int op = 1; op <= 255; op++) {
-        COMMO_INIT(); commo_hal_stub_reset();
+        commo_init(&s_ctx); commo_hal_stub_reset();
         uint8_t nibble = (uint8_t)(op & 0x0F);
         uint8_t need_param = (ts_cmd_len_table[nibble] > 1);
         if (need_param) {
@@ -324,9 +329,11 @@ TEST(CommoExtended, UnrecognizedOpcodeFuzz)
             pkt[1] = ts_checksum_of(pkt, 1);
             ts_drive_packet(pkt, 2);
         }
-        // Must report COMMO_NEW_COMMAND (not stuck, not erased to NO_COMMAND)
-        BYTES_EQUAL(COMMO_NEW_COMMAND, NEW_CMD_RECEIVED());
-        BYTES_EQUAL((uint8_t)op, GET_BUFFER(0));
+        // Must report COMMO_CMD_NEW (not stuck, not erased to NONE)
+        commo_cmd_t cmd;
+        CHECK(commo_cmd_pending(&s_ctx, &cmd));
+        LONGS_EQUAL(COMMO_CMD_NEW, cmd.status);
+        BYTES_EQUAL((uint8_t)op, cmd.bytes[0]);
     }
 }
 
@@ -337,13 +344,16 @@ TEST(CommoExtended, DataSetupTimeViolation)
 {
     uint8_t pkt[2] = { 0x03, 0x00 };  // correct is 0xFC, not 0x00
     ts_drive_packet(pkt, 2);
-    BYTES_EQUAL(COMMO_CMD_ERROR, NEW_CMD_RECEIVED());
+    commo_cmd_t cmd;
+    CHECK(commo_cmd_pending(&s_ctx, &cmd));
+    LONGS_EQUAL(COMMO_CMD_ERROR, cmd.status);
     // last_command cleared on error: verify behaviorally — retry returns NEW_COMMAND
-    FREE_CMD_BUFFER();
+    commo_cmd_consumed(&s_ctx);
 
     pkt[1] = ts_checksum_of(pkt, 1);
     ts_drive_packet(pkt, 2);
-    BYTES_EQUAL(COMMO_NEW_COMMAND, NEW_CMD_RECEIVED());
+    CHECK(commo_cmd_pending(&s_ctx, &cmd));
+    LONGS_EQUAL(COMMO_CMD_NEW, cmd.status);
 }
 
 // Test 15: If a TX operation is blocked by a spurious data strobe the internal
@@ -351,20 +361,20 @@ TEST(CommoExtended, DataSetupTimeViolation)
 TEST(CommoExtended, TxBlockedStrobeRecovery)
 {
     uint8_t tx = 0xA5;
-    SEND_STRING(SEND_STRING_COMPLETE, &tx, 1);
+    CHECK(commo_send(&s_ctx, &tx, 1, COMMO_SEND_COMPLETE));
     commo_hal_stub_set_data_low(0);
-    COMMO_INTERFACE();   // IDLE → TXD_DATA
+    commo_tick(&s_ctx);   // IDLE → TXD_DATA
 
     // Spurious strobe blocks TX
     commo_hal_stub_set_data_low(1);
-    COMMO_INTERFACE();
+    commo_tick(&s_ctx);
     LONGS_EQUAL(0, commo_hal_stub_tx_count());   // nothing transmitted yet
-    BYTES_EQUAL(COMMO_BUSY, SEND_STRING_READY()); // SM still in TX path
+    CHECK_FALSE(commo_send_ready(&s_ctx));        // SM still in TX path
 
     // Strobe clears → TX completes
     commo_hal_stub_set_data_low(0);
-    COMMO_INTERFACE();   // transmit 0xA5
-    COMMO_INTERFACE();   // transmit checksum
+    commo_tick(&s_ctx);   // transmit 0xA5
+    commo_tick(&s_ctx);   // transmit checksum
     LONGS_EQUAL(2, commo_hal_stub_tx_count());
     BYTES_EQUAL(0xA5, commo_hal_stub_tx_byte(0));
 }
@@ -377,22 +387,26 @@ TEST(CommoExtended, RapidFireDuplicateOpcodes)
     uint8_t play[2] = { 0x09, 0 };  // PLAY_OPC, len=1
     play[1] = ts_checksum_of(play, 1);
 
+    commo_cmd_t cmd;
     ts_drive_packet(play, 2);
-    BYTES_EQUAL(COMMO_NEW_COMMAND, NEW_CMD_RECEIVED());
+    CHECK(commo_cmd_pending(&s_ctx, &cmd));
+    LONGS_EQUAL(COMMO_CMD_NEW, cmd.status);
 
-    // Second identical command without FREE_CMD_BUFFER
+    // Second identical command without commo_cmd_consumed
     ts_drive_packet(play, 2);
-    BYTES_EQUAL(COMMO_SAME_COMMAND, NEW_CMD_RECEIVED());
-    BYTES_EQUAL(0x09, GET_BUFFER(0));
+    CHECK(commo_cmd_pending(&s_ctx, &cmd));
+    LONGS_EQUAL(COMMO_CMD_SAME, cmd.status);
+    BYTES_EQUAL(0x09, cmd.bytes[0]);
 
     // Third command: SM is still functional
     // 0x03 = STOP_OPC (nibble 3, cmd_length 1 — single-byte command)
     uint8_t stop[2] = { 0x03, 0 };
     stop[1] = ts_checksum_of(stop, 1);
-    FREE_CMD_BUFFER();
+    commo_cmd_consumed(&s_ctx);
     ts_drive_packet(stop, 2);
-    BYTES_EQUAL(COMMO_NEW_COMMAND, NEW_CMD_RECEIVED());
-    BYTES_EQUAL(0x03, GET_BUFFER(0));
+    CHECK(commo_cmd_pending(&s_ctx, &cmd));
+    LONGS_EQUAL(COMMO_CMD_NEW, cmd.status);
+    BYTES_EQUAL(0x03, cmd.bytes[0]);
 }
 
 // Test 17: Rapid /RESET bounces must each bring the SM back to IDLE cleanly.
@@ -402,24 +416,27 @@ TEST(CommoExtended, ResetLineBounce)
     // Bounce 1: send a valid command, then reset mid-reception
     uint8_t pkt[2] = { 0x03, 0 };
     pkt[1] = ts_checksum_of(pkt, 1);
+    commo_cmd_t cmd;
     ts_drive_packet(pkt, 2);
-    BYTES_EQUAL(COMMO_NEW_COMMAND, NEW_CMD_RECEIVED());
+    CHECK(commo_cmd_pending(&s_ctx, &cmd));
+    LONGS_EQUAL(COMMO_CMD_NEW, cmd.status);
 
     // Simulate /RESET (re-init the SM) — SM must be back in idle state
-    COMMO_INIT(); commo_hal_stub_reset();
-    BYTES_EQUAL(COMMO_READY_WITHOUT_ERROR, SEND_STRING_READY());
-    BYTES_EQUAL(COMMO_NO_COMMAND, NEW_CMD_RECEIVED());
+    commo_init(&s_ctx); commo_hal_stub_reset();
+    CHECK(commo_send_ready(&s_ctx));
+    CHECK_FALSE(commo_cmd_pending(&s_ctx, &cmd));
 
     // Bounce 2: same after a failed command
     uint8_t bad[2] = { 0x03, 0x00 };
     ts_drive_packet(bad, 2);
-    COMMO_INIT(); commo_hal_stub_reset();
-    BYTES_EQUAL(COMMO_READY_WITHOUT_ERROR, SEND_STRING_READY());
-    BYTES_EQUAL(COMMO_NO_COMMAND, NEW_CMD_RECEIVED());
+    commo_init(&s_ctx); commo_hal_stub_reset();
+    CHECK(commo_send_ready(&s_ctx));
+    CHECK_FALSE(commo_cmd_pending(&s_ctx, &cmd));
 
     // After both bounces a fresh command arrives cleanly
     ts_drive_packet(pkt, 2);
-    BYTES_EQUAL(COMMO_NEW_COMMAND, NEW_CMD_RECEIVED());
+    CHECK(commo_cmd_pending(&s_ctx, &cmd));
+    LONGS_EQUAL(COMMO_CMD_NEW, cmd.status);
 }
 
 // Test 18: Non-BCD parameter byte (e.g. track 0x1A) is accepted by the COMMO
@@ -432,9 +449,11 @@ TEST(CommoExtended, InvalidBcdTrackSeek)
     pkt[2] = ts_checksum_of(pkt, 2);
     ts_drive_packet(pkt, 3);
     // COMMO SM accepts the byte — it's not the SM's job to validate BCD
-    BYTES_EQUAL(COMMO_NEW_COMMAND, NEW_CMD_RECEIVED());
-    BYTES_EQUAL(0x05, GET_BUFFER(0));
-    BYTES_EQUAL(0x1A, GET_BUFFER(1));
+    commo_cmd_t cmd;
+    CHECK(commo_cmd_pending(&s_ctx, &cmd));
+    LONGS_EQUAL(COMMO_CMD_NEW, cmd.status);
+    BYTES_EQUAL(0x05, cmd.bytes[0]);
+    BYTES_EQUAL(0x1A, cmd.bytes[1]);
 }
 
 // Test 19: 100 synthesized STATUS packets (varying payload byte 2) must all
@@ -442,17 +461,17 @@ TEST(CommoExtended, InvalidBcdTrackSeek)
 TEST(CommoExtended, StatusPacketChecksumInvariant)
 {
     for (int i = 0; i < 100; i++) {
-        COMMO_INIT(); commo_hal_stub_reset();
+        commo_init(&s_ctx); commo_hal_stub_reset();
         uint8_t pkt[15];
         memset(pkt, 0, sizeof(pkt));
         pkt[0] = 0x00;
         pkt[2] = (uint8_t)(i & 0xFF);   // vary status byte
 
-        SEND_STRING(SEND_STRING_COMPLETE, pkt, 15);
+        CHECK(commo_send(&s_ctx, pkt, 15, COMMO_SEND_COMPLETE));
         commo_hal_stub_set_data_low(0);
-        COMMO_INTERFACE();
-        for (int j = 0; j < 15; j++) COMMO_INTERFACE();
-        COMMO_INTERFACE();
+        commo_tick(&s_ctx);
+        for (int j = 0; j < 15; j++) commo_tick(&s_ctx);
+        commo_tick(&s_ctx);
 
         uint8_t sum = 0;
         for (int j = 0; j < 16; j++) sum += commo_hal_stub_tx_byte(j);
@@ -466,15 +485,15 @@ TEST(CommoExtended, StatusPacketChecksumInvariant)
 TEST(CommoExtended, PathA_BusySquelch)
 {
     uint8_t tx = 0xC0;
-    SEND_STRING(SEND_STRING_COMPLETE, &tx, 1);
+    CHECK(commo_send(&s_ctx, &tx, 1, COMMO_SEND_COMPLETE));
     commo_hal_stub_set_data_low(0);
-    COMMO_INTERFACE();   // IDLE → TXD_DATA (Path A now active)
+    commo_tick(&s_ctx);   // IDLE → TXD_DATA (Path A now active)
 
     // Host drives data_low=1 (tries to send a command); TX is blocked
     commo_hal_stub_set_data_low(1);
-    COMMO_INTERFACE();
+    commo_tick(&s_ctx);
     LONGS_EQUAL(0, commo_hal_stub_tx_count());  // TX byte not sent — path is occupied
-    BYTES_EQUAL(COMMO_BUSY, SEND_STRING_READY()); // still in TX path
+    CHECK_FALSE(commo_send_ready(&s_ctx));       // still in TX path
 }
 
 // =============================================================================

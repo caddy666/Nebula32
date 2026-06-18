@@ -7,7 +7,6 @@ CFLAGS  = -std=c11 -Wall -Wextra -Werror -O2 -D_GNU_SOURCE \
           -MMD -MP \
           -I../stubs \
           -I../../include \
-          -I../../upstream/include \
           -DSECTOR_BUFFER_COUNT=8 \
           -DMAX_TRACKS=99 \
           -DMAX_PATH_LEN=256 \
@@ -18,8 +17,7 @@ CXXFLAGS = -std=c++14 -Wall -Wextra -Werror -O2 -D_GNU_SOURCE \
            -MMD -MP \
            -I../stubs \
            -I../../include \
-           -I../../upstream/include \
-           -I/usr/include \
+            -I/usr/include \
            -DSECTOR_BUFFER_COUNT=8 \
            -DMAX_TRACKS=99 \
            -DMAX_PATH_LEN=256 \
@@ -34,8 +32,7 @@ WARN_FLAGS = -std=c11 -Wall -Wextra -Werror \
              -D_GNU_SOURCE \
              -I../stubs \
              -I../../include \
-             -I../../upstream/include \
-             -DSECTOR_BUFFER_COUNT=8 \
+                -DSECTOR_BUFFER_COUNT=8 \
              -DMAX_TRACKS=99 \
              -DMAX_PATH_LEN=256 \
              -DBUILD_WITH_COMMO=0
@@ -47,8 +44,8 @@ WARN_SRCS = \
     ../../src/fft.c \
     ../../src/vis_audio.c \
     ../../src/sector_cache.c \
-    ../../upstream/utils/maths.c \
-    ../../upstream/core/commo.c
+    ../../src/maths.c \
+    ../../src/commo.c
 
 SRCS_C = \
     ../../src/ecc.c \
@@ -56,8 +53,8 @@ SRCS_C = \
     ../../src/fft.c \
     ../../src/vis_audio.c \
     ../../src/sector_cache.c \
-    ../../upstream/utils/maths.c \
-    ../../upstream/core/commo.c \
+    ../../src/maths.c \
+    ../../src/commo.c \
     commo_hal_stub.c \
     disc_image_stub.c
 
@@ -113,7 +110,6 @@ WEBSERVER_TEST_CFLAGS = -std=c11 -O2 -D_GNU_SOURCE \
     -MMD -MP \
     -I../stubs \
     -I../../include \
-    -I../../upstream/include \
     -DSECTOR_BUFFER_COUNT=8 \
     -DMAX_TRACKS=99 \
     -DMAX_PATH_LEN=256 \
@@ -163,10 +159,10 @@ cppcheck:
 	  cppcheck --error-exitcode=1 --enable=all \
 	    --suppress=missingIncludeSystem \
 	    --suppress=unusedFunction \
-	    -I../../include -I../../upstream/include \
+	    -I../../include \
 	    -DSECTOR_BUFFER_COUNT=8 -DMAX_TRACKS=99 \
 	    -DMAX_PATH_LEN=256 -DBUILD_WITH_COMMO=0 \
-	    ../../src/ ../../upstream/utils/; \
+	    ../../src/ ; \
 	  echo "[cppcheck] OK"; \
 	else \
 	  echo "[cppcheck] skipped — not installed (apt install cppcheck)"; \
@@ -201,13 +197,13 @@ TSAN = -fsanitize=thread
 
 STRESS_CFLAGS = -std=c11 -Wall -Wextra -O1 -D_GNU_SOURCE \
                 -MMD -MP \
-                -I../stubs -I../../include -I../../upstream/include \
+                -I../stubs -I../../include \
                 -DSECTOR_BUFFER_COUNT=8 -DMAX_TRACKS=99 -DMAX_PATH_LEN=256 \
                 -DBUILD_WITH_COMMO=0 $(TSAN)
 
 STRESS_CXXFLAGS = -std=c++14 -Wall -Wextra -O1 -D_GNU_SOURCE \
                   -MMD -MP \
-                  -I../stubs -I../../include -I../../upstream/include \
+                  -I../stubs -I../../include \
                   -DSECTOR_BUFFER_COUNT=8 -DMAX_TRACKS=99 -DMAX_PATH_LEN=256 \
                   -DBUILD_WITH_COMMO=0 $(TSAN)
 
@@ -258,8 +254,7 @@ PARSER_CFLAGS = -std=c11 -Wall -Wextra -O2 -D_GNU_SOURCE \
                 -I. \
                 -I../stubs \
                 -I../../include \
-                -I../../upstream/include \
-                -DSECTOR_BUFFER_COUNT=8 -DMAX_TRACKS=99 \
+                      -DSECTOR_BUFFER_COUNT=8 -DMAX_TRACKS=99 \
                 -DMAX_PATH_LEN=256 -DBUILD_WITH_COMMO=0 \
                 $(UBSAN)
 
@@ -268,8 +263,7 @@ PARSER_CXXFLAGS = -std=c++14 -Wall -Wextra -O2 -D_GNU_SOURCE \
                   -I. \
                   -I../stubs \
                   -I../../include \
-                  -I../../upstream/include \
-                  -I/usr/include \
+                          -I/usr/include \
                   -DSECTOR_BUFFER_COUNT=8 -DMAX_TRACKS=99 \
                   -DMAX_PATH_LEN=256 -DBUILD_WITH_COMMO=0 \
                   $(UBSAN)
@@ -286,7 +280,7 @@ parser_ecc.o: ../../src/ecc.c
 parser_subcode.o: ../../src/subcode.c
 	$(CC) $(PARSER_CFLAGS) -c $< -o $@
 
-parser_maths.o: ../../upstream/utils/maths.c
+parser_maths.o: ../../src/maths.c
 	$(CC) $(PARSER_CFLAGS) -c $< -o $@
 
 parser_fatfs_sim.o: fatfs_sim.c
@@ -318,8 +312,7 @@ VDISC_CFLAGS = -std=c11 -Wall -Wextra -O2 -D_GNU_SOURCE \
                -I. \
                -I../stubs \
                -I../../include \
-               -I../../upstream/include \
-               -DSECTOR_BUFFER_COUNT=8 -DMAX_TRACKS=99 \
+                    -DSECTOR_BUFFER_COUNT=8 -DMAX_TRACKS=99 \
                -DMAX_PATH_LEN=256 -DBUILD_WITH_COMMO=0 \
                $(UBSAN)
 
@@ -328,8 +321,7 @@ VDISC_CXXFLAGS = -std=c++14 -Wall -Wextra -O2 -D_GNU_SOURCE \
                  -I. \
                  -I../stubs \
                  -I../../include \
-                 -I../../upstream/include \
-                 -I/usr/include \
+                        -I/usr/include \
                  -DSECTOR_BUFFER_COUNT=8 -DMAX_TRACKS=99 \
                  -DMAX_PATH_LEN=256 -DBUILD_WITH_COMMO=0 \
                  $(UBSAN)
@@ -346,7 +338,7 @@ vdisc_ecc.o: ../../src/ecc.c
 vdisc_subcode.o: ../../src/subcode.c
 	$(CC) $(VDISC_CFLAGS) -c $< -o $@
 
-vdisc_maths.o: ../../upstream/utils/maths.c
+vdisc_maths.o: ../../src/maths.c
 	$(CC) $(VDISC_CFLAGS) -c $< -o $@
 
 vdisc_sim.o: vdisc_sim.c

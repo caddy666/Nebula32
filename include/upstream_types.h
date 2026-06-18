@@ -39,8 +39,7 @@
 
 
 // ---------------------------------------------------------------------------
-// Pull in the upstream type definitions
-// Bare includes resolve via upstream/include in CMakeLists include_directories
+// Pull in the cd32_pico type definitions (headers live in include/)
 // ---------------------------------------------------------------------------
 #include "defs.h"      // cd_time_t, byte, opcodes, process states
 #include "serv_def.h"  // servo states, CXD2500 mode constants

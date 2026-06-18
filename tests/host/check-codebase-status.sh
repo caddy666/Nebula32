@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # check-codebase-status.sh — verify every tracked source file has a row in the
 # CLAUDE.md "Codebase status" table.
-# Checks: src/*.c, src/*.cpp, upstream/core/*.c, upstream/utils/*.c
+# Checks: src/*.c, src/*.cpp
 # Exits non-zero and lists offenders if any are missing.
 # Usage: ./check-codebase-status.sh
 set -euo pipefail
@@ -19,7 +19,7 @@ for m in re.findall(r'\x60([^\x60]+\.(c|cpp))\x60', text):
 " "$CLAUDE_MD" | sort -u)
 
 errors=0
-for f in src/*.c src/*.cpp upstream/core/*.c upstream/utils/*.c; do
+for f in src/*.c src/*.cpp; do
     [[ -f "$f" ]] || continue
     rel="${f#./}"
     if ! echo "$doc_files" | grep -qF "$rel"; then
