@@ -67,20 +67,20 @@ SUB lines. The COMMO 3-wire bus is the command/status channel.
 | 9    | M17SINE       | IN     | 5    | 16.9344 MHz ref (GPIN0) |
 | 10   | ACTIVE        | OUT    | 24   | Drive active/spinning |
 | 11   | DOOR          | IN     | 26   | Door/tray switch (active-low) |
-| 12   | (compat)      | IN     | —    | Upstream SCOR IRQ compat; never fires |
+| 12   | ENC_A         | IN     | —    | Rotary encoder quadrature A (direct GPIO, pull-up) |
 | 13   | PASSIVE       | OUT    | 23   | Drive passive/standby |
 | 14   | RESET         | IN     | 7    | Active-low /RESET from CD32 |
-| 15   | (free)        | —      | —    | Spare GPIO |
+| 15   | ENC_B         | IN     | —    | Rotary encoder quadrature B (direct GPIO, pull-up) |
 | 16   | UART0_TX      | OUT    | —    | Debug serial TX (stdio mirror) |
 | 17   | UART0_RX      | IN     | —    | Debug serial RX |
-| 18   | (free)        | —      | —    | Spare GPIO |
-| 19   | (free)        | —      | —    | Spare GPIO |
+| 18   | ENC_SW        | IN     | —    | Encoder push-button (active-low, pull-up) |
+| 19   | ENC_LOG       | IN     | —    | Logger toggle button (active-low, pull-up) |
 | 20   | UART1_TX      | OUT    | —    | Auxiliary serial TX |
 | 21   | UART1_RX      | IN     | —    | Auxiliary serial RX |
 | 22   | (free)        | —      | —    | Spare GPIO |
 | 23   | WL_ON         | OUT    | —    | WiFi RM2 power/enable |
 | 24   | WL_DIN        | OUT    | —    | WiFi RM2 SPI MOSI |
-| 25   | WL_CS         | —      | —    | WiFi RM2 SPI CS / blue LED (CYW43439) |
+| 25   | WL_CS         | OUT    | —    | WiFi RM2 SPI chip-select. NB: the blue "LED" is the CYW43439's *internal* GPIO driven via cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN); GPIO25 itself is purely the WiFi SPI CS — do not toggle it directly |
 | 26   | (free)        | —      | —    | Spare GPIO (formerly MCP23017 SDA) |
 | 27   | (free)        | —      | —    | Spare GPIO (formerly MCP23017 SCL) |
 | 28   | (free)        | —      | —    | Spare GPIO |
