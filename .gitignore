@@ -6,10 +6,12 @@
 *.hex
 *.dis
 *.o
-*.vscode/
+.vscode/
+.planning
+*.MD
+*.md
 
-CLAUDE.MD
-
+.
 # CMake build system
 CMakeCache.txt
 CMakeFiles/
