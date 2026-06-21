@@ -176,6 +176,11 @@ static bool is_uf2_file(const char *name) {
     return len > 4 && strcasecmp(name + len - 4, ".uf2") == 0;
 }
 
+static bool is_m3u_file(const char *name) {
+    size_t len = strlen(name);
+    return len > 4 && strcasecmp(name + len - 4, ".m3u") == 0;
+}
+
 uint32_t sd_scan_uf2_files(char paths[][MAX_PATH_LEN], uint32_t max_count,
                            const char *base_dir, uint32_t offset) {
     if (!s_mounted) return 0;
@@ -221,5 +226,38 @@ uint32_t sd_count_uf2_files(const char *base_dir) {
     }
 
     f_closedir(&dir);
+    return count;
+}
+
+// Scan base_dir for .m3u playlist files (default "0:/playlists/").  Same
+// alphabetical-sort + paging contract as sd_scan_images/sd_scan_uf2_files so
+// the web playlist list and any future console list share stable indices.
+// A missing playlists directory yields 0 (degrades to an empty list, not error).
+uint32_t sd_scan_m3u_files(char paths[][MAX_PATH_LEN], uint32_t max_count,
+                           const char *base_dir, uint32_t offset) {
+    if (!s_mounted) return 0;
+    if (!base_dir || base_dir[0] == '\0') base_dir = "0:/playlists/";
+
+    DIR      dir;
+    FILINFO  fno;
+    uint32_t skipped = 0;
+    uint32_t count   = 0;
+
+    if (f_opendir(&dir, base_dir) != FR_OK) return 0;
+
+    while (count < max_count) {
+        if (f_readdir(&dir, &fno) != FR_OK || fno.fname[0] == '\0') break;
+        if (fno.fattrib & AM_DIR) continue;
+        if (!is_m3u_file(fno.fname)) continue;
+        if (skipped < offset) { skipped++; continue; }
+        snprintf(paths[count], MAX_PATH_LEN, "%s%s", base_dir, fno.fname);
+        count++;
+    }
+
+    f_closedir(&dir);
+
+    if (count > 1)
+        qsort(paths, (size_t)count, sizeof(paths[0]), _path_cmp);
+
     return count;
 }

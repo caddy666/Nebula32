@@ -1,1 +1,0 @@
-include(inky73.cmake)

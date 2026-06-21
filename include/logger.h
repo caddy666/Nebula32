@@ -108,7 +108,15 @@ typedef struct {
     char     wifi_password[64]; // WiFi password
     char     wifi_hostname[32]; // mDNS hostname (default "nebula32")
     char     fw_token[33];      // 32-char hex token required by /api/fw/flash/
+    uint32_t playlist_save_ms;  // Debounce before a playlist-menu choice is
+                                // persisted to flash (ms). 0 = save immediately.
+                                // Default 1500; clamped to <= 60000.
 } logger_config_t;
+
+// Upper bound for playlist_save_ms (sanity clamp on the parsed value).
+#define PLAYLIST_SAVE_MS_MAX   60000u
+// Default debounce when the key is absent from nebula32.cfg.
+#define PLAYLIST_SAVE_MS_DEFAULT  1500u
 
 // ---------------------------------------------------------------------------
 // Log ring buffer constants

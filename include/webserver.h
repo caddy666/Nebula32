@@ -131,3 +131,10 @@ bool webserver_has_page_request(void);
 // Only valid immediately after webserver_has_page_request() returns true.
 int webserver_get_page_delta(void);
 
+// Pending carousel/playlist requests (Phase 3b).  Consumed in the main loop —
+// the swap/activation runs there, never in the lwIP callback.
+bool        webserver_has_carousel_request(void);  // test-and-clear
+int         webserver_get_carousel_delta(void);    // +1 next, -1 prev
+bool        webserver_has_playlist_request(void);  // test-and-clear
+const char *webserver_get_playlist_name(void);     // "" = all discs
+

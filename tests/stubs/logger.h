@@ -22,11 +22,15 @@ typedef struct {
     char     wifi_password[64];
     char     wifi_hostname[32];
     char     fw_token[33];
+    uint32_t playlist_save_ms;
 } logger_config_t;
+
+#define PLAYLIST_SAVE_MS_MAX      60000u
+#define PLAYLIST_SAVE_MS_DEFAULT  1500u
 
 static logger_config_t _stub_logger_cfg = {
     false, true, false, true, true, true, false, 4096,
-    "0:/", "", "", "nebula32", ""
+    "0:/", "", "", "nebula32", "", PLAYLIST_SAVE_MS_DEFAULT
 };
 
 static inline bool                   logger_init(void)          { return false; }

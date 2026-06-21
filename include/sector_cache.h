@@ -39,6 +39,7 @@ typedef struct {
     uint32_t       slot_count;     // SECTOR_BUFFER_COUNT (SRAM) or larger (PSRAM)
     uint32_t       next_fetch_lba; // LBA the prefetch thread will fetch next
     uint32_t       flush_gen;      // Incremented on flush; Core 1 discards stale reads
+    uint32_t       next_write_slot;// Round-robin write pointer (avoids slot-0 hotspot)
     disc_image_t  *disc;           // Pointer to the open disc image
     sector_mode_t  sector_mode;    // Current mode (controls sector size)
 } sector_cache_t;

@@ -6,6 +6,12 @@
 prefetch stalls. OpenOCD is only useful for inspecting *configuration* (registers, mux state)
 and post-failure forensics — not for testing anything that runs in real time.
 
+**For source-level gdb stepping** (boot / SD / web / UI / config logic — anything *not*
+real-time), build with `./build.sh core2350b --debug` → `build-core2350b-debug/Nebula32.uf2`,
+compiled `-Og -g3` so locals stay live and line tables are clean. The default `-O2` build is
+debuggable too (full DWARF is present) but stepping is jumpy and locals show `<optimized out>`.
+The watchdog is `pause_on_debug=1` (main.c), so a breakpoint won't trigger the 10 s reset.
+
 **UART1 (GPIO 20/21) is the bigger win.** The firmware keeps running, the CD32 stays happy, and
 a Pi or FTDI dongle on GPIO 20/21 reads structured pass/fail lines. USB CDC cannot do this —
 the CD32 has no USB host, so any test that requires the device to be connected to a real CD32
@@ -43,7 +49,7 @@ can only report results over UART1.
 | SD mount + image list populated | `selftest.c` covers mount; image count not checked | Extend selftest: print `s_total_count` via UART1 |
 | Sector cache keeps up at 1× speed | `SdStallSim` is stochastic; real SD latency unknown | UART1: count `sector_cache_get()` misses over 60 s of play |
 | PSRAM available + allocations succeed | No host test for QMI hardware init | UART1: `psram_available()` + `psram_alloc(4096)` must be non-NULL |
-| I2C1 bus live, MCP23017 ACKs at 0x20 | Rotary logic tested only via MCP23017 lib | `selftest.c`: `i2c_read_blocking(i2c1, 0x20, ...)` — NACK = absent |
+| Rotary encoder wired (direct GPIO 12/15/18/19) | `rotary_gpio.c` decode tested only via host logic, never the pins | `selftest.c`: assert ENC_A/ENC_B/ENC_SW read high with internal pull-ups idle; toggle the knob and watch the edge-IRQ count move |
 | WiFi CYW43 brings up on GPIO 23/24/25/29 | No unit test touches CYW43 | UART1: `cyw43_arch_init()` return code logged at boot |
 | GPIO mux assigned correctly after remap | CMakeLists sets compile-defs; nobody reads IO_BANK0 CTRL | OpenOCD: GPIO 16 CTRL (0x40014040) → GPIO_FUNC_UART = 2 |
 
@@ -112,10 +118,11 @@ TEST_ASSERT(gpio_get_function(PIN_IF_DIR)  == GPIO_FUNC_PIO1, "GPIO46 mux = PIO1
 // UART0 debug on GPIO 16
 TEST_ASSERT(gpio_get_function(PIN_UART0_TX) == GPIO_FUNC_UART, "GPIO16 mux = UART");
 
-// I2C1 bus: MCP23017 ACKs at 0x20
-uint8_t dummy;
-int rc = i2c_read_blocking(i2c1, MCP23017_I2C_ADDR, &dummy, 1, false);
-TEST_ASSERT(rc >= 0, "MCP23017 ACKs on I2C1 (GPIO 26/27)");
+// Rotary encoder: direct GPIO (the MCP23017 I2C expander was removed in the
+// Core2350B0 port — src/rotary_gpio.c drives GPIO 12/15/18/19 directly).
+TEST_ASSERT(gpio_get_function(PIN_ENC_A)  == GPIO_FUNC_SIO, "GPIO12 (ENC_A) = SIO");
+TEST_ASSERT(gpio_get_function(PIN_ENC_SW) == GPIO_FUNC_SIO, "GPIO18 (ENC_SW) = SIO");
+TEST_ASSERT(gpio_get(PIN_ENC_SW), "ENC_SW idle-high (pull-up engaged)");
 
 // PSRAM
 TEST_ASSERT(psram_available(), "PSRAM initialised (GPIO 47 QMI CS1)");

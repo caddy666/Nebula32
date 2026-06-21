@@ -32,7 +32,6 @@
 #include "pico/stdlib.h"
 #include "hardware/clocks.h"
 #include "hardware/gpio.h"
-#include "hardware/i2c.h"
 #include "hardware/pio.h"
 
 #include <stdio.h>
@@ -95,9 +94,11 @@ static void test_gpio_mux(void) {
     TEST_ASSERT(gpio_get_function(PIN_UART1_TX) == GPIO_FUNC_UART, "GPIO20 (UART1_TX)   = UART");
     TEST_ASSERT(gpio_get_function(PIN_UART1_RX) == GPIO_FUNC_UART, "GPIO21 (UART1_RX)   = UART");
 
-    // MCP23017 I2C1 (GPIO 26/27 — moved from I2C0/GPIO 28-29)
-    TEST_ASSERT(gpio_get_function(PIN_MCP23017_SDA) == GPIO_FUNC_I2C, "GPIO26 (MCP_SDA)    = I2C");
-    TEST_ASSERT(gpio_get_function(PIN_MCP23017_SCL) == GPIO_FUNC_I2C, "GPIO27 (MCP_SCL)    = I2C");
+    // Direct GPIO rotary encoder (GPIO 12, 15, 18, 19) — all SIO plain inputs
+    TEST_ASSERT(gpio_get_function(PIN_ENC_A)   == GPIO_FUNC_SIO, "GPIO12 (ENC_A)      = SIO (input)");
+    TEST_ASSERT(gpio_get_function(PIN_ENC_B)   == GPIO_FUNC_SIO, "GPIO15 (ENC_B)      = SIO (input)");
+    TEST_ASSERT(gpio_get_function(PIN_ENC_SW)  == GPIO_FUNC_SIO, "GPIO18 (ENC_SW)     = SIO (input)");
+    TEST_ASSERT(gpio_get_function(PIN_ENC_LOG) == GPIO_FUNC_SIO, "GPIO19 (ENC_LOG)    = SIO (input)");
 
     // SDIO 4-bit (GPIO 30-35 via PIO1 — library uses pio_claim_unused_sm on PIO1)
     TEST_ASSERT(gpio_get_function(PIN_SDIO_CLK) == GPIO_FUNC_PIO1, "GPIO30 (SDIO_CLK)   = PIO1");
@@ -179,17 +180,17 @@ static void test_psram(void) {
 }
 
 // ---------------------------------------------------------------------------
-// Test 5: I2C1 bus — MCP23017 rotary encoder ACKs (GPIO 26/27)
+// Test 5: Direct GPIO encoder — pull-up integrity (GPIO 12/15/18/19)
 // ---------------------------------------------------------------------------
-static void test_i2c1_bus(void) {
-    TEST_SECTION("I2C1 Bus (MCP23017 @ 0x20)");
-    uint8_t dummy = 0;
-    // i2c1 must be initialised before selftest_run() is called.
-    // NACK (rc < 0) means the MCP23017 is absent or not wired — soft fail.
-    int rc = i2c_read_blocking(i2c1, MCP23017_I2C_ADDR, &dummy, 1, false);
-    printf("         i2c_read_blocking(i2c1, 0x%02X) = %d\n",
-           MCP23017_I2C_ADDR, rc);
-    TEST_ASSERT(rc >= 0, "MCP23017 ACKs on I2C1 (GPIO 26/27)");
+static void test_encoder_gpio(void) {
+    TEST_SECTION("Encoder GPIO (direct — no MCP23017)");
+    // rotary_init() enables pull-ups on all four pins.  With nothing pressing
+    // the encoder or button, each pin should read high.  A low reading means
+    // either a short to GND or a missing pull-up.
+    TEST_ASSERT(gpio_get(PIN_ENC_A),   "GPIO12 (ENC_A)   reads high (pull-up OK)");
+    TEST_ASSERT(gpio_get(PIN_ENC_B),   "GPIO15 (ENC_B)   reads high (pull-up OK)");
+    TEST_ASSERT(gpio_get(PIN_ENC_SW),  "GPIO18 (ENC_SW)  reads high (pull-up OK)");
+    TEST_ASSERT(gpio_get(PIN_ENC_LOG), "GPIO19 (ENC_LOG) reads high (pull-up OK)");
 }
 
 // ---------------------------------------------------------------------------
@@ -295,7 +296,7 @@ bool selftest_run(void) {
     test_gpio_mux();
     test_pio_config();
     test_psram();
-    test_i2c1_bus();
+    test_encoder_gpio();
     test_sd_card();
     // GPIO pull integrity MUST run last: reconfigures GPIO 0-8 as SW inputs,
     // overriding PIO0 ownership.  Power-cycle required to restore normal DA output.

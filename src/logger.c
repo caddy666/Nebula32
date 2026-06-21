@@ -53,6 +53,7 @@ static logger_config_t s_cfg = {
     .wifi_password   = "",
     .wifi_hostname   = "nebula32",
     .fw_token        = "",
+    .playlist_save_ms = PLAYLIST_SAVE_MS_DEFAULT,
 };
 
 // Ring buffer for deferred SD card writes
@@ -133,6 +134,13 @@ static void parse_settings_file(void) {
                 "log_errors      = 1\n"
                 "log_irq         = 0\n"
                 "log_max_kb      = 4096\n"
+                "#\n"
+                "# --- Carousel / playlists ---\n"
+                "# playlist_save_ms: delay in MILLISECONDS (the _ms suffix) to wait\n"
+                "# after the last playlist-menu step before saving the choice to\n"
+                "# flash. Spinning the knob fast coalesces into one write.\n"
+                "# Value is in ms: 1500 = 1.5 seconds. 0 = save immediately; max 60000.\n"
+                "playlist_save_ms = 1500\n"
                 "#\n"
                 "# --- WiFi ---\n"
                 "# Leave wifi_ssid blank to disable the web interface.\n"
@@ -216,6 +224,12 @@ static void parse_settings_file(void) {
         } else if (strcasecmp(key, "fw_token") == 0) {
             strncpy(s_cfg.fw_token, val, sizeof(s_cfg.fw_token) - 1);
             s_cfg.fw_token[sizeof(s_cfg.fw_token) - 1] = '\0';
+        } else if (strcasecmp(key, "playlist_save_ms") == 0) {
+            // Negative → treat as 0 (save immediately); cap to the sanity max so
+            // a typo can't park a playlist choice unsaved for minutes.
+            long ms = (val[0] == '-') ? 0 : atol(val);
+            if (ms > (long)PLAYLIST_SAVE_MS_MAX) ms = (long)PLAYLIST_SAVE_MS_MAX;
+            s_cfg.playlist_save_ms = (uint32_t)ms;
         }
         // Unknown keys are silently ignored
     }

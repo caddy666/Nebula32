@@ -40,6 +40,7 @@
 //               Some cards and boards support 50 MHz (high-speed mode).
 //               Reduce to 10 MHz if you see CRC errors during mount.
 // ---------------------------------------------------------------------------
+/* [anchor:sdio_pins] */
 static sd_sdio_if_t sdio_if = {
     .CLK_gpio  = 30,            // SDIO clock  (D0−2; SDIO PIO mod-32 constraint)
     .CMD_gpio  = 31,            // SDIO command (D0−1)
@@ -80,6 +81,7 @@ static sd_card_t sd_cards[] = {
 // ---------------------------------------------------------------------------
 // "0:/" → physical drive 0, partition 1  (disc images, config, cover art)
 // "1:/" → physical drive 0, partition 2  (virtual CD-ROM content, max 650 MB)
+/* [anchor:partition_map] */
 PARTITION VolToPart[] = {
     {0, 1},
     {0, 2},

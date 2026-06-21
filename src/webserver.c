@@ -125,6 +125,14 @@ static volatile bool s_page_request = false;
 static volatile int  s_page_delta   = 0;   // +1 = next, -1 = prev
 
 // ---------------------------------------------------------------------------
+// Pending carousel / playlist request from web interface (Phase 3b)
+// ---------------------------------------------------------------------------
+static volatile bool s_carousel_request  = false;
+static volatile int  s_carousel_delta    = 0;   // +1 = next, -1 = prev
+static volatile bool s_playlist_request  = false;
+static char          s_playlist_name[32] = {0}; // "" = all discs
+
+// ---------------------------------------------------------------------------
 // Current page position (set by main.c via webserver_set_page_info)
 // ---------------------------------------------------------------------------
 static uint32_t s_ws_page_offset = 0;
@@ -627,6 +635,30 @@ static char *build_html_page(void) {
              has_next ? "" : "disabled");
     }
 
+    // Carousel / playlist controls (Phase 3b polish)
+    HCAT("<details open style='margin:12px 0;padding:10px;background:#16213e;"
+         "border:1px solid #0f3460;border-radius:8px;'>"
+         "<summary style='cursor:pointer;color:#e94560;font-weight:bold;"
+         "user-select:none'>&#127925; Carousel &amp; Playlists</summary>"
+         "<div style='margin-top:10px;display:flex;gap:8px;align-items:center;"
+         "flex-wrap:wrap;'>"
+         "<button onclick='carousel(-1)' style='padding:6px 12px;background:#0f3460;"
+         "color:#fff;border:none;border-radius:4px;cursor:pointer;'>"
+         "&#8592; Prev disc</button>"
+         "<button onclick='carousel(1)' style='padding:6px 12px;background:#0f3460;"
+         "color:#fff;border:none;border-radius:4px;cursor:pointer;'>"
+         "Next disc &#8594;</button>"
+         "<select id='pl-sel' style='flex:1;min-width:120px;padding:6px;"
+         "background:#1a1a2e;color:#e0e0e0;border:1px solid #0f3460;"
+         "border-radius:4px;'>"
+         "<option value=''>All discs</option>"
+         "</select>"
+         "<button onclick='setPlaylist()' style='padding:6px 12px;background:#e94560;"
+         "color:#fff;border:none;border-radius:4px;cursor:pointer;'>Apply</button>"
+         "</div>"
+         "<p id='pl-msg' style='margin:6px 0 0;font-size:.85em;color:#aaa;'></p>"
+         "</details>");
+
     // Firmware update section
     HCAT("<details style='margin:12px 0;padding:10px;background:#16213e;"
          "border:1px solid #0f3460;border-radius:8px;'>"
@@ -671,6 +703,37 @@ static char *build_html_page(void) {
          "    });"
          "  }})"
          "  .catch(e=>console.error(e));"
+         "}"
+         /* Carousel: advance to next/prev disc in the active carousel */
+         "function carousel(dir){"
+         "  fetch('/api/carousel/'+(dir>0?'next':'prev'),{method:'POST'})"
+         "  .then(function(r){return r.json();})"
+         "  .then(function(d){if(d.ok)setTimeout(function(){location.reload();},400);})"
+         "  .catch(function(e){console.error(e);});"
+         "}"
+         /* Playlist selector — populate from /api/playlist/list, no innerHTML */
+         "(function(){"
+         "var sel=document.getElementById('pl-sel');"
+         "fetch('/api/playlist/list').then(function(r){return r.json();})"
+         ".then(function(d){"
+         "  if(!d.playlists)return;"
+         "  d.playlists.forEach(function(p){"
+         "    var o=document.createElement('option');"
+         "    o.value=p;o.textContent=p;sel.appendChild(o);});"
+         "}).catch(function(){});"
+         "})();"
+         "function setPlaylist(){"
+         "  var name=document.getElementById('pl-sel').value;"
+         "  var msg=document.getElementById('pl-msg');"
+         "  var url=name===''?'/api/playlist/all':"
+         "    '/api/playlist/set/'+encodeURIComponent(name);"
+         "  msg.textContent='Switching…';"
+         "  fetch(url,{method:'POST'}).then(function(r){return r.json();})"
+         "  .then(function(d){"
+         "    msg.textContent=d.ok?('Active: '+(name||'all discs')):"
+         "      ('Error: '+(d.error||'unknown'));"
+         "    if(d.ok)setTimeout(function(){location.reload();},500);"
+         "  }).catch(function(){msg.textContent='No response.';});"
          "}"
          /* Firmware update helpers — safe DOM, no innerHTML */
          "(function(){"
@@ -941,6 +1004,80 @@ static void handle_request(struct tcp_pcb *pcb, http_conn_t *conn) {
         snprintf(conn->resp_buf, sizeof(conn->resp_buf),
             "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
             "Connection: close\r\n\r\n{\"ok\":true}");
+        wolfSSL_write(conn->ssl, conn->resp_buf, (int)strlen(conn->resp_buf));
+        return;
+    }
+
+    // ── POST /api/carousel/next | /api/carousel/prev ── advance the carousel
+    if (is_post && strcmp(path, "/api/carousel/next") == 0) {
+        s_carousel_delta = +1; s_carousel_request = true;
+        snprintf(conn->resp_buf, sizeof(conn->resp_buf),
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+            "Connection: close\r\n\r\n{\"ok\":true,\"direction\":\"next\"}");
+        wolfSSL_write(conn->ssl, conn->resp_buf, (int)strlen(conn->resp_buf));
+        return;
+    }
+    if (is_post && strcmp(path, "/api/carousel/prev") == 0) {
+        s_carousel_delta = -1; s_carousel_request = true;
+        snprintf(conn->resp_buf, sizeof(conn->resp_buf),
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+            "Connection: close\r\n\r\n{\"ok\":true,\"direction\":\"prev\"}");
+        wolfSSL_write(conn->ssl, conn->resp_buf, (int)strlen(conn->resp_buf));
+        return;
+    }
+
+    // ── POST /api/playlist/all ── switch carousel back to all discs
+    if (is_post && strcmp(path, "/api/playlist/all") == 0) {
+        s_playlist_name[0] = '\0';      // "" = all discs
+        s_playlist_request = true;
+        snprintf(conn->resp_buf, sizeof(conn->resp_buf),
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+            "Connection: close\r\n\r\n{\"ok\":true,\"source\":\"all\"}");
+        wolfSSL_write(conn->ssl, conn->resp_buf, (int)strlen(conn->resp_buf));
+        return;
+    }
+
+    // ── POST /api/playlist/set/{name} ── activate playlist <name>.m3u
+    // {name} becomes part of a file path (0:/playlists/<name>.m3u), so it is
+    // validated against path-traversal: no '/', '\\', or ".." and length-bounded.
+    if (is_post && strncmp(path, "/api/playlist/set/", 18) == 0) {
+        const char *name = path + 18;
+        size_t nlen = strlen(name);
+        bool safe = (nlen > 0 && nlen < sizeof(s_playlist_name) &&
+                     !strchr(name, '/') && !strchr(name, '\\') && !strstr(name, ".."));
+        if (!safe) {
+            snprintf(conn->resp_buf, sizeof(conn->resp_buf),
+                "HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\n"
+                "Connection: close\r\n\r\n{\"ok\":false,\"error\":\"bad name\"}");
+        } else {
+            snprintf(s_playlist_name, sizeof(s_playlist_name), "%s", name);
+            s_playlist_request = true;
+            snprintf(conn->resp_buf, sizeof(conn->resp_buf),
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+                "Connection: close\r\n\r\n{\"ok\":true}");
+        }
+        wolfSSL_write(conn->ssl, conn->resp_buf, (int)strlen(conn->resp_buf));
+        return;
+    }
+
+    // ── GET /api/playlist/list ── List .m3u playlists in 0:/playlists/
+    // Names are returned base-only (no dir, no ".m3u") so each maps directly to
+    // POST /api/playlist/set/{name}.  A missing playlists dir yields [].
+    if (is_get && strcmp(path, "/api/playlist/list") == 0) {
+        static char pl_paths[8][MAX_PATH_LEN];  // off the lwIP callback stack
+        uint32_t n = sd_scan_m3u_files(pl_paths, 8, "0:/playlists/", 0);
+        int pos = snprintf(conn->resp_buf, sizeof(conn->resp_buf),
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+            "Connection: close\r\n\r\n{\"playlists\":[");
+        for (uint32_t i = 0; i < n && pos < (int)sizeof(conn->resp_buf) - 4; i++) {
+            char base[MAX_PATH_LEN];
+            basename_no_ext(pl_paths[i], base, sizeof(base));
+            char esc[MAX_PATH_LEN * 2];
+            json_escape(esc, sizeof(esc), base);
+            pos += snprintf(conn->resp_buf + pos, sizeof(conn->resp_buf) - pos,
+                "%s\"%s\"", i ? "," : "", esc);
+        }
+        snprintf(conn->resp_buf + pos, sizeof(conn->resp_buf) - pos, "]}");
         wolfSSL_write(conn->ssl, conn->resp_buf, (int)strlen(conn->resp_buf));
         return;
     }
@@ -1351,6 +1488,20 @@ bool webserver_has_page_request(void) {
 
 int webserver_get_page_delta(void) { return s_page_delta; }
 
+bool webserver_has_carousel_request(void) {
+    if (s_carousel_request) { s_carousel_request = false; return true; }
+    return false;
+}
+
+int webserver_get_carousel_delta(void) { return s_carousel_delta; }
+
+bool webserver_has_playlist_request(void) {
+    if (s_playlist_request) { s_playlist_request = false; return true; }
+    return false;
+}
+
+const char *webserver_get_playlist_name(void) { return s_playlist_name; }
+
 #else // !PICO_CYW43_SUPPORTED — stub out the entire webserver for non-W builds
 
 bool webserver_init(void) { return false; }
@@ -1364,5 +1515,9 @@ void webserver_set_loaded_index(uint32_t index) { (void)index; }
 void webserver_set_page_info(uint32_t a, uint32_t b, uint32_t c) { (void)a;(void)b;(void)c; }
 bool webserver_has_page_request(void) { return false; }
 int  webserver_get_page_delta(void)   { return 0; }
+bool webserver_has_carousel_request(void) { return false; }
+int  webserver_get_carousel_delta(void)   { return 0; }
+bool webserver_has_playlist_request(void) { return false; }
+const char *webserver_get_playlist_name(void) { return ""; }
 
 #endif // PICO_CYW43_SUPPORTED

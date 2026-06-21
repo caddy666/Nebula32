@@ -69,8 +69,9 @@ void sector_cache_init(sector_cache_t *cache, disc_image_t *disc) {
 #endif
 
     memset(cache->slots, 0, cache->slot_count * sizeof(sector_slot_t));
-    cache->disc        = disc;
-    cache->sector_mode = SECTOR_MODE_DATA;
+    cache->disc             = disc;
+    cache->sector_mode      = SECTOR_MODE_DATA;
+    cache->next_write_slot  = 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -97,6 +98,7 @@ void sector_cache_flush(sector_cache_t *cache) {
     for (uint32_t i = 0; i < cache->slot_count; i++) {
         __atomic_store_n(&cache->slots[i].valid, false, __ATOMIC_RELEASE);
     }
+    __atomic_store_n(&cache->next_write_slot, 0u, __ATOMIC_RELEASE);
 }
 
 // ---------------------------------------------------------------------------
@@ -179,11 +181,13 @@ void __not_in_flash_func(sector_cache_release_before)(sector_cache_t *cache, uin
 void sector_cache_prefetch_tick(sector_cache_t *cache) {
     hard_assert(cache != NULL, "sector_cache_prefetch_tick: cache is NULL");
 
-    // ---- Find a free slot ----
+    // ---- Find a free slot (round-robin to distribute writes evenly) ----
+    uint32_t start = __atomic_load_n(&cache->next_write_slot, __ATOMIC_ACQUIRE);
     int free_slot = -1;
     for (uint32_t i = 0; i < cache->slot_count; i++) {
-        if (!__atomic_load_n(&cache->slots[i].valid, __ATOMIC_ACQUIRE)) {
-            free_slot = (int)i;
+        uint32_t idx = (start + i) % cache->slot_count;
+        if (!__atomic_load_n(&cache->slots[idx].valid, __ATOMIC_ACQUIRE)) {
+            free_slot = (int)idx;
             break;
         }
     }
@@ -221,6 +225,9 @@ void sector_cache_prefetch_tick(sector_cache_t *cache) {
         // The RELEASE store on valid creates the happens-before edge so
         // Core 0's ACQUIRE load sees the fully written slot->data.
         if (__atomic_load_n(&cache->flush_gen, __ATOMIC_ACQUIRE) == my_gen) {
+            __atomic_store_n(&cache->next_write_slot,
+                             ((uint32_t)free_slot + 1u) % cache->slot_count,
+                             __ATOMIC_RELEASE);
             __atomic_store_n(&slot->valid, true, __ATOMIC_RELEASE);
             __atomic_store_n(&cache->next_fetch_lba, fetch_lba + 1, __ATOMIC_RELEASE);
         }
@@ -237,6 +244,9 @@ void sector_cache_prefetch_tick(sector_cache_t *cache) {
         // commits a stale error sentinel at the post-seek slot index, causing a
         // false permanent-miss on the first sector of the new seek position.
         if (__atomic_load_n(&cache->flush_gen, __ATOMIC_ACQUIRE) == my_gen) {
+            __atomic_store_n(&cache->next_write_slot,
+                             ((uint32_t)free_slot + 1u) % cache->slot_count,
+                             __ATOMIC_RELEASE);
             __atomic_store_n(&slot->valid, true, __ATOMIC_RELEASE);
             __atomic_store_n(&cache->next_fetch_lba, fetch_lba + 1, __ATOMIC_RELEASE);
         }

@@ -57,7 +57,13 @@ typedef struct __attribute__((packed)) {
 
     uint16_t last_image_index;  // absolute 0-based index of last loaded image
     uint8_t  speed_mode;        // 1 = 1× speed, 2 = 2× speed
-    uint8_t  reserved[57];      // Pad to 64 bytes before CRC
+    uint8_t  auto_advance;      // 1 = jukebox: auto-advance to next disc at all-audio EOD
+    char     active_playlist[32]; // active .m3u name (no path/ext), "" = all discs
+    uint8_t  reserved[24];      // Pad before CRC (33 bytes carved for auto_advance+playlist)
+    // NOTE: no CONFIG_VERSION bump — auto_advance and active_playlist reuse bytes
+    // that were always written as 0 in reserved[], so existing v2 configs stay
+    // CRC-valid and read auto_advance==0 / active_playlist=="" (all discs, jukebox
+    // off).  Total struct size is unchanged.
 
     uint32_t crc32;             // CRC32 of bytes 0..(sizeof-4)
 } ode_config_t;
@@ -80,6 +86,8 @@ CD32_SASSERT(sizeof(ode_config_t) <= 4096,
     .flags            = CFG_FLAG_AUDIO_ENABLED, \
     .last_image_index = 0,                   \
     .speed_mode       = 2,                   \
+    .auto_advance     = 0,                   \
+    .active_playlist  = {0},                 \
     .reserved         = {0},                 \
     .crc32            = 0                    \
 }

@@ -1,1 +1,0 @@
-include(pico_w_explorer_vector.cmake)

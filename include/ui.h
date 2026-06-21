@@ -60,6 +60,11 @@ uint32_t ui_get_cursor_index(void);
 // Returns the last confirmed (loaded) disc index.
 uint32_t ui_get_selected_index(void);
 
+// Playlist-menu gesture (hold encoder button + turn).  Drains the accumulated
+// signed detent delta; returns true and writes *delta_out when a gesture is
+// pending, then clears it.  main.c applies the delta to the playlist cycle.
+bool ui_take_playlist_delta(int *delta_out);
+
 // Notify the UI that a disc has been loaded (updates internal state).
 void ui_on_disc_loaded(uint32_t index);
 

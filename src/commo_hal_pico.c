@@ -12,6 +12,7 @@
 #include "commo.pio.h"
 #include "gpio_map.h"
 
+/* [anchor:commo_hal] */
 commo_hal_rx_status_t commo_hal_rxd(uint8_t *out)
 {
     commo_rx_enable(PIO_COMMO_RX, SM_COMMO_RX, PIN_COMMO_CLK);

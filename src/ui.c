@@ -29,6 +29,14 @@ static uint32_t  s_loaded       = 0;    // Currently loaded/playing index
 static bool      s_needs_load   = false;
 static bool      s_error        = false;
 
+// Playlist-menu gesture: "hold the encoder button + turn" cycles playlists
+// instead of moving the disc cursor.  Turns-while-held accumulate here; main.c
+// drains the delta via ui_take_playlist_delta() and applies it.  s_combo_active
+// remembers that a hold+turn happened so the button-release event (PRESS /
+// LONG_PRESS) is swallowed instead of loading/ejecting a disc.
+static int       s_pl_delta     = 0;
+static bool      s_combo_active = false;
+
 // LED blink state
 static absolute_time_t s_led_next  = {0};
 
@@ -85,6 +93,17 @@ bool ui_tick(void) {
     rotary_event_t ev;
 
     while ((ev = rotary_poll(&steps)) != ROTARY_NONE) {
+
+        // Playlist-menu gesture: a turn while the button is held cycles
+        // playlists rather than discs.  Accumulate the signed step count and
+        // skip the normal cursor movement; main.c applies it next loop.
+        if ((ev == ROTARY_CW || ev == ROTARY_CCW) && rotary_button_held()) {
+            s_pl_delta    += (ev == ROTARY_CW) ? steps : -steps;
+            s_combo_active = true;
+            printf("[UI] Playlist gesture: delta %+d\n", s_pl_delta);
+            continue;
+        }
+
         switch (ev) {
 
         case ROTARY_CW:
@@ -105,6 +124,9 @@ bool ui_tick(void) {
             break;
 
         case ROTARY_PRESS:
+            // If this release ends a hold+turn playlist gesture, swallow it so
+            // it doesn't also load a disc.
+            if (s_combo_active) { s_combo_active = false; break; }
             // Short press = load selected disc
             if (s_cursor != s_loaded || s_error) {
                 printf("[UI] Button pressed — loading disc %lu\n",
@@ -120,6 +142,9 @@ bool ui_tick(void) {
             break;
 
         case ROTARY_LONG_PRESS:
+            // A held button that was also turned is the playlist gesture, not an
+            // eject — swallow the release.
+            if (s_combo_active) { s_combo_active = false; break; }
             // Long press = eject disc / return to idle
             printf("[UI] Long press — ejecting disc\n");
             LOG_INFO_MSG("UI  ", "long press: disc ejected");
@@ -149,6 +174,16 @@ bool ui_tick(void) {
 // ---------------------------------------------------------------------------
 uint32_t ui_get_cursor_index(void)   { return s_cursor; }
 uint32_t ui_get_selected_index(void) { return s_cursor; }
+
+// Drain the accumulated playlist-gesture delta (signed detent count from
+// hold+turn).  Returns true and writes *delta_out when non-zero, then clears
+// it.  main.c calls this each loop and applies the delta to the playlist cycle.
+bool ui_take_playlist_delta(int *delta_out) {
+    if (s_pl_delta == 0) return false;
+    if (delta_out) *delta_out = s_pl_delta;
+    s_pl_delta = 0;
+    return true;
+}
 
 void ui_on_disc_loaded(uint32_t index) {
     s_loaded = index;

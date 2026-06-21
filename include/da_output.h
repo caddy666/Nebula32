@@ -111,3 +111,8 @@ uint32_t da_get_clkdiv_fixed(void);
 // to the PIO FIFO and a DRIVE_STATUS_DRQ packet should be sent to the host.
 // Set by the DMA ISR; cleared here.  Safe to call from Core 0 poll loop.
 bool da_drq_pending(void);
+
+// Test-and-clear the end-of-disc edge (Option B silence streaming).  Returns true
+// once per end-of-disc; used by the main-loop jukebox to auto-advance.  Cleared
+// here and on every da_start_play().  Safe to call from the Core 0 poll loop.
+bool da_take_eod_event(void);

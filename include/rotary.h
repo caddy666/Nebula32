@@ -11,13 +11,12 @@
 //   Any standard 20-detent incremental rotary encoder with common ground.
 //   Recommended: Alps EC11, Bourns PEC11, or cheap KY-040 module.
 //
-//   Encoder connects to MCP23017 I2C GPIO expander (not directly to Pico GPIOs):
-//     Encoder CLK (A) → MCP23017 GPA0
-//     Encoder DT  (B) → MCP23017 GPA1
-//     Encoder SW  (push-button) → MCP23017 GPA2  (active low)
-//     MCP23017 INTA → Pico GPIO (open-drain, pulled up on Pico side)
+//   Encoder connects directly to RP2350B GPIOs (no I2C expander):
+//     Encoder CLK (A) → GPIO 12 (PIN_ENC_A)   — internal pull-up
+//     Encoder DT  (B) → GPIO 15 (PIN_ENC_B)   — internal pull-up
+//     Encoder SW  (push-button) → GPIO 18 (PIN_ENC_SW)  — active low, pull-up
+//     Logger toggle button      → GPIO 19 (PIN_ENC_LOG) — active low, pull-up
 //
-//   MCP23017 is on I2C1 (GPIO 26 = SDA, GPIO 27 = SCL) @ 400 kHz.
 //   GPIO 44/45/46 are reserved for the COMMO bus (IF_CLK/IF_DATA/IF_DIR).
 //
 // ALGORITHM:
@@ -32,15 +31,17 @@
 //     Steps: AB→A→0→B→AB (CW)
 //            AB→B→0→A→AB (CCW)
 //
-// INTERRUPT HANDLING:
-//   A single GPIO IRQ on the MCP23017 INTA line fires whenever any GPA pin
-//   changes.  The ISR only sets a flag; actual I2C reads are deferred to
-//   rotary_poll() in the Core 0 main loop (no I2C transactions in IRQ context).
+// DECODE / POLLING:
+//   Quadrature is decoded in an edge IRQ on ENC_A/ENC_B (both edges) so no
+//   detent is dropped on a fast spin.  The push-buttons are debounced by
+//   polling inside rotary_poll() (1 ms throttle) from the Core 0 main loop;
+//   rotary_poll() also drains the event ring.
 //
 // THREAD SAFETY:
-//   The encoder state variables are written only in IRQ context and read
-//   in Core 0 main loop.  Atomic reads of volatile counts are safe on
-//   RP2350's Cortex-M33 (single-cycle 32-bit reads are atomic).
+//   Encoder state is written only in IRQ context.  Encoder events and button
+//   events share one SPSC ring; the button (thread-side) push masks IRQs
+//   briefly so the ring head is consistent against the IRQ-side producer.
+//   32-bit aligned count reads are atomic on RP2350's Cortex-M33.
 // =============================================================================
 
 
@@ -66,7 +67,7 @@ typedef enum {
     ROTARY_CCW        = 2,  // Turned counter-clockwise (one detent)
     ROTARY_PRESS      = 3,  // Button pressed (falling edge, debounced)
     ROTARY_LONG_PRESS = 4,  // Button held for > ROTARY_LONG_PRESS_MS
-    ROTARY_LOG_PRESS  = 5,  // Logger toggle button (MCP23017 GPB0) pressed
+    ROTARY_LOG_PRESS  = 5,  // Logger toggle button (GPIO 19 / PIN_ENC_LOG) pressed
 } rotary_event_t;
 
 // Long press threshold in milliseconds

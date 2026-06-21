@@ -1,0 +1,9 @@
+[submodule "libs/JPEGDEC"]
+	path = libs/JPEGDEC
+	url = https://github.com/bitbank2/JPEGDEC.git
+[submodule "libs/no-OS-FatFS-SD-SDIO-SPI-RPi-Pico"]
+	path = libs/no-OS-FatFS-SD-SDIO-SPI-RPi-Pico
+	url = https://github.com/carlk3/no-OS-FatFS-SD-SDIO-SPI-RPi-Pico.git
+[submodule "libs/wolfssl-master"]
+	path = libs/wolfssl-master
+	url = https://github.com/wolfSSL/wolfssl.git

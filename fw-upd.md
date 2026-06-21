@@ -18,10 +18,16 @@ Power failure in Phase 4 → USB drag-and-drop recovery required (~4 seconds win
 
 ## Flash layout
 
+Banks are fixed 1 MB regions (`FW_BANK1_OFFSET = 0x100000`); the config page is the
+**last 4 KB of flash** (`PICO_FLASH_SIZE_BYTES − 0x1000`), so its address scales with
+the board. Firmware is ≈350 KB, so a 1 MB bank is ample.
+
 ```
-Bank 0 (0x000000 – 0x0FFFFF): current firmware  ← never touched until Phase 4
-Bank 1 (0x100000 – 0x1FEFFF): staging area      ← written in Phase 2, copied from in Phase 4
-Config (0x1FF000 – 0x1FFFFF): ode_config_t       ← always preserved
+Bank 0 (0x000000 – 0x0FFFFF): current firmware   ← never touched until Phase 4
+Bank 1 (0x100000 – 0x1FFFFF): staging area        ← written in Phase 2, copied in Phase 4
+Config (last 4 KB of flash):  ode_config_t         ← always preserved
+   • Core2350B0 (16 MB): 0xFFF000 – 0xFFFFFF
+   • Pico 2 / 2 W (2 MB): 0x1FF000 – 0x1FFFFF
 ```
 
 ## Trigger mechanisms

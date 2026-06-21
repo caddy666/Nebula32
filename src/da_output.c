@@ -45,6 +45,12 @@
 #define SUBCODE_PIO  pio0
 #define SUBCODE_SM   1
 
+// End-of-disc behaviour.
+// Define EOD_OPTION_B to stream silence until Akiko sends STOP_OPC (more compatible
+// with titles that poll Q-channel to detect lead-out before issuing STOP).
+// Comment it out to revert to Option A (immediate DMA abort when last sector delivered).
+#define EOD_OPTION_B
+
 // ---------------------------------------------------------------------------
 // Internal state
 // ---------------------------------------------------------------------------
@@ -62,12 +68,21 @@ static int    s_dma_ch2       = -1;   // channel 1: transfers s_buf[1]
 // Each word: [31:16] = 16-bit PCM sample, [15:0] = zero padding.
 // The raw sector bytes are staged through s_raw before being expanded here.
 static uint32_t       s_buf[2][SECTOR_DMA_WORDS];
+
+// Pre-zeroed silence sector in SRAM (BSS — NOT const, which would land in flash
+// and reintroduce the XIP hazard for the DMA read).  At end-of-disc (Option B)
+// the DMA ISR points the finished channel here instead of calling flash-resident
+// memset() on a live buffer: keeps the ISR completely free of flash access
+// (safe even mid flash-erase) and drops a per-sector 2352-byte clear.
+static uint32_t       s_silence_buf[SECTOR_DMA_WORDS];
+
 static uint8_t        s_raw[SECTOR_RAW_SIZE]; // scratch for sector_cache_get
 static uint32_t       s_buf_lba[2];             // LBA currently loaded in each buffer
 static sector_cache_t *s_cache      = NULL;
 static uint32_t        s_next_lba   = 0;
 static bool            s_audio_mode = false; // true = CD-DA; enables vis_audio snoop
 static bool            s_drq_pending = false; // set by ISR via __atomic_store RELEASE
+static bool            s_eod_reached = false; // set by ISR at end-of-disc (Option B); jukebox edge
 static uint32_t        s_clkdiv_fixed = 32u * 256u; // 16.8 fixed-point: nominal 32×256 at 1×
 
 // ---------------------------------------------------------------------------
@@ -202,6 +217,7 @@ void da_start_play(sector_cache_t *cache, uint32_t start_lba) {
     s_next_lba = start_lba;
     s_playing  = true;
     s_paused   = false;
+    __atomic_store_n(&s_eod_reached, false, __ATOMIC_RELEASE);  // fresh play → clear EOD edge
 
     // Pre-fill both ping-pong buffers
     uint32_t bytes;
@@ -301,7 +317,21 @@ static void __isr __not_in_flash_func(_dma_irq_handler)(void) {
         dma_channel_set_trans_count(done_ch, SECTOR_DMA_WORDS, false);
         __atomic_store_n(&s_drq_pending, true, __ATOMIC_RELEASE);  // signal commo_bridge_poll
     } else {
-        // Option A: end of disc — abort both channels from within the ISR.
+#ifdef EOD_OPTION_B
+        // Option B: stream silence until Akiko sends STOP_OPC.
+        // Titles that poll Q-channel to detect lead-out need the drive to keep
+        // running; da_stop() / STOP_OPC will abort cleanly via the s_playing guard above.
+        // Point the finished channel at the pre-zeroed SRAM silence buffer — no
+        // memset() in the ISR (memset is flash-resident; calling it here would
+        // fault if a flash erase/program were in flight).
+        s_buf_lba[done_buf] = s_next_lba;   // hold at EOD — don't advance
+        dma_channel_set_read_addr(done_ch, s_silence_buf, false);
+        dma_channel_set_trans_count(done_ch, SECTOR_DMA_WORDS, false);
+        __atomic_store_n(&s_drq_pending, true, __ATOMIC_RELEASE);
+        __atomic_store_n(&s_eod_reached, true, __ATOMIC_RELEASE);  // jukebox: signal EOD edge
+        LOG_INFO_MSG("DA", "end of disc at LBA=%lu — streaming silence", (unsigned long)s_next_lba);
+#else
+        // Option A: abort both channels immediately (comment #define EOD_OPTION_B above to use).
         // chain_to has already re-triggered the other channel; disabling IRQ and
         // calling abort here is the only way to stop the loop — setting s_playing
         // alone does not prevent the other channel from firing another IRQ.
@@ -312,6 +342,7 @@ static void __isr __not_in_flash_func(_dma_irq_handler)(void) {
         dma_channel_abort(s_dma_ch2);
         s_playing = false;
         LOG_INFO_MSG("DA", "end of disc at LBA=%lu", (unsigned long)s_next_lba);
+#endif
     }
 }
 
@@ -373,19 +404,9 @@ void da_resume(void) {
     // resume_lba and the first sector_cache_get() below will return stale data.
     sector_cache_seek(s_cache, resume_lba);
 
-    // Give Core 1 up to ~10 ms to prefetch the sectors we're about to play.
-    // Without this, sector_cache_get() always misses immediately after the flush,
-    // filling both DMA buffers with silence before any real data arrives.
-    {
-        const uint32_t spin_deadline = time_us_32() + 10000u;
-        uint32_t dummy_bytes;
-        uint8_t  dummy_raw[SECTOR_RAW_SIZE];
-        while (time_us_32() < spin_deadline) {
-            if (sector_cache_get(s_cache, resume_lba, dummy_raw, &dummy_bytes)) break;
-            tight_loop_contents();
-        }
-    }
-
+    // No spin-wait here: if Core 1 hasn't prefetched yet the sector_cache_get()
+    // calls below will miss and silence-pad the first sector(s).  The DMA ISR
+    // will refill with real data on the next completion cycle (~13 ms at 1×).
     uint32_t bytes;
     s_buf_lba[0] = s_next_lba;
     if (sector_cache_get(s_cache, s_next_lba, s_raw, &bytes) && bytes > 0) {
@@ -481,4 +502,11 @@ bool da_drq_pending(void) {
     if (!__atomic_load_n(&s_drq_pending, __ATOMIC_ACQUIRE)) return false;
     __atomic_store_n(&s_drq_pending, false, __ATOMIC_RELEASE);
     return true;
+}
+
+// Test-and-clear the end-of-disc edge.  Set once per sector while the ISR streams
+// silence at EOD (Option B); returns true exactly when the main-loop jukebox poll
+// observes a fresh end-of-disc.  Cleared here and on every da_start_play().
+bool da_take_eod_event(void) {
+    return __atomic_exchange_n(&s_eod_reached, false, __ATOMIC_ACQ_REL);
 }

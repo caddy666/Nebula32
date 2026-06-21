@@ -50,7 +50,7 @@
 // Build-time selection
 // ---------------------------------------------------------------------------
 // Set by CMakeLists.txt add_compile_definitions().
-// Rotary encoder runs via MCP23017 on I2C1 (GPIO 26/27) — no GPIO conflict with COMMO.
+// Rotary encoder runs via direct GPIO (12/15/18/19) — no GPIO conflict with COMMO.
 #ifndef BUILD_WITH_COMMO
 #define BUILD_WITH_COMMO   1
 #endif
@@ -81,6 +81,20 @@ void commo_bridge_send_status(uint8_t status_byte);
 // Send a Q-channel status packet to the host.
 // Called when the ODE has fresh subcode data (after a sector delivery).
 void commo_bridge_send_qchannel(const uint8_t *qbuf_12bytes);
+
+// --- Programmatic disc-change event (carousel / save-disk hot-swap) ---------
+// A disc swap is expressed to Akiko as the existing eject→insert pair, so no new
+// COMMO opcode is needed.  The caller drives the sequence around a disc reload:
+//   da_stop();  commo_bridge_signal_eject();  <swap image>;  commo_bridge_signal_insert();
+//
+// signal_eject():  stop the motor, drop to IDLE, and send status 0x00 so Akiko
+//   clears the DISC bit immediately (same effect as a physical door-open).
+// signal_insert(): re-seat the prefetch at lead-in and enter SPINUP so Akiko
+//   re-reads the TOC.  Does NOT send a status itself — the spin-up completes via
+//   the poll loop's state advance, exactly like a TRAY_IN command.
+// Both run on Core 0; do not call from an ISR.
+void commo_bridge_signal_eject(void);
+void commo_bridge_signal_insert(void);
 
 // Returns true if the COMMO bus hardware is present and initialised.
 bool commo_bridge_is_active(void);

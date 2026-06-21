@@ -1,3 +1,0 @@
-add_subdirectory(mandelbrot)
-include(pico_display_2_demo.cmake)
-include(pico_display_2_vector.cmake)

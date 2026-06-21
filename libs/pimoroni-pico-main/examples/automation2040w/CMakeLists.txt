@@ -1,5 +1,0 @@
-include(automation2040w_read_adcs.cmake)
-include(automation2040w_read_inputs.cmake)
-include(automation2040w_switches_and_leds.cmake)
-include(automation2040w_toggle_outputs.cmake)
-include(automation2040w_toggle_relays.cmake)

@@ -5,6 +5,10 @@ cmake_minimum_required(VERSION 3.13)
 # Target: Raspberry Pi Pico 2 (RP2350)
 # =============================================================================
 
+# Custom board headers (boards/core2350b0_w.h) must be discoverable before the
+# SDK resolves PICO_BOARD.  Must be set prior to pico_sdk_init().
+list(APPEND PICO_BOARD_HEADER_DIRS ${CMAKE_CURRENT_LIST_DIR}/boards)
+
 include($ENV{PICO_SDK_PATH}/external/pico_sdk_import.cmake)
 
 project(Nebula32 C CXX ASM)
@@ -13,18 +17,29 @@ set(CMAKE_CXX_STANDARD 17)
 
 pico_sdk_init()
 
+# WiFi/TLS is built for any CYW43-equipped board: the Pico 2 W and our custom
+# Core2350B0 + RM2 board (which inherits the pico2_w radio).  Gate the WiFi/wolfSSL
+# link block on this rather than a single board name, so renaming the board target
+# never silently drops the radio.
+if(PICO_BOARD STREQUAL "pico2_w" OR PICO_BOARD STREQUAL "core2350b0_w")
+    set(NEBULA_WIFI ON)
+endif()
+
 # =============================================================================
 # Board target — Waveshare Core2350B0 (RP2350B) + RM2 WiFi module
 # =============================================================================
 # Target hardware: Waveshare Core2350B0 with external RM2 (CYW43439) WiFi.
+# Preferred build (use the wrapper, which selects the correct board):
+#   ./build.sh core2350b            # → build-core2350b/  (WiFi + PSRAM)
 #
-# Build with WiFi (required for web interface):
-#   cmake .. -DPICO_PLATFORM=rp2350 -DPICO_BOARD=pico2_w -DBUILD_WITH_PSRAM=ON
+# Build with WiFi (web interface), explicit cmake form:
+#   cmake .. -DPICO_PLATFORM=rp2350 -DPICO_BOARD=core2350b0_w -DBUILD_WITH_PSRAM=ON
 #
-# Note: pico2_w targets RP2350A in the SDK board file.  The Core2350B0 uses
-# RP2350B (GPIO 0–47).  GPIOs 30–47 are accessed directly — they work on the
-# physical RP2350B regardless of the board file.  A custom board file
-# (boards/core2350b0_w.h) can be added later for full SDK-level GPIO awareness.
+# Board file: boards/core2350b0_w.h inherits the pico2_w radio pinout but sets
+# PICO_RP2350A=0 so the SDK knows this is the 48-GPIO RP2350B.  Building as plain
+# pico2_w forces PICO_RP2350A=1 (NUM_BANK0_GPIOS=30): GPIO 30–47 (SDIO/display/
+# COMMO/PSRAM) then only work in release builds (param-asserts compiled out) and
+# panic in any debug build.  Always build via core2350b0_w, not pico2_w.
 #
 # Build without WiFi (COMMO + SD only, no web interface):
 #   cmake .. -DPICO_PLATFORM=rp2350 -DPICO_BOARD=pico2 -DBUILD_WITH_PSRAM=ON
@@ -38,15 +53,15 @@ pico_sdk_init()
 #   When OFF: COMMO bridge compiles but does nothing (safe default).
 set(BUILD_WITH_COMMO   ON)
 
-# BUILD_WITH_ROTARY: Enable the MCP23017-based rotary encoder disc selector.
-#   Runs over I2C1 (GPIO 26/27) — no conflict with COMMO bus (GPIO 44-46).
+# BUILD_WITH_ROTARY: Enable the direct GPIO rotary encoder disc selector.
+#   Encoder on GPIO 12/15/18/19 — no conflict with COMMO bus (GPIO 44-46).
 set(BUILD_WITH_ROTARY  ON)
 
 # GPIO 0-14:  CD32 connector signals (gpio_map.h is authoritative).
 # GPIO 16-17: UART0 TX/RX (debug serial — stdio).
 # GPIO 20-21: UART1 TX/RX (auxiliary serial).
 # GPIO 23-25,29: WiFi RM2 (CYW43439).
-# GPIO 26-27: I2C1 SDA/SCL (MCP23017 rotary encoder).
+# GPIO 12/15/18/19: Direct GPIO rotary encoder (ENC_A/B/SW/LOG).
 # GPIO 30-35: SDIO (SD card).
 # GPIO 40-43: ST7789 display (SPI1).
 # GPIO 44-46: COMMO 3-wire bus (PIO1 SM0/SM1) — moved from 15-17 for UART.
@@ -99,13 +114,13 @@ add_compile_definitions(
     ST7789_SCK_PIN=42         # SPI1 clock
     ST7789_MOSI_PIN=43        # SPI1 MOSI (DIN) — only valid option: 39=LED, 47=PSRAM
 
-    # ---- MCP23017 I2C GPIO expander — rotary encoder (I2C1, GPIO 26-27) ----
-    # Moved from I2C0/GPIO 28-29: GPIO 29 is now WiFi RM2 SPI CLK.
-    # I2C1 SDA=26, SCL=27 are valid I2C1 function pins on RP2350.
-    # Matches PIN_MCP23017_* in gpio_map.h.
-    MCP23017_SDA_PIN=26       # I2C1 SDA → MCP23017 SDA
-    MCP23017_SCL_PIN=27       # I2C1 SCL → MCP23017 SCL
-    MCP23017_I2C_ADDR=0x20    # MCP23017 address (A2=A1=A0=GND)
+    # ---- Direct GPIO rotary encoder — GPIO 12/15/18/19 ----
+    # No MCP23017 I2C expander; encoder connected directly to RP2350B GPIOs.
+    # Matches PIN_ENC_A/B/SW/LOG in gpio_map.h.
+    ENC_A_PIN=12              # Encoder quadrature A (CLK)
+    ENC_B_PIN=15              # Encoder quadrature B (DT)
+    ENC_SW_PIN=18             # Encoder push-button (active-low)
+    ENC_LOG_PIN=19            # Logger toggle button (active-low)
 
     # ---- Red LED (RM2 direct GPIO) ----
     LED_RED_PIN=39            # matches PIN_LED_RED in gpio_map.h
@@ -132,24 +147,23 @@ set(FATFS_SDK_PATH
     "${CMAKE_CURRENT_SOURCE_DIR}/libs/no-OS-FatFS-SD-SDIO-SPI-RPi-Pico"
     CACHE PATH "Path to no-OS-FatFS-SD-SDIO-SPI-RPi-Pico library")
 
-if(NOT EXISTS "${FATFS_SDK_PATH}/CMakeLists.txt")
+# Sentinel: src/CMakeLists.txt is the upstream entry point used by add_subdirectory
+# below (the repo has no root CMakeLists.txt). It's a git submodule — an empty dir
+# means it hasn't been initialised.
+if(NOT EXISTS "${FATFS_SDK_PATH}/src/CMakeLists.txt")
     message(FATAL_ERROR
         "\n"
         "================================================================\n"
         "  no-OS-FatFS-SD-SDIO-SPI-RPi-Pico not found at:\n"
         "    ${FATFS_SDK_PATH}\n"
-        "  Clone it into libs/ with:\n"
-        "    git clone https://github.com/carlk3/no-OS-FatFS-SD-SDIO-SPI-RPi-Pico.git libs/no-OS-FatFS-SD-SDIO-SPI-RPi-Pico\n"
+        "  It is a git submodule — initialise it with:\n"
+        "    git submodule update --init libs/no-OS-FatFS-SD-SDIO-SPI-RPi-Pico\n"
         "================================================================\n")
 endif()
 
 add_subdirectory(${FATFS_SDK_PATH}/src fatfs_sd)
 
-# MCP23017 I2C GPIO expander (adamboardman/pico-mcp23017)
-add_subdirectory(libs/pico-interfaces)
-add_subdirectory(libs/pico-mcp23017)
-
-# wolfSSL TLS engine (pico2_w only; EXCLUDE_FROM_ALL means it is only built when linked)
+# wolfSSL TLS engine (CYW43 boards only; EXCLUDE_FROM_ALL means it is only built when linked)
 # user_settings.h in include/ shadows the vendor copy via WOLFSSL_USER_SETTINGS=ON.
 set(WOLFSSL_USER_SETTINGS   ON  CACHE BOOL "" FORCE)
 set(WOLFSSL_SINGLE_THREADED ON  CACHE BOOL "" FORCE)
@@ -221,11 +235,14 @@ add_executable(Nebula32
     src/display.cpp
     libs/JPEGDEC/src/JPEGDEC.cpp
 
-    # ---- Rotary encoder driver (via MCP23017 I2C expander) ----
-    src/rotary_mcp.cpp
+    # ---- Rotary encoder driver (direct GPIO — no MCP23017 expander) ----
+    src/rotary_gpio.c
 
     # ---- Disc selector UI (encoder event processing + LED patterns) ----
     src/ui.c
+
+    # ---- Multi-disc carousel model + .m3u playlist parser ----
+    src/carousel.c
 
     # ---- HTTP web server for browser-based disc selection ----
     src/webserver.c
@@ -277,17 +294,15 @@ target_link_libraries(Nebula32
     hardware_flash          # flash_range_erase/program for config persistence and fw_update
     hardware_sync           # save_and_disable_interrupts for flash writes
     hardware_watchdog       # watchdog_reboot() for fw_update self-reboot
-    hardware_i2c            # I2C1 for MCP23017 GPIO expander
     hardware_uart           # UART0 debug + UART1 auxiliary
     hardware_spi            # SPI1 for ST7789 display
     hardware_interp         # INTERP0 blend mode for effects.c gradient lerp
     no-OS-FatFS-SD-SDIO-SPI-RPi-Pico   # SD card FatFS (from no-OS-FatFS library)
-    pico_mcp23017           # MCP23017 I2C GPIO expander (adamboardman library)
 
 )
 
-# ---- Pico 2 W WiFi + lwIP + TLS — only link when building for pico2_w ----
-if(PICO_BOARD STREQUAL "pico2_w")
+# ---- WiFi + lwIP + TLS — linked for any CYW43 board (pico2_w / core2350b0_w) ----
+if(NEBULA_WIFI)
     target_link_libraries(Nebula32
         pico_cyw43_arch_lwip_poll
         wolfssl
@@ -308,8 +323,9 @@ if(PICO_BOARD STREQUAL "pico2_w")
         PICO_CYW43_SUPPORTED=1
         WOLFSSL_USER_SETTINGS)
 
-    # TLS certificate check — runs every pico2_w build.
-    # Generates certs/server.{crt,key}.der and include/tls_cert.h if missing or expiring.
+    # TLS certificate check — runs every WiFi build.
+    # Generates SDCARD_BASE/certs/nebula32.{crt,key}.der (the SD-card skeleton) and
+    # include/tls_cert.h (compiled-in fallback) if missing or expiring.
     add_custom_target(tls_cert_check ALL
         COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/gen_tls_cert.sh
         WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
@@ -360,12 +376,26 @@ set_source_files_properties(libs/JPEGDEC/src/JPEGDEC.cpp PROPERTIES
     COMPILE_DEFINITIONS "__LINUX__"
 )
 
+# ---- Debug build toggle ----
+# NEBULA_DEBUG=ON (via `./build.sh <board> --debug`) swaps the baseline -O2 for
+# -Og -g3 so SWD/gdb stepping is clean (most locals live, sane line tables).
+# NOT timing-accurate — DA/COMMO real-time behaviour still can't be breakpointed
+# (see openocd.md). Builds into a separate *-debug/ dir so it never clobbers the
+# release cache. The per-file -O3 compute kernels below are left untouched.
+option(NEBULA_DEBUG "Build with -Og -g3 for SWD/gdb debugging" OFF)
+if(NEBULA_DEBUG)
+    set(NEBULA_OPT_LEVEL -Og -g3)
+    message(STATUS "Nebula32: DEBUG build (-Og -g3) — for gdb stepping, not timing-accurate")
+else()
+    set(NEBULA_OPT_LEVEL -O2)   # Optimise for speed (important for Core 1 latency)
+endif()
+
 # ---- Compiler warnings ----
 target_compile_options(Nebula32 PRIVATE
     -Wall
     -Wextra
     -Wno-unused-parameter   # Several callbacks take unused context pointers
-    -O2                     # Optimise for speed (important for Core 1 latency)
+    ${NEBULA_OPT_LEVEL}     # -O2 (release) or -Og -g3 (NEBULA_DEBUG)
     -fstack-usage           # Emit .su files — per-function stack depth for RP2350 SRAM auditing
 )
 

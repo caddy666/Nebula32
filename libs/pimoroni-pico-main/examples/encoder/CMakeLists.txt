@@ -1,5 +1,0 @@
-include(encoder_item_selector.cmake)
-include(encoder_read_change.cmake)
-include(encoder_read_counts.cmake)
-include(encoder_read_speed.cmake)
-include(encoder_value_dial.cmake)

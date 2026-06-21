@@ -1,5 +1,0 @@
-include(plasma_stick_alternating_blinkies.cmake)
-include(plasma_stick_encoder.cmake)
-include(plasma_stick_fire.cmake)
-include(plasma_stick_rainbows.cmake)
-include(plasma_stick_temperature_bme280.cmake)

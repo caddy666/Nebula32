@@ -18,22 +18,22 @@
  *     9 | M17SINE       | IN     |   5  | 16.9344 MHz ref   (GPIN0)
  *    10 | ACTIVE        | OUT    |  24  | Drive active/spinning
  *    11 | DOOR          | IN     |  26  | Door/tray switch  (active-low)
- *    12 | (free)        | -      |   -  | Spare GPIO
+ *    12 | ENC_A         | IN     |   -  | Encoder quadrature A (direct GPIO, pull-up)
  *    13 | PASSIVE       | OUT    |  23  | Drive passive/standby
  *    14 | RESET         | IN     |   7  | Active-low /RESET from CD32 host
- *    15 | (free)        | -      |   -  | Spare GPIO
+ *    15 | ENC_B         | IN     |   -  | Encoder quadrature B (direct GPIO, pull-up)
  *    16 | UART0_TX      | OUT    |   -  | Debug serial TX
  *    17 | UART0_RX      | IN     |   -  | Debug serial RX
- *    18 | (free)        | -      |   -  | Spare GPIO
- *    19 | (free)        | -      |   -  | Spare GPIO
+ *    18 | ENC_SW        | IN     |   -  | Encoder push-button (active-low, pull-up)
+ *    19 | ENC_LOG       | IN     |   -  | Logger toggle button (active-low, pull-up)
  *    20 | UART1_TX      | OUT    |   -  | Auxiliary serial TX
  *    21 | UART1_RX      | IN     |   -  | Auxiliary serial RX
  *    22 | (free)        | -      |   -  | Spare GPIO
  *    23 | WL_ON         | OUT    |   -  | WiFi RM2 power/enable  (CYW43439)
  *    24 | WL_DIN        | OUT    |   -  | WiFi RM2 SPI MOSI
  *    25 | WL_CS         | -      |   -  | WiFi RM2 SPI CS / blue LED (via CYW43439)
- *    26 | MCP23017_SDA  | BIDIR  |   -  | I2C1 SDA — rotary encoder expander
- *    27 | MCP23017_SCL  | OUT    |   -  | I2C1 SCL
+ *    26 | (free)        | -      |   -  | Spare GPIO (formerly MCP23017 SDA)
+ *    27 | (free)        | -      |   -  | Spare GPIO (formerly MCP23017 SCL)
  *    28 | (free)        | -      |   -  | Spare GPIO
  *    29 | WL_CLK        | OUT    |   -  | WiFi RM2 SPI CLK
  *    30 | SDIO_CLK      | OUT    |   -  | SD card clock     (D0−2; SDIO PIO constraint)
@@ -122,12 +122,20 @@
  * cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, ...) — do not touch directly. */
 
 /* =========================================================================
- * MCP23017 I2C rotary encoder — I2C1 on GPIO 26–27
- * Moved from I2C0/GPIO 28-29 so that GPIO 29 is free for WiFi SPI CLK.
+ * Direct GPIO rotary encoder — GPIO 12, 15, 18, 19
+ * Replaces the MCP23017 I2C GPIO expander — no external IC required.
+ * GPIO 26–27 (formerly MCP23017 SDA/SCL) are now free spare GPIOs.
  * ========================================================================= */
 
-#define PIN_MCP23017_SDA 26  /**< I2C1 SDA                                   */
-#define PIN_MCP23017_SCL 27  /**< I2C1 SCL                                   */
+#define PIN_ENC_A   12  /**< Encoder quadrature A (CLK)                       */
+#define PIN_ENC_B   15  /**< Encoder quadrature B (DT)                        */
+#define PIN_ENC_SW  18  /**< Encoder push-button (active-low)                 */
+#define PIN_ENC_LOG 19  /**< Logger toggle button (active-low)                */
+
+/* Legacy aliases kept for reference; I2C1 no longer initialised.
+ * GPIO 26/27 are now free GPIOs — do not assign GPIO_FUNC_I2C to them.    */
+#define PIN_MCP23017_SDA 26  /**< (free) formerly I2C1 SDA to MCP23017       */
+#define PIN_MCP23017_SCL 27  /**< (free) formerly I2C1 SCL to MCP23017       */
 
 /* =========================================================================
  * SD card — 4-bit SDIO — GPIO 30–35

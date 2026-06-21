@@ -1,1 +1,0 @@
-include(as7343.cmake)

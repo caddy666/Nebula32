@@ -51,6 +51,15 @@ static void trim(char *s)
     if (start > 0) memmove(s, s + start, len - start + 1);
 }
 
+// Replica of the playlist_save_ms clamp in logger.c: negative → 0 (immediate),
+// values above PLAYLIST_SAVE_MS_MAX clamped down.
+static uint32_t parse_playlist_save_ms(const char *val)
+{
+    long ms = (val[0] == '-') ? 0 : atol(val);
+    if (ms > (long)PLAYLIST_SAVE_MS_MAX) ms = (long)PLAYLIST_SAVE_MS_MAX;
+    return (uint32_t)ms;
+}
+
 static const char *cmd_name(uint8_t cmd)
 {
     switch (cmd) {
@@ -405,4 +414,35 @@ TEST(Logger, FwToken_FieldSizeIs33)
     // If this changes the token validation in webserver.c will silently truncate.
     logger_config_t dummy;
     CHECK_EQUAL(33u, sizeof(dummy.fw_token));
+}
+
+TEST(Logger, PlaylistSaveMs_NormalValue)
+{
+    CHECK_EQUAL(2000u, parse_playlist_save_ms("2000"));
+}
+
+TEST(Logger, PlaylistSaveMs_ZeroMeansImmediate)
+{
+    CHECK_EQUAL(0u, parse_playlist_save_ms("0"));
+}
+
+TEST(Logger, PlaylistSaveMs_NegativeClampedToZero)
+{
+    CHECK_EQUAL(0u, parse_playlist_save_ms("-500"));
+}
+
+TEST(Logger, PlaylistSaveMs_OversizedClampedToMax)
+{
+    CHECK_EQUAL(PLAYLIST_SAVE_MS_MAX, parse_playlist_save_ms("999999"));
+}
+
+TEST(Logger, PlaylistSaveMs_ExactMaxAccepted)
+{
+    CHECK_EQUAL(PLAYLIST_SAVE_MS_MAX, parse_playlist_save_ms("60000"));
+}
+
+TEST(Logger, PlaylistSaveMs_DefaultIsFifteenHundred)
+{
+    // The compiled-in default must match the documented nebula32.cfg template.
+    CHECK_EQUAL(1500u, PLAYLIST_SAVE_MS_DEFAULT);
 }

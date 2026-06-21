@@ -114,7 +114,8 @@ static void    _send_toc_packets(void);
 #define SPINUP_DELAY_US         1800000u  // 1.8 s  — disc accelerate + lead-in read
 #define SEEK_DELAY_MIN_US         50000u  // 50 ms  — head settle + track buffer
 #define SEEK_DELAY_MAX_US        500000u  // 500 ms — full-disc crossing
-#define SEEK_DELAY_US_PER_TRACK     700u  // ~0.7 ms per track of travel
+#define SEEK_DELAY_US_PER_TRACK     700u  // ~0.7 ms per track of travel (JUMP_TRACKS)
+#define SEEK_DELAY_US_PER_LBA         2u  // ~2 µs per sector of travel (SEEK_OPC)
 
 // ---------------------------------------------------------------------------
 // Internal state
@@ -166,7 +167,36 @@ static uint8_t _build_status(void) {
 // Low only in DRIVE_IDLE (tray open / motor stopped) and DRIVE_ERROR.
 static void _update_active_pin(void) {
     bool active = (s_drive_state != DRIVE_IDLE && s_drive_state != DRIVE_ERROR);
-    gpio_put(PIN_ACTIVE, active ? 1 : 0);
+    gpio_put(PIN_ACTIVE,  active ? 1 : 0);
+    gpio_put(PIN_PASSIVE, active ? 0 : 1);  // PASSIVE is complement of ACTIVE
+}
+
+// ---------------------------------------------------------------------------
+// Programmatic disc-change event (carousel / save-disk hot-swap) — see header.
+// ---------------------------------------------------------------------------
+// signal_eject() factors the door-open eject action (also used by the door-pin
+// monitor in commo_bridge_poll) so a UI-driven swap and a physical door open
+// take the identical path: halt audio, IDLE, and clear the DISC bit now.
+void commo_bridge_signal_eject(void) {
+    da_stop();
+    s_drive_state = DRIVE_IDLE;
+    _update_active_pin();
+    commo_bridge_send_status(0x00);   // DISC bit clear — Akiko drops the disc
+}
+
+// signal_insert() mirrors the TRAY_IN opcode's state change: re-seat the prefetch
+// ring at the lead-in of the freshly loaded disc and enter SPINUP so Akiko
+// re-reads the TOC.  No status is sent here — _maybe_advance_state() in the poll
+// loop completes the spin-up and Akiko's next START_UP/status poll observes it.
+void commo_bridge_signal_insert(void) {
+    sector_cache_seek(&g_cache, 0);   // prefetch from lead-in of the new disc
+    s_drive_state = DRIVE_SPINUP;
+#ifdef FAKE_TIMING
+    s_state_deadline_us = time_us_32() + SPINUP_DELAY_US;
+#else
+    s_state_deadline_us = 0;
+#endif
+    _update_active_pin();
 }
 
 // ---------------------------------------------------------------------------
@@ -299,6 +329,12 @@ void commo_bridge_init(void) {
     gpio_set_dir(PIN_ACTIVE, GPIO_OUT);
     gpio_put(PIN_ACTIVE, 0);
 
+    // PASSIVE (conn 23, GPIO 13): standby signal — high when motor off, low when spinning.
+    // Complement of ACTIVE; kept in sync by _update_active_pin().
+    gpio_init(PIN_PASSIVE);
+    gpio_set_dir(PIN_PASSIVE, GPIO_OUT);
+    gpio_put(PIN_PASSIVE, 1);  // start high = passive (motor off)
+
     // RESET (conn 7, GPIO 14): active-low /RESET input from CD32.
     // The pin idles high (no reset); pulling it low by the host means the CD32
     // is resetting — we must return the drive to IDLE and halt playback.
@@ -372,10 +408,7 @@ bool commo_bridge_poll(void) {
     if (door_now && !s_door_prev) {
         printf("[COMMO] DOOR open — stopping drive\n");
         LOG_INFO_MSG("COMMO", "DOOR open");
-        da_stop();
-        s_drive_state = DRIVE_IDLE;
-        _update_active_pin();
-        commo_bridge_send_status(0x00);
+        commo_bridge_signal_eject();   // halt + IDLE + status 0x00 (DISC bit clear)
         s_door_prev = door_now;
         return true;
     }
@@ -436,14 +469,7 @@ static uint8_t _handle_opc(uint8_t opc, uint8_t p1, uint8_t p2, uint8_t p3) {
         case TRAY_IN_OPC:
             printf("[COMMO] TRAY_IN — disc inserted\n");
             LOG_INFO_MSG("COMMO", "TRAY_IN");
-            sector_cache_seek(&g_cache, 0);  // reset prefetch to lead-in
-            s_drive_state = DRIVE_SPINUP;
-#ifdef FAKE_TIMING
-            s_state_deadline_us = time_us_32() + SPINUP_DELAY_US;
-#else
-            s_state_deadline_us = 0;
-#endif
-            _update_active_pin();
+            commo_bridge_signal_insert();   // seek lead-in + SPINUP (+ FAKE_TIMING deadline)
             return _build_status();
 
         case START_UP_OPC:
@@ -511,7 +537,19 @@ static uint8_t _handle_opc(uint8_t opc, uint8_t p1, uint8_t p2, uint8_t p3) {
             sector_cache_seek(&g_cache, s_seek_lba);
             s_drive_state = DRIVE_SEEKING;
             _update_active_pin();
+#ifdef FAKE_TIMING
+            {
+                uint32_t dlba = (s_seek_lba > s_current_lba)
+                                ? s_seek_lba - s_current_lba
+                                : s_current_lba - s_seek_lba;
+                uint32_t us = dlba * SEEK_DELAY_US_PER_LBA;
+                if (us < SEEK_DELAY_MIN_US) us = SEEK_DELAY_MIN_US;
+                if (us > SEEK_DELAY_MAX_US) us = SEEK_DELAY_MAX_US;
+                s_state_deadline_us = time_us_32() + us;
+            }
+#else
             s_state_deadline_us = 0;
+#endif
             return _build_status();
         }
 
@@ -534,7 +572,17 @@ static uint8_t _handle_opc(uint8_t opc, uint8_t p1, uint8_t p2, uint8_t p3) {
             sector_cache_seek(&g_cache, s_seek_lba);
             s_drive_state = DRIVE_SEEKING;
             _update_active_pin();
+#ifdef FAKE_TIMING
+            {
+                int32_t abs_delta = (delta < 0) ? -delta : delta;
+                uint32_t us = (uint32_t)abs_delta * SEEK_DELAY_US_PER_TRACK
+                              + SEEK_DELAY_MIN_US;
+                if (us > SEEK_DELAY_MAX_US) us = SEEK_DELAY_MAX_US;
+                s_state_deadline_us = time_us_32() + us;
+            }
+#else
             s_state_deadline_us = 0;
+#endif
             return _build_status();
         }
 

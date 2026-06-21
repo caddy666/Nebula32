@@ -81,6 +81,25 @@ static bool motor_active(void)
     return s_state != DRIVE_IDLE && s_state != DRIVE_ERROR;
 }
 
+// --- Disc-change event model: commo_bridge_signal_eject/insert --------------
+// Mirrors commo_bridge.c (Phase 2).  A programmatic hot-swap is the same
+// eject→insert pair as a physical door-open + TRAY_IN:
+//   signal_eject():  IDLE + send status 0x00 (DISC bit clear).
+//   signal_insert(): SPINUP; status NOT sent here (the poll loop's advance
+//                    completes spin-up; Akiko sees BUSY then READY on its polls).
+static uint8_t s_last_status_sent;
+
+static void signal_eject(void)
+{
+    s_state = DRIVE_IDLE;
+    s_last_status_sent = 0x00;   // commo_bridge_send_status(0x00)
+}
+
+static void signal_insert(void)
+{
+    s_state = DRIVE_SPINUP;
+}
+
 // ---------------------------------------------------------------------------
 // TEST GROUP
 // ---------------------------------------------------------------------------
@@ -644,4 +663,93 @@ TEST(HostReset, FromError_FaultCleared)
                      "/RESET must clear DRIVE_ERROR and return to DRIVE_IDLE");
     CHECK_TRUE_TEXT(!(build_status() & DRIVE_STATUS_ERROR),
                     "ERROR bit must not be set after /RESET clears the fault");
+}
+
+// ===========================================================================
+// DiscChange — programmatic hot-swap event (Phase 2)
+// commo_bridge_signal_eject() / commo_bridge_signal_insert()
+// ===========================================================================
+TEST_GROUP(DiscChange)
+{
+    void setup()    { s_state = DRIVE_IDLE; s_last_status_sent = 0xFF; }
+    void teardown() {}
+};
+
+// Eject clears the DISC bit: state → IDLE and status 0x00 is sent, even when the
+// drive was mid-playback (a swap can be requested at any time).
+TEST(DiscChange, EjectClearsDiscFromPlaying)
+{
+    s_state = DRIVE_PLAYING;
+    signal_eject();
+    CHECK_EQUAL_TEXT((int)DRIVE_IDLE, (int)s_state,
+                     "signal_eject must drop to DRIVE_IDLE");
+    CHECK_EQUAL_TEXT(0x00, s_last_status_sent,
+                     "signal_eject must send status 0x00 (DISC bit clear)");
+    CHECK_TRUE_TEXT(!(s_last_status_sent & DRIVE_STATUS_DISC),
+                    "DISC bit must be absent in the ejected status byte");
+    CHECK_TRUE_TEXT(!motor_active(), "motor must be off after eject");
+}
+
+// Insert enters SPINUP and does NOT send its own status; Akiko observes BUSY via
+// the next status poll (build_status), exactly as for a TRAY_IN command.
+TEST(DiscChange, InsertEntersSpinupBusyNoStatusSent)
+{
+    signal_eject();                 // start from ejected (status 0x00 recorded)
+    signal_insert();
+    CHECK_EQUAL_TEXT((int)DRIVE_SPINUP, (int)s_state,
+                     "signal_insert must enter DRIVE_SPINUP");
+    CHECK_EQUAL_TEXT(0x00, s_last_status_sent,
+                     "signal_insert must NOT send a status (still last eject 0x00)");
+    uint8_t poll = build_status();
+    CHECK_TRUE_TEXT((poll & DRIVE_STATUS_DISC) != 0, "DISC present once re-inserted");
+    CHECK_TRUE_TEXT((poll & DRIVE_STATUS_BUSY) != 0, "BUSY during spin-up");
+    CHECK_TRUE_TEXT(motor_active(), "motor must be on during spin-up");
+}
+
+// After spin-up completes, the drive is READY and reports exactly DISC (no BUSY)
+// — proving Akiko gets a clean state to re-read the TOC against.
+TEST(DiscChange, SpinupCompletesToReadyDiscOnly)
+{
+    signal_insert();
+    advance_state();                // SPINUP → READY (FAKE_TIMING deadline in firmware)
+    CHECK_EQUAL_TEXT((int)DRIVE_READY, (int)s_state,
+                     "spin-up must complete to DRIVE_READY");
+    CHECK_EQUAL_TEXT(DRIVE_STATUS_DISC, build_status(),
+                     "READY after insert must report exactly DRIVE_STATUS_DISC");
+}
+
+// Full swap ordering: PLAYING → eject(0x00,IDLE) → insert(SPINUP) → READY.
+// This is the exact sequence carousel_swap_to() drives around disc_swap_locked().
+TEST(DiscChange, FullSwapSequenceOrdering)
+{
+    s_state = DRIVE_PLAYING;
+
+    signal_eject();
+    CHECK_EQUAL_TEXT((int)DRIVE_IDLE, (int)s_state, "step1: ejected → IDLE");
+    CHECK_EQUAL_TEXT(0x00, s_last_status_sent, "step1: DISC bit cleared to host");
+
+    signal_insert();
+    CHECK_EQUAL_TEXT((int)DRIVE_SPINUP, (int)s_state, "step2: inserted → SPINUP");
+    CHECK_TRUE_TEXT((build_status() & DRIVE_STATUS_BUSY) != 0, "step2: BUSY on poll");
+
+    advance_state();
+    CHECK_EQUAL_TEXT((int)DRIVE_READY, (int)s_state, "step3: SPINUP → READY");
+    CHECK_EQUAL_TEXT(DRIVE_STATUS_DISC, build_status(), "step3: clean DISC-only status");
+}
+
+// Eject parity: programmatic eject leaves the same drive state as the door-open
+// path and the TRAY_OUT opcode (all three clear the disc identically).
+TEST(DiscChange, EjectMatchesDoorAndTrayOut)
+{
+    s_state = DRIVE_PLAYING;
+    uint8_t tray_out_status = handle_tray_out();   // TRAY_OUT opcode path
+    drive_state_t after_tray_out = s_state;
+
+    s_state = DRIVE_PLAYING;
+    signal_eject();                                // programmatic / door path
+
+    CHECK_EQUAL_TEXT((int)after_tray_out, (int)s_state,
+                     "signal_eject must reach the same state as TRAY_OUT (IDLE)");
+    CHECK_EQUAL_TEXT(tray_out_status, s_last_status_sent,
+                     "signal_eject status must match TRAY_OUT's 0x00");
 }

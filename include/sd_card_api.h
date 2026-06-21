@@ -34,3 +34,8 @@ uint32_t sd_scan_uf2_files(char paths[][MAX_PATH_LEN], uint32_t max_count,
 // Count all .uf2 files in base_dir without storing paths.
 uint32_t sd_count_uf2_files(const char *base_dir);
 
+// Scan base_dir (default "0:/playlists/") for .m3u playlist files.
+// Same offset/max_count paging + alphabetical-sort semantics as sd_scan_images().
+uint32_t sd_scan_m3u_files(char paths[][MAX_PATH_LEN], uint32_t max_count,
+                           const char *base_dir, uint32_t offset);
+

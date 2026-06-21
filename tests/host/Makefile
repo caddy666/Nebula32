@@ -45,7 +45,8 @@ WARN_SRCS = \
     ../../src/vis_audio.c \
     ../../src/sector_cache.c \
     ../../src/maths.c \
-    ../../src/commo.c
+    ../../src/commo.c \
+    ../../src/carousel.c
 
 SRCS_C = \
     ../../src/ecc.c \
@@ -55,6 +56,7 @@ SRCS_C = \
     ../../src/sector_cache.c \
     ../../src/maths.c \
     ../../src/commo.c \
+    ../../src/carousel.c \
     commo_hal_stub.c \
     disc_image_stub.c
 
@@ -88,7 +90,8 @@ SRCS_CPP = \
     test_subchannel_math.cpp \
     test_webserver_html.cpp \
     test_supplemental.cpp \
-    test_fw_update.cpp
+    test_fw_update.cpp \
+    test_carousel.cpp
 
 OBJS_C   = $(SRCS_C:.c=.o)
 OBJS_CPP = $(SRCS_CPP:.cpp=.o)

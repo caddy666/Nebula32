@@ -1,5 +1,0 @@
-include(interstate75_rainbow.cmake)
-include(interstate75_balls_demo.cmake)
-include(interstate75_rainbow_text.cmake)
-include(interstate75_fire_effect.cmake)
-include(interstate75_example.cmake)

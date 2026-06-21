@@ -1,1 +1,0 @@
-include(plasma_stick.cmake)

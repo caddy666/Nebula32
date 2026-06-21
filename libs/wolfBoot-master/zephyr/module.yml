@@ -1,5 +1,0 @@
-name: wolfboot
-
-build:
-  cmake: zephyr
-  kconfig: zephyr/Kconfig
