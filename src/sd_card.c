@@ -162,11 +162,6 @@ uint32_t sd_count_images(const char *base_dir) {
     return count;
 }
 
-// Check if the SD card is still present and accessible
-bool sd_card_is_ready(void) {
-    return s_mounted;
-}
-
 // =============================================================================
 // UF2 firmware file scanning
 // =============================================================================
@@ -207,25 +202,6 @@ uint32_t sd_scan_uf2_files(char paths[][MAX_PATH_LEN], uint32_t max_count,
     if (count > 1)
         qsort(paths, (size_t)count, sizeof(paths[0]), _path_cmp);
 
-    return count;
-}
-
-uint32_t sd_count_uf2_files(const char *base_dir) {
-    if (!s_mounted) return 0;
-    if (!base_dir || base_dir[0] == '\0') base_dir = "0:/";
-
-    DIR      dir;
-    FILINFO  fno;
-    uint32_t count = 0;
-
-    if (f_opendir(&dir, base_dir) != FR_OK) return 0;
-
-    while (true) {
-        if (f_readdir(&dir, &fno) != FR_OK || fno.fname[0] == '\0') break;
-        if (!(fno.fattrib & AM_DIR) && is_uf2_file(fno.fname)) count++;
-    }
-
-    f_closedir(&dir);
     return count;
 }
 

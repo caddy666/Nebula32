@@ -41,12 +41,7 @@
 
 static logger_config_t s_cfg = {
     .logging_enabled = false,
-    .log_commands    = true,
-    .log_sectors     = false,
-    .log_seeks       = true,
-    .log_state       = true,
     .log_errors      = true,
-    .log_irq         = false,
     .log_max_kb      = 4096,
     .sdcard_base     = "0:/",
     .wifi_ssid       = "",
@@ -127,12 +122,7 @@ static void parse_settings_file(void) {
                 "#\n"
                 "# --- Logging ---\n"
                 "logging_enabled = 1\n"
-                "log_commands    = 1\n"
-                "log_sectors     = 0\n"
-                "log_seeks       = 1\n"
-                "log_state       = 1\n"
                 "log_errors      = 1\n"
-                "log_irq         = 0\n"
                 "log_max_kb      = 4096\n"
                 "#\n"
                 "# --- Carousel / playlists ---\n"
@@ -198,20 +188,10 @@ static void parse_settings_file(void) {
             }
         } else if (strcasecmp(key, "logging_enabled") == 0) {
             s_cfg.logging_enabled = parse_bool(val);
-        } else if (strcasecmp(key, "log_commands") == 0) {
-            s_cfg.log_commands = parse_bool(val);
-        } else if (strcasecmp(key, "log_sectors") == 0) {
-            s_cfg.log_sectors = parse_bool(val);
-        } else if (strcasecmp(key, "log_seeks") == 0) {
-            s_cfg.log_seeks = parse_bool(val);
-        } else if (strcasecmp(key, "log_state") == 0) {
-            s_cfg.log_state = parse_bool(val);
         } else if (strcasecmp(key, "log_errors") == 0) {
             s_cfg.log_errors = parse_bool(val);
-        } else if (strcasecmp(key, "log_irq") == 0) {
-            s_cfg.log_irq = parse_bool(val);
         } else if (strcasecmp(key, "log_max_kb") == 0) {
-            s_cfg.log_max_kb = (val[0] == '-') ? 0u : (uint32_t)atoi(val);
+            s_cfg.log_max_kb = (val[0] == '-') ? 0U : (uint32_t)atoi(val);
         } else if (strcasecmp(key, "wifi_ssid") == 0) {
             strncpy(s_cfg.wifi_ssid, val, sizeof(s_cfg.wifi_ssid) - 1);
             s_cfg.wifi_ssid[sizeof(s_cfg.wifi_ssid) - 1] = '\0';
@@ -235,15 +215,9 @@ static void parse_settings_file(void) {
     }
     f_close(&cfg_file);
 
-    printf("[LOG] Settings: logging=%d cmds=%d sectors=%d seeks=%d "
-           "state=%d errors=%d irq=%d max=%luKB\n",
+    printf("[LOG] Settings: logging=%d errors=%d max=%luKB\n",
            s_cfg.logging_enabled,
-           s_cfg.log_commands,
-           s_cfg.log_sectors,
-           s_cfg.log_seeks,
-           s_cfg.log_state,
            s_cfg.log_errors,
-           s_cfg.log_irq,
            s_cfg.log_max_kb);
 }
 
@@ -503,41 +477,5 @@ void logger_set_enabled(bool enabled) {
         logger_write(LOG_INFO, "LOG ", "Logging disabled at runtime");
         logger_flush();
     }
-}
-
-// ---------------------------------------------------------------------------
-// Internal log helpers (called by macros in logger.h)
-// ---------------------------------------------------------------------------
-
-void _log_sector(uint32_t lba, const char *mode_str,
-                  uint32_t bytes, bool filtered) {
-    if (filtered) {
-        logger_write(LOG_DEBUG, "SECT",
-                     "LBA=%-6lu %s filtered (XA mismatch)", (unsigned long)lba, mode_str);
-    } else {
-        logger_write(LOG_DEBUG, "SECT",
-                     "LBA=%-6lu %s %luB → host", (unsigned long)lba, mode_str, (unsigned long)bytes);
-    }
-}
-
-void _log_seek_start(uint32_t from_lba, uint32_t to_lba, uint32_t est_us) {
-    logger_write(LOG_INFO, "SEEK",
-                 "start from=%-6lu to=%-6lu est=%lums",
-                 (unsigned long)from_lba,
-                 (unsigned long)to_lba,
-                 (unsigned long)(est_us / 1000));
-}
-
-void _log_state(int old_state, int new_state) {
-    static const char *state_names[] = {
-        "IDLE", "SPINUP", "READY", "SEEKING",
-        "READING", "PLAYING", "PAUSED", "ERROR"
-    };
-    const char *old_name = (old_state >= 0 && old_state <= 7)
-                            ? state_names[old_state] : "???";
-    const char *new_name = (new_state >= 0 && new_state <= 7)
-                            ? state_names[new_state] : "???";
-    logger_write(LOG_INFO, "DRV ",
-                 "state %-8s → %s", old_name, new_name);
 }
 

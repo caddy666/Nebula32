@@ -14,9 +14,9 @@ static uint16_t hsv(uint8_t h, uint8_t s, uint8_t v) {
     if (s == 0) return rgb(v, v, v);
     uint8_t reg = h / 43;
     uint8_t rem = (uint8_t)((h - (uint16_t)reg * 43) * 6);
-    uint8_t p   = (uint8_t)((v * (255u - s)) >> 8);
-    uint8_t q   = (uint8_t)((v * (255u - ((s * rem) >> 8))) >> 8);
-    uint8_t t_  = (uint8_t)((v * (255u - ((s * (255u - rem)) >> 8))) >> 8);
+    uint8_t p   = (uint8_t)((v * (255U - s)) >> 8);
+    uint8_t q   = (uint8_t)((v * (255U - ((s * rem) >> 8))) >> 8);
+    uint8_t t_  = (uint8_t)((v * (255U - ((s * (255U - rem)) >> 8))) >> 8);
     switch (reg) {
         case 0:  return rgb(v, t_, p);
         case 1:  return rgb(q, v,  p);
@@ -84,8 +84,8 @@ static bool    sine_ready = false;
 static void ensure_sine(void) {
     if (sine_ready) return;
     for (int i = 0; i < 256; i++) {
-        float v = sinf((float)i * 6.28318f / 256.0f);
-        sine256[i] = (uint8_t)((v * 127.0f) + 128.0f);
+        float v = sinf((float)i * 6.28318F / 256.0F);
+        sine256[i] = (uint8_t)((v * 127.0F) + 128.0F);
     }
     sine_ready = true;
 }
@@ -192,9 +192,9 @@ static void render_raster(const EffectCtx *ctx) {
             uint8_t h  = (uint8_t)(b * 40 + (ctx->frame >> 1));
             uint16_t c = hsv(h, 230, (uint8_t)scaled);
             uint16_t native = (uint16_t)((c >> 8) | (c << 8));
-            r_acc += (native >> 8) & 0xF8u;
-            g_acc += (native >> 3) & 0xFCu;
-            b_acc += (native << 3) & 0xF8u;
+            r_acc += (native >> 8) & 0xF8U;
+            g_acc += (native >> 3) & 0xFCU;
+            b_acc += (native << 3) & 0xF8U;
         }
         if (r_acc > 255) r_acc = 255;
         if (g_acc > 255) g_acc = 255;
@@ -232,9 +232,9 @@ static void render_combo(const EffectCtx *ctx) {
             uint8_t h  = (uint8_t)(b * 60 + (ctx->frame >> 2));
             uint16_t c = hsv(h, 200, (uint8_t)scaled);
             uint16_t native = (uint16_t)((c >> 8) | (c << 8));
-            r_acc += (native >> 8) & 0xF8u;
-            g_acc += (native >> 3) & 0xFCu;
-            b_acc += (native << 3) & 0xF8u;
+            r_acc += (native >> 8) & 0xF8U;
+            g_acc += (native >> 3) & 0xFCU;
+            b_acc += (native << 3) & 0xF8U;
         }
         if (r_acc > 255) r_acc = 255;
         if (g_acc > 255) g_acc = 255;
@@ -370,25 +370,25 @@ static void render_spaceballs(const EffectCtx *ctx) {
     uint32_t bass = (uint32_t)ctx->spectrum[0] + ctx->spectrum[1]
                   + ctx->spectrum[2] + ctx->spectrum[3];
 
-    if (sb.bass_avg == 0) sb.bass_avg = bass * 256u;
-    sb.bass_avg = (sb.bass_avg * 15u + bass * 256u) >> 4;
+    if (sb.bass_avg == 0) sb.bass_avg = bass * 256U;
+    sb.bass_avg = (sb.bass_avg * 15U + bass * 256U) >> 4;
 
-    bool beat = (bass * 256u * 13u / 10u > sb.bass_avg)
-             && (bass > 80u)
+    bool beat = (bass * 256U * 13U / 10U > sb.bass_avg)
+             && (bass > 80U)
              && (sb.beat_cooldown == 0);
 
     if (beat) {
-        sb.pose           = (uint8_t)((sb.pose + 1u) % NUM_POSES);
+        sb.pose           = (uint8_t)((sb.pose + 1U) % NUM_POSES);
         sb.beat_flash     = 10;
         sb.beat_cooldown  = 15;
         sb.no_beat_timer  = 0;
         for (int i = 0; i < MAX_SPARKS; i++) {
-            uint32_t seed = ctx->frame * 13u + (uint32_t)i * 7u;
-            sb.sparks[i].cx   = (int8_t)(CX + (int)(((seed*11u)%21u)) - 10);
-            sb.sparks[i].cy   = (int8_t)(CY + (int)(((seed* 7u)%15u)) -  7);
-            sb.sparks[i].vx   = (int8_t)((int)((seed*3u)%7u) - 3);
-            sb.sparks[i].vy   = (int8_t)(-2 - (int8_t)((seed)%4u));
-            sb.sparks[i].life = (uint8_t)(12u + (seed % 8u));
+            uint32_t seed = ctx->frame * 13U + (uint32_t)i * 7U;
+            sb.sparks[i].cx   = (int8_t)(CX + (int)(((seed*11U)%21U)) - 10);
+            sb.sparks[i].cy   = (int8_t)(CY + (int)(((seed* 7U)%15U)) -  7);
+            sb.sparks[i].vx   = (int8_t)((int)((seed*3U)%7U) - 3);
+            sb.sparks[i].vy   = (int8_t)(-2 - (int8_t)((seed)%4U));
+            sb.sparks[i].life = (uint8_t)(12U + (seed % 8U));
         }
     }
     if (sb.beat_cooldown) sb.beat_cooldown--;
@@ -396,12 +396,12 @@ static void render_spaceballs(const EffectCtx *ctx) {
 
     if (++sb.no_beat_timer > 80) {
         sb.no_beat_timer = 0;
-        sb.pose = (uint8_t)((sb.pose + 1u) % NUM_POSES);
+        sb.pose = (uint8_t)((sb.pose + 1U) % NUM_POSES);
     }
 
     if (++sb.frame_div >= 3) {
         sb.frame_div  = 0;
-        sb.col_offset = (uint8_t)((sb.col_offset + 1u) % 15u);
+        sb.col_offset = (uint8_t)((sb.col_offset + 1U) % 15U);
     }
 
     for (int i = 0; i < MAX_SPARKS; i++) {
@@ -427,8 +427,8 @@ static void render_spaceballs(const EffectCtx *ctx) {
         bool row_edge = ((y & 3) == 3);
         bool odd_row  = (y & 1);
 
-        uint8_t bg_b = (uint8_t)(25u + (uint32_t)y * 15u / DISP_H);
-        uint8_t bg_r = (uint8_t)(sb.beat_flash * 2u);
+        uint8_t bg_b = (uint8_t)(25U + (uint32_t)y * 15U / DISP_H);
+        uint8_t bg_r = (uint8_t)(sb.beat_flash * 2U);
         uint16_t bg_full = rgb(bg_r,      0,      bg_b);
         uint16_t bg_dim  = rgb(bg_r >> 1, 0, bg_b >> 1);
 
@@ -444,30 +444,30 @@ static void render_spaceballs(const EffectCtx *ctx) {
 
             uint8_t pi;
             if (cell == 8) {
-                pi = (uint8_t)((8u + sb.col_offset) % 15u + 1u);
+                pi = (uint8_t)((8U + sb.col_offset) % 15U + 1U);
             } else {
-                pi = (uint8_t)(((uint8_t)(cell - 1u) * 2u + sb.col_offset) % 15u + 1u);
+                pi = (uint8_t)(((uint8_t)(cell - 1U) * 2U + sb.col_offset) % 15U + 1U);
             }
 
             uint8_t r = pal_r[pi], g = pal_g[pi], b = pal_b[pi];
 
             if (sb.beat_flash) {
-                uint16_t fl = (uint16_t)sb.beat_flash * 16u;
-                r = (uint8_t)((r + fl > 255u) ? 255u : r + fl);
-                g = (uint8_t)((g + fl > 255u) ? 255u : g + fl);
-                b = (uint8_t)((b + fl > 255u) ? 255u : b + fl);
+                uint16_t fl = (uint16_t)sb.beat_flash * 16U;
+                r = (uint8_t)((r + fl > 255U) ? 255U : r + fl);
+                g = (uint8_t)((g + fl > 255U) ? 255U : g + fl);
+                b = (uint8_t)((b + fl > 255U) ? 255U : b + fl);
             }
 
             if (row_edge || col_edge) {
-                r = (uint8_t)(r * 3u >> 2);
-                g = (uint8_t)(g * 3u >> 2);
-                b = (uint8_t)(b * 3u >> 2);
+                r = (uint8_t)(r * 3U >> 2);
+                g = (uint8_t)(g * 3U >> 2);
+                b = (uint8_t)(b * 3U >> 2);
             }
 
             if (odd_row) {
-                r = (uint8_t)(r * 3u >> 2);
-                g = (uint8_t)(g * 3u >> 2);
-                b = (uint8_t)(b * 3u >> 2);
+                r = (uint8_t)(r * 3U >> 2);
+                g = (uint8_t)(g * 3U >> 2);
+                b = (uint8_t)(b * 3U >> 2);
             }
 
             line[x] = rgb(r, g, b);
@@ -491,12 +491,12 @@ static void render_juggler(const EffectCtx *ctx) {
     avg /= NUM_BARS;
 
     // Ball orbital positions in canvas space (60×60, CX/CY at centre)
-    float t = (float)ctx->frame * 0.15f;
+    float t = (float)ctx->frame * 0.15F;
     int bx[3], by[3];
     for (int i = 0; i < 3; i++) {
-        float phase = t + (float)i * 2.0944f;   // 2π/3 offset per ball
-        bx[i] = CX + (int)(11.0f * sinf(phase));
-        by[i] = CY - 22 + (int)(9.0f * cosf(phase));
+        float phase = t + (float)i * 2.0944F;   // 2π/3 offset per ball
+        bx[i] = CX + (int)(11.0F * sinf(phase));
+        by[i] = CY - 22 + (int)(9.0F * cosf(phase));
     }
 
     // Find ball at lowest canvas-y (bottom of arc = "hand" position)
@@ -535,7 +535,7 @@ static void render_juggler(const EffectCtx *ctx) {
         sb_circle(bx[i], by[i], 2, (uint8_t)(8 + i));
 
     // Rasterise canvas → display
-    uint8_t brightness = (uint8_t)(20u + (avg >> 2));
+    uint8_t brightness = (uint8_t)(20U + (avg >> 2));
     uint16_t bg = rgb(brightness >> 2, brightness >> 2, brightness);
 
     for (int y = 0; y < DISP_H; y++) {
@@ -557,7 +557,7 @@ static void render_juggler(const EffectCtx *ctx) {
             }
             // Modest audio-reactive highlight
             uint16_t boost = (uint16_t)(avg >> 3);
-            rv = (rv + boost > 255u) ? 255u : (uint8_t)(rv + boost);
+            rv = (rv + boost > 255U) ? 255U : (uint8_t)(rv + boost);
             line[x] = rgb(rv, gv, bv);
         }
         display_hline((uint16_t)y, line);

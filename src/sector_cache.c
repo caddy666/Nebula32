@@ -56,7 +56,7 @@ void sector_cache_init(sector_cache_t *cache, disc_image_t *disc) {
         printf("[CACHE] %u slots in PSRAM (%u KB read-ahead)\n",
                SECTOR_BUFFER_COUNT_PSRAM,
                (unsigned)((size_t)SECTOR_BUFFER_COUNT_PSRAM
-                          * sizeof(sector_slot_t) / 1024u));
+                          * sizeof(sector_slot_t) / 1024U));
     } else {
         cache->slots      = s_sram_slots;
         cache->slot_count = SECTOR_BUFFER_COUNT;
@@ -94,11 +94,11 @@ bool sector_cache_is_full(sector_cache_t *cache) {
 void sector_cache_flush(sector_cache_t *cache) {
     // Bump generation so any in-flight Core 1 read discards its result.
     // ACQ_REL ensures the increment is visible to Core 1 before we clear valid flags.
-    __atomic_fetch_add(&cache->flush_gen, 1u, __ATOMIC_ACQ_REL);
+    __atomic_fetch_add(&cache->flush_gen, 1U, __ATOMIC_ACQ_REL);
     for (uint32_t i = 0; i < cache->slot_count; i++) {
         __atomic_store_n(&cache->slots[i].valid, false, __ATOMIC_RELEASE);
     }
-    __atomic_store_n(&cache->next_write_slot, 0u, __ATOMIC_RELEASE);
+    __atomic_store_n(&cache->next_write_slot, 0U, __ATOMIC_RELEASE);
 }
 
 // ---------------------------------------------------------------------------
@@ -226,7 +226,7 @@ void sector_cache_prefetch_tick(sector_cache_t *cache) {
         // Core 0's ACQUIRE load sees the fully written slot->data.
         if (__atomic_load_n(&cache->flush_gen, __ATOMIC_ACQUIRE) == my_gen) {
             __atomic_store_n(&cache->next_write_slot,
-                             ((uint32_t)free_slot + 1u) % cache->slot_count,
+                             ((uint32_t)free_slot + 1U) % cache->slot_count,
                              __ATOMIC_RELEASE);
             __atomic_store_n(&slot->valid, true, __ATOMIC_RELEASE);
             __atomic_store_n(&cache->next_fetch_lba, fetch_lba + 1, __ATOMIC_RELEASE);
@@ -245,7 +245,7 @@ void sector_cache_prefetch_tick(sector_cache_t *cache) {
         // false permanent-miss on the first sector of the new seek position.
         if (__atomic_load_n(&cache->flush_gen, __ATOMIC_ACQUIRE) == my_gen) {
             __atomic_store_n(&cache->next_write_slot,
-                             ((uint32_t)free_slot + 1u) % cache->slot_count,
+                             ((uint32_t)free_slot + 1U) % cache->slot_count,
                              __ATOMIC_RELEASE);
             __atomic_store_n(&slot->valid, true, __ATOMIC_RELEASE);
             __atomic_store_n(&cache->next_fetch_lba, fetch_lba + 1, __ATOMIC_RELEASE);

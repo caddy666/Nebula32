@@ -16,7 +16,9 @@
 #define LED_PIN LED_RED_PIN   /* GPIO 39 — red LED on RM2, direct GPIO */
 #endif
 
-// External image list (defined in main.c)
+// External image list (defined in main.c).  Core-0-only: ui.c, webserver.c, and
+// main.c all read/rebuild this from the single Core 0 main loop, so the accesses
+// here need no locking.  See the OWNERSHIP note in main.c.
 extern char     s_image_paths[][MAX_PATH_LEN];
 extern uint32_t s_image_count;
 
@@ -62,7 +64,7 @@ void ui_init(uint32_t image_count, uint32_t initial_index) {
 
     // LED already initialised in main.c
     printf("[UI] Disc selector ready: %lu images, cursor=%lu\n",
-           image_count, s_cursor);
+           (unsigned long)image_count, (unsigned long)s_cursor);
 }
 
 // ---------------------------------------------------------------------------

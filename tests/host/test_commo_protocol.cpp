@@ -382,6 +382,81 @@ TEST(CommoFuzz, SuccessiveErrors_RetryIsNewCommand)
     LONGS_EQUAL(COMMO_CMD_NEW, cmd.status);
 }
 
+// A receive timeout mid-parameter (data line asserted but no byte arrives) must
+// park the SM in RXD_PARM without corrupting the buffer or reporting a command.
+// commo_hal_data_is_low() is forced high with an empty queue so commo_hal_rxd()
+// returns COMMO_HAL_RX_TIMEOUT inside SM_RXD_PARM.  When the real param + checksum
+// finally arrive, the command must complete cleanly — the timeout is a stall, not
+// an abort.
+TEST(CommoFuzz, MidParamTimeout_ParksThenRecovers)
+{
+    commo_hal_stub_push(0x05);     // opcode needing 1 param (table[5]=2)
+    commo_tick(&s_ctx);            // IDLE → RXD_OPCODE
+    commo_tick(&s_ctx);            // RXD_OPCODE: read 0x05 → RXD_PARM; queue now empty
+
+    // Stall: data line asserted but no byte ready → RX_TIMEOUT inside RXD_PARM.
+    commo_hal_stub_set_data_low(1);
+    commo_tick(&s_ctx);            // RXD_PARM: data_is_low yet rxd TIMEOUT → break (parked)
+
+    commo_cmd_t cmd;
+    CHECK_FALSE(commo_cmd_pending(&s_ctx, &cmd));   // no spurious report
+
+    // Recover: deliver the genuine param + checksum.  Checksum = ~(0x05+0x42).
+    commo_hal_stub_set_data_low(0);
+    commo_hal_stub_push(0x42);
+    commo_hal_stub_push((uint8_t)~(0x05u + 0x42u));
+    commo_tick(&s_ctx);            // RXD_PARM: read 0x42 → RXD_CHECKSUM
+    commo_tick(&s_ctx);            // RXD_CHECKSUM: read checksum → NEW
+
+    CHECK(commo_cmd_pending(&s_ctx, &cmd));
+    LONGS_EQUAL(COMMO_CMD_NEW, cmd.status);
+    BYTES_EQUAL(0x05, cmd.bytes[0]);
+    BYTES_EQUAL(0x42, cmd.bytes[1]);
+}
+
+// A receive timeout in the RXD_CHECKSUM state must likewise park (not abort).
+// The checksum byte arriving late still validates the command.
+TEST(CommoFuzz, ChecksumTimeout_ParksThenRecovers)
+{
+    commo_hal_stub_push(0x03);     // single-byte opcode (table[3]=1)
+    commo_tick(&s_ctx);            // IDLE → RXD_OPCODE
+    commo_tick(&s_ctx);            // RXD_OPCODE: read 0x03 → RXD_CHECKSUM; queue empty
+
+    commo_hal_stub_set_data_low(1);
+    commo_tick(&s_ctx);            // RXD_CHECKSUM: data_is_low yet rxd TIMEOUT → break
+
+    commo_cmd_t cmd;
+    CHECK_FALSE(commo_cmd_pending(&s_ctx, &cmd));
+
+    commo_hal_stub_set_data_low(0);
+    commo_hal_stub_push((uint8_t)~0x03u);   // correct checksum for opcode 0x03
+    commo_tick(&s_ctx);            // RXD_CHECKSUM: read checksum → NEW
+
+    CHECK(commo_cmd_pending(&s_ctx, &cmd));
+    LONGS_EQUAL(COMMO_CMD_NEW, cmd.status);
+    BYTES_EQUAL(0x03, cmd.bytes[0]);
+}
+
+// Lock the SM_ERR_SEND back-off length precisely: a zero opcode enters ERR_SEND
+// with a 128-tick countdown.  After exactly 128 ticks the error must NOT yet be
+// reported; the 129th tick (counter already 0) fires it.  This pins the
+// COMMO_ERR_SEND_TICKS constant against accidental change.
+TEST(CommoFuzz, ErrSendCountdown_IsExactly128Ticks)
+{
+    commo_hal_stub_push(0x00);     // null opcode → ERR_SEND, counter = 128
+    commo_tick(&s_ctx);            // IDLE → RXD_OPCODE
+    commo_tick(&s_ctx);            // RXD_OPCODE: b==0 → ERR_SEND (counter=128)
+
+    commo_cmd_t cmd;
+    for (int i = 0; i < 128; i++) {
+        commo_tick(&s_ctx);                          // 128 decrements
+        CHECK_FALSE(commo_cmd_pending(&s_ctx, &cmd));// never reports during countdown
+    }
+    commo_tick(&s_ctx);            // counter==0 branch → report CMD_ERROR
+    CHECK(commo_cmd_pending(&s_ctx, &cmd));
+    LONGS_EQUAL(COMMO_CMD_ERROR, cmd.status);
+}
+
 /* =========================================================================
  * CommoPowerOn — wire-level byte sequences from the real power-on handshake
  *

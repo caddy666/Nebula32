@@ -3,8 +3,8 @@
 // logger.h — SD Card Activity Logger
 // =============================================================================
 //
-// Logs every COMMO command, sector delivery, seek, state transition,
-// IRQ event and error to a text file on the SD card: "cd32_cd.log"
+// Logs informational events, warnings and errors to a text file on the
+// SD card: "cd32_cd.log"
 //
 // DESIGN GOALS:
 //   1. Zero overhead when disabled — all log calls resolve to nothing
@@ -27,12 +27,7 @@
 //   Supported keys:
 //     sdcard_base       = 0:/      # Directory scanned for disc images
 //     logging_enabled   = 1        # 1 = on, 0 = off
-//     log_commands      = 1        # Log every COMMO command and response
-//     log_sectors       = 0        # Log every sector delivery (very verbose)
-//     log_seeks         = 1        # Log seek start/complete events
-//     log_state         = 1        # Log drive state transitions
 //     log_errors        = 1        # Log error conditions
-//     log_irq           = 0        # Log every IRQ assertion (very verbose)
 //     log_max_kb        = 4096     # Maximum log file size in KB (0 = unlimited)
 //     wifi_ssid         =          # WiFi network name (leave blank to disable WiFi)
 //     wifi_password     =          # WiFi password
@@ -43,36 +38,12 @@
 //     # CD32 ODE settings
 //     sdcard_base     = 0:/games/
 //     logging_enabled = 1
-//     log_commands    = 1
-//     log_sectors     = 0
-//     log_seeks       = 1
-//     log_state       = 1
 //     log_errors      = 1
-//     log_irq         = 0
 //     log_max_kb      = 2048
 //
 // LOG FILE FORMAT:
 //   Each line: [timestamp_ms] LEVEL TAG message
 //   Timestamp is milliseconds since boot (wraps at ~49 days).
-//
-//   Example output:
-//     [    142] INFO  CMD  MOTORON
-//     [    843] INFO  DRV  state IDLE -> SPINUP
-//     [    843] INFO  CMD  MOTORON -> stat=0x02
-//     [    1543] INFO  DRV  state SPINUP -> READY
-//     [    1544] INFO  CMD  GETSTAT -> stat=0x04
-//     [    1545] INFO  CMD  SETMODE mode=0x30 (2x, 2352B)
-//     [    1546] INFO  CMD  GETTN -> first=01 last=01
-//     [    1547] INFO  CMD  GETTD track=01 -> 00:02:00
-//     [    1548] INFO  CMD  SETLOC 00:02:00 (LBA=0)
-//     [    1549] INFO  SEEK start LBA=0 from=0 est=80ms
-//     [    1549] INFO  CMD  READN -> stat=0x02
-//     [    1629] INFO  SEEK complete LBA=0
-//     [    1629] INFO  SECT LBA=0 MODE1 2352B -> host
-//     [    1642] INFO  SECT LBA=1 MODE1 2352B -> host
-//     ...
-//     [    2100] WARN  SECT LBA=300 cache miss (retry)
-//     [    2101] ERR   DRV  SD read error at LBA=300
 // =============================================================================
 
 
@@ -96,12 +67,7 @@ typedef enum {
 // ---------------------------------------------------------------------------
 typedef struct {
     bool     logging_enabled;   // Master on/off switch
-    bool     log_commands;      // COMMO command + response bytes
-    bool     log_sectors;       // Every sector delivery (verbose!)
-    bool     log_seeks;         // Seek start / complete
-    bool     log_state;         // Drive state machine transitions
     bool     log_errors;        // All error conditions
-    bool     log_irq;           // Every IRQ assertion (very verbose!)
     uint32_t log_max_kb;        // Max log file size KB (0 = unlimited)
     char     sdcard_base[256];  // Base dir for disc image scan (default "0:/")
     char     wifi_ssid[64];     // WiFi SSID (parsed from nebula32.cfg)
@@ -176,38 +142,6 @@ void logger_write(log_level_t level, const char *tag, const char *fmt, ...)
 // Each macro checks both the compile-time guard and the runtime flag.
 // The tag argument must be a 4-char string literal for alignment.
 
-// Log a sector delivery
-// lba        — logical block address
-// mode_str   — "MODE1", "MODE2", "AUDIO"
-// bytes      — bytes delivered
-// filtered   — true if not delivered
-#define LOG_SECTOR(lba, mode_str, bytes, filtered) \
-    do { if (logger_is_enabled() && logger_get_config()->log_sectors) { \
-        _log_sector(lba, mode_str, bytes, filtered); \
-    } } while(0)
-
-// Log a seek operation start
-// from_lba — current head position
-// to_lba   — target position
-// est_us   — estimated seek time in microseconds
-#define LOG_SEEK_START(from_lba, to_lba, est_us) \
-    do { if (logger_is_enabled() && logger_get_config()->log_seeks) { \
-        _log_seek_start(from_lba, to_lba, est_us); \
-    } } while(0)
-
-// Log seek completion
-#define LOG_SEEK_DONE(lba) \
-    do { if (logger_is_enabled() && logger_get_config()->log_seeks) { \
-        logger_write(LOG_INFO, "SEEK", "complete LBA=%lu", (unsigned long)(lba)); \
-    } } while(0)
-
-// Log a drive state transition
-// old_state / new_state — drive_state_t values
-#define LOG_STATE(old_state, new_state) \
-    do { if (logger_is_enabled() && logger_get_config()->log_state) { \
-        _log_state(old_state, new_state); \
-    } } while(0)
-
 // Log an error
 #define LOG_ERROR_MSG(fmt, ...) \
     do { if (logger_is_enabled() && logger_get_config()->log_errors) { \
@@ -226,19 +160,4 @@ void logger_write(log_level_t level, const char *tag, const char *fmt, ...)
         logger_write(LOG_INFO, tag, fmt, ##__VA_ARGS__); \
     } } while(0)
 
-// Log a debug message (only emitted when log_sectors or log_irq is on,
-// since these are the only verbose categories)
-#define LOG_DEBUG_MSG(tag, fmt, ...) \
-    do { if (logger_is_enabled() && \
-             (logger_get_config()->log_sectors || logger_get_config()->log_irq)) { \
-        logger_write(LOG_DEBUG, tag, fmt, ##__VA_ARGS__); \
-    } } while(0)
-
-// ---------------------------------------------------------------------------
-// Internal helpers (called by macros — do not call directly)
-// ---------------------------------------------------------------------------
-void _log_sector(uint32_t lba, const char *mode_str,
-                 uint32_t bytes, bool filtered);
-void _log_seek_start(uint32_t from_lba, uint32_t to_lba, uint32_t est_us);
-void _log_state(int old_state, int new_state);
 

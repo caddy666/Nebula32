@@ -31,16 +31,16 @@ uint16_t subcode_crc16(const uint8_t *data, uint32_t len) {
 
     for (uint32_t i = 0; i < len; i++) {
         // XOR the next data byte into the high byte of the CRC register
-        crc ^= (uint16_t)((unsigned)data[i] << 8u);
+        crc ^= (uint16_t)((unsigned)data[i] << 8U);
 
         // Process each bit
         for (int b = 0; b < 8; b++) {
-            if (crc & 0x8000u) {
+            if (crc & 0x8000U) {
                 // MSB set: shift left and XOR with polynomial
-                crc = (uint16_t)(((unsigned)crc << 1u) ^ 0x1021u);
+                crc = (uint16_t)(((unsigned)crc << 1U) ^ 0x1021U);
             } else {
                 // MSB clear: just shift left
-                crc = (uint16_t)(crc << 1u);
+                crc = (uint16_t)(crc << 1U);
             }
         }
     }
@@ -65,7 +65,7 @@ void subcode_build_q_position(uint8_t track_no, uint8_t index,
     // CTRL nibble (bits 7:4): data or audio track flags
     // ADR  nibble (bits 3:0): 0x1 = position mode
     uint8_t ctrl = is_data ? Q_CTRL_DATA : Q_CTRL_AUDIO;
-    buf[0] = (uint8_t)((ctrl << 4u) | Q_ADR_POSITION);
+    buf[0] = (uint8_t)((ctrl << 4U) | Q_ADR_POSITION);
 
     // ---- Track number (BCD) ----
     // Lead-in area uses track 0x00; programme area uses 0x01-0x63 (BCD 1-99).
@@ -87,12 +87,12 @@ void subcode_build_q_position(uint8_t track_no, uint8_t index,
         rel_lba = (disc_lba >= track_start_lba) ? (disc_lba - track_start_lba) : 0;
     }
     {
-        uint32_t rf = rel_lba % 75u;
-        uint32_t rs = (rel_lba / 75u) % 60u;
-        uint32_t rm = (rel_lba / 75u) / 60u;
-        buf[3] = (uint8_t)(((rm / 10u) << 4) | (rm % 10u));
-        buf[4] = (uint8_t)(((rs / 10u) << 4) | (rs % 10u));
-        buf[5] = (uint8_t)(((rf / 10u) << 4) | (rf % 10u));
+        uint32_t rf = rel_lba % 75U;
+        uint32_t rs = (rel_lba / 75U) % 60U;
+        uint32_t rm = (rel_lba / 75U) / 60U;
+        buf[3] = (uint8_t)(((rm / 10U) << 4) | (rm % 10U));
+        buf[4] = (uint8_t)(((rs / 10U) << 4) | (rs % 10U));
+        buf[5] = (uint8_t)(((rf / 10U) << 4) | (rf % 10U));
     }
 
     // ---- Reserved (byte 6 = 0x00 in Mode 1) ----
@@ -108,96 +108,9 @@ void subcode_build_q_position(uint8_t track_no, uint8_t index,
     subcode_append_crc(buf);
 }
 
-// ---------------------------------------------------------------------------
-// Q-channel MCN Mode (ADR=2) — Media Catalog Number
-// ---------------------------------------------------------------------------
-// The MCN (also called the UPC/EAN barcode) is a 13-digit number encoded in
-// a 72-bit BCD field.  We transmit this approximately every 100 sectors as
-// required by the Red Book specification.  The CD32 akiko does not depend on
-// the MCN for normal operation, but some software uses it for disc verification.
-
-void subcode_build_q_mcn(const char *mcn, uint8_t *buf) {
-    // Byte 0: CTRL/ADR — audio or data is not meaningful for MCN frames,
-    //         but we use the same CTRL as the first data track.
-    buf[0] = (Q_CTRL_DATA << 4) | Q_ADR_MCN;
-
-    // Bytes 1–7: 13 BCD digits packed into 52 bits, MSB first.
-    // The remaining 20 bits of bytes 1-8 are zero.
-    //   Byte 1 bits [7:4] = digit 1
-    //   Byte 1 bits [3:0] = digit 2
-    //   ...
-    //   Byte 7 bits [7:4] = digit 13
-    //   Byte 7 bits [3:0] = 0 (zero-pad)
-    //   Byte 8           = 0x00 (ZERO flag + 7 zero bits)
-
-    if (mcn == NULL) {
-        // No barcode — emit all-zero MCN
-        memset(buf + 1, 0, 7);
-        buf[8] = 0x00;
-    } else {
-        // Pack the MCN digits
-        uint8_t packed[7] = {0};
-        for (int digit = 0; digit < 13; digit++) {
-            uint8_t d = (mcn[digit] >= '0' && mcn[digit] <= '9')
-                        ? (uint8_t)(mcn[digit] - '0') : 0;
-            if (digit % 2 == 0) {
-                packed[digit / 2] = (uint8_t)(d << 4u);  // High nibble
-            } else {
-                packed[digit / 2] |= (d & 0x0F);   // Low nibble
-            }
-        }
-        memcpy(buf + 1, packed, 7);
-        buf[8] = 0x00;  // ZERO bit (=0 means MCN present; =1 means absent)
-    }
-
-    // Bytes 9: A-TIME frame (absolute time frame; set to 0 in MCN mode)
-    buf[9] = 0x00;
-
-    subcode_append_crc(buf);
-}
-
-// ---------------------------------------------------------------------------
-// Q-channel ISRC Mode (ADR=3) — International Standard Recording Code
-// ---------------------------------------------------------------------------
-// ISRC is a 12-character code identifying a specific recording.
-// Format: CC-OOO-YY-NNNNN  (2 country + 3 owner + 2 year + 5 serial = 12)
-
-// ECMA-130 Table 16: 6-bit character codes for ISRC.
-// Digits '0'-'9' → 0x00-0x09; letters 'A'-'Z' → 0x11-0x2A.
-static uint8_t isrc_encode_char(char c)
-{
-    if (c >= '0' && c <= '9') return (uint8_t)(c - '0');
-    if (c >= 'A' && c <= 'Z') return (uint8_t)((unsigned)(c - 'A') + 17u);
-    return 0;
-}
-
-void subcode_build_q_isrc(uint8_t track_no, bool is_data,
-                           const char *isrc, uint8_t *buf)
-{
-    (void)track_no;   /* not used in ISRC frames — byte 9 carries ISRC tail bits */
-
-    uint8_t ctrl = is_data ? Q_CTRL_DATA : Q_CTRL_AUDIO;
-    buf[0] = (uint8_t)((ctrl << 4u) | Q_ADR_ISRC);
-
-    /* Bytes 1-9: 12 chars × 6 bits = 72 bits, MSB-first — ECMA-130 Table 17 */
-    memset(buf + 1, 0, 9);
-
-    if (isrc != NULL) {
-        for (int i = 0; i < 12 && isrc[i] != '\0'; i++) {
-            uint8_t val     = isrc_encode_char(isrc[i]);
-            int     bit_off = i * 6;
-            int     byte_off = bit_off / 8;
-            int     shift    = 2 - (bit_off % 8);
-
-            if (shift >= 0) {
-                buf[1 + byte_off] |= (uint8_t)(val << shift);
-            } else {
-                buf[1 + byte_off    ] |= (uint8_t)(val >> (-shift));
-                buf[1 + byte_off + 1] |= (uint8_t)(val << (8 + shift));
-            }
-        }
-    }
-
-    subcode_append_crc(buf);
-}
+// Q-channel MCN (ADR=2) and ISRC (ADR=3) modes are optional per Red Book and
+// carry no data on this ODE — no disc-image format we parse provides an MCN or
+// ISRC — so they are not generated.  Omitting them is spec-compliant (you must
+// not advertise a catalog number / recording code you do not have) and the CD32
+// akiko does not depend on either.  Removed with the unused builders.
 

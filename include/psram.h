@@ -40,10 +40,6 @@ void *psram_alloc(size_t n);
 // Mark a block free.  Bump allocator — space is not reclaimed.
 void  psram_free(void *p);
 
-// Realloc: reuses the block if new size fits; otherwise allocates, copies,
-// and marks old block freed.  Returns NULL on failure (original untouched).
-void *psram_realloc(void *p, size_t n);
-
 // True after psram_fw_init() succeeds.
 bool  psram_available(void);
 
@@ -52,7 +48,6 @@ bool  psram_available(void);
 static inline void  psram_fw_init(void)               {}
 static inline void *psram_alloc(size_t n)              { (void)n; return NULL; }
 static inline void  psram_free(void *p)                { (void)p; }
-static inline void *psram_realloc(void *p, size_t n)   { (void)p; (void)n; return NULL; }
 static inline bool  psram_available(void)              { return false; }
 
 #endif  // BUILD_WITH_PSRAM

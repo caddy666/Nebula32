@@ -90,11 +90,8 @@
 #define PIN_DOOR      11   /**< conn 26 — door/tray switch in (active-low)   */
 
 /* --- PIN_SCOR: alias for the generated SUB_SCOR output -------------------- */
-/* Upstream timer.c registers an IRQ on PIN_SCOR so scor_counter ticks once
- * per sector.  In the ODE the SCOR pulse is generated on PIN_SUB_SCOR (GPIO 8)
- * by subcode_pulse_sector_clocks(), so alias them to the same physical pin.
- * The IRQ is still gated by BUILD_WITH_COMMO in timer.c, so the counter
- * is driven by the software-tick path in the ODE build.                     */
+/* In the ODE the SCOR pulse is generated on PIN_SUB_SCOR (GPIO 8) by
+ * subcode_pulse_sector_clocks(), so alias them to the same physical pin.    */
 #define PIN_SCOR      PIN_SUB_SCOR   /**< = GPIO 8 — references the generated SCOR output */
 
 /* --- GPIO 13: PASSIVE output ---------------------------------------------- */
@@ -123,19 +120,12 @@
 
 /* =========================================================================
  * Direct GPIO rotary encoder — GPIO 12, 15, 18, 19
- * Replaces the MCP23017 I2C GPIO expander — no external IC required.
- * GPIO 26–27 (formerly MCP23017 SDA/SCL) are now free spare GPIOs.
  * ========================================================================= */
 
 #define PIN_ENC_A   12  /**< Encoder quadrature A (CLK)                       */
 #define PIN_ENC_B   15  /**< Encoder quadrature B (DT)                        */
 #define PIN_ENC_SW  18  /**< Encoder push-button (active-low)                 */
 #define PIN_ENC_LOG 19  /**< Logger toggle button (active-low)                */
-
-/* Legacy aliases kept for reference; I2C1 no longer initialised.
- * GPIO 26/27 are now free GPIOs — do not assign GPIO_FUNC_I2C to them.    */
-#define PIN_MCP23017_SDA 26  /**< (free) formerly I2C1 SDA to MCP23017       */
-#define PIN_MCP23017_SCL 27  /**< (free) formerly I2C1 SCL to MCP23017       */
 
 /* =========================================================================
  * SD card — 4-bit SDIO — GPIO 30–35

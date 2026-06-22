@@ -49,8 +49,8 @@ static void gf_init(void) {
         gf_exp[i]       = (uint8_t)x;
         gf_exp[i + 255] = (uint8_t)x;  // Duplicate for wrap-around
         gf_log[x]       = (uint8_t)i;
-        x = (uint16_t)(x << 1u);
-        if (x & 0x100u) x ^= 0x11Du;   // Reduce mod p(x) = x^8+x^4+x^3+x^2+1
+        x = (uint16_t)(x << 1U);
+        if (x & 0x100U) x ^= 0x11DU;   // Reduce mod p(x) = x^8+x^4+x^3+x^2+1
     }
     gf_exp[510] = gf_exp[0];
     gf_log[0]   = 0;  // log(0) undefined; set to 0 by convention

@@ -35,7 +35,6 @@
 #include "sector_cache.h"
 #include "subcode.h"
 #include "logger.h"
-#include "upstream_types.h"
 
 // COMMO interface (headers live in include/)
 #include "commo.h"        // commo_ctx_t, commo_init, commo_tick, commo_cmd_pending, etc.
@@ -43,7 +42,6 @@
 #include "pio_hw.h"       // PIO_COMMO_RX/TX, SM_COMMO_RX/TX, g_offset_commo_* externs
 #include "gpio_map.h"     // PIN_IF_CLK/DATA/DIR → PIN_COMMO_CLK/DATA/DIR aliases
                           // PIN_ACTIVE, PIN_DOOR, PIN_SCOR
-#include "timer.h"        // timer_init()
 
 // Generated PIO header from pio/commo.pio (built by pioasm)
 #include "commo.pio.h"    // commo_rx_program, commo_tx_program, commo_program_init()
@@ -62,21 +60,9 @@ extern sector_cache_t g_cache;
 // ---------------------------------------------------------------------------
 // PIO program offset globals
 // ---------------------------------------------------------------------------
-// include/pio_hw.h declares all six offsets as extern.
-// pio_hw.c (deleted — contained real-hardware init for
-// CXD2500BQ/DSIC2/QCHAN) would have defined them, but its pio_hw_init()
-// would claim PIO0 SM0–SM3 which the ODE already owns.
-//
-// We provide the definitions here instead.  Only the COMMO pair are ever
-// non-zero; the CXD/DSIC/QCHAN offsets stay at zero (unused in ODE mode).
-// g_qchan_ready is likewise defined here to satisfy pio_hw.h's extern.
-uint g_offset_cxd      = 0;   // CXD2500BQ — not used in ODE mode
-uint g_offset_dsic_tx  = 0;   // DSIC2 TX  — not used in ODE mode
-uint g_offset_dsic_rx  = 0;   // DSIC2 RX  — not used in ODE mode
-uint g_offset_qchan    = 0;   // Q-channel — not used in ODE mode
+// include/pio_hw.h declares the COMMO offsets as extern; we define them here.
 uint g_offset_commo_rx = 0;   // COMMO RX  — set by commo_bridge_init()
 uint g_offset_commo_tx = 0;   // COMMO TX  — set by commo_bridge_init()
-volatile bool g_qchan_ready = false; // Q-channel capture done — not used
 
 // ---------------------------------------------------------------------------
 // PIO1 IRQ handler — clears COMMO RX/TX interrupt flags
@@ -235,26 +221,26 @@ static void _send_toc_packets(void) {
     // Determine CTRL nibble for the first track — used for 0xA0 and 0xA2 CONAD.
     // CTRL = 0x04 if first track is a data track; 0x00 if audio.
     const track_t *trk1 = &g_disc.tracks[g_disc.first_track - 1];
-    uint8_t ctrl_first = (trk1->type != TRACK_TYPE_AUDIO) ? 0x04u : 0x00u;
+    uint8_t ctrl_first = (trk1->type != TRACK_TYPE_AUDIO) ? 0x04U : 0x00U;
 
     // Helper macro: encode track number as BCD
     #define TO_BCD(n)  (uint8_t)(((uint8_t)((n) / 10) << 4) | ((uint8_t)((n) % 10)))
 
     // ---- 0xA0 — first track number + disc type ----
     memset(qbuf, 0, sizeof(qbuf));
-    qbuf[0] = (uint8_t)((ctrl_first << 4) | 0x01u);   // CTRL|ADR
+    qbuf[0] = (uint8_t)((ctrl_first << 4) | 0x01U);   // CTRL|ADR
     qbuf[1] = 0x00;    // TNO: lead-in
     qbuf[2] = 0xA0;    // POINT: first track info
     // a_time.min = first track BCD, .sec = disc type (0x00=CD-DA, 0x10=Mode1)
     qbuf[7] = TO_BCD(g_disc.first_track);
-    qbuf[8] = (ctrl_first & 0x04u) ? 0x10u : 0x00u;   // disc type
+    qbuf[8] = (ctrl_first & 0x04U) ? 0x10U : 0x00U;   // disc type
     commo_bridge_send_qchannel(qbuf);
 
     // ---- 0xA1 — last track number ----
     memset(qbuf, 0, sizeof(qbuf));
     const track_t *trkL = &g_disc.tracks[g_disc.last_track - 1];
     (void)trkL;  // ctrl nibble for 0xA1 matches 0xA0 per Red Book
-    qbuf[0] = (uint8_t)((ctrl_first << 4) | 0x01u);
+    qbuf[0] = (uint8_t)((ctrl_first << 4) | 0x01U);
     qbuf[1] = 0x00;
     qbuf[2] = 0xA1;    // POINT: last track info
     qbuf[7] = TO_BCD(g_disc.last_track);
@@ -263,7 +249,7 @@ static void _send_toc_packets(void) {
     // ---- 0xA2 — lead-out start time ----
     memset(qbuf, 0, sizeof(qbuf));
     msf_t lo_msf = lba_to_msf(g_disc.total_sectors);
-    qbuf[0] = (uint8_t)((ctrl_first << 4) | 0x01u);
+    qbuf[0] = (uint8_t)((ctrl_first << 4) | 0x01U);
     qbuf[1] = 0x00;
     qbuf[2] = 0xA2;    // POINT: lead-out
     qbuf[7] = lo_msf.minute;
@@ -274,11 +260,11 @@ static void _send_toc_packets(void) {
     // ---- One entry per track (POINT = track number BCD) ----
     for (int i = g_disc.first_track; i <= g_disc.last_track; i++) {
         const track_t *trk = &g_disc.tracks[i - 1];
-        uint8_t ctrl  = (trk->type != TRACK_TYPE_AUDIO) ? 0x04u : 0x00u;
+        uint8_t ctrl  = (trk->type != TRACK_TYPE_AUDIO) ? 0x04U : 0x00U;
         msf_t   start = lba_to_msf(trk->start_lba);
 
         memset(qbuf, 0, sizeof(qbuf));
-        qbuf[0] = (uint8_t)((ctrl << 4) | 0x01u);
+        qbuf[0] = (uint8_t)((ctrl << 4) | 0x01U);
         qbuf[1] = 0x00;
         qbuf[2] = TO_BCD((uint8_t)i);     // POINT = track number
         qbuf[7] = start.minute;
@@ -299,7 +285,7 @@ static void _send_toc_packets(void) {
 //   3. PIO1 IRQ routed to the COMMO RX/TX interrupt handler
 //   4. Upstream command-handler pipeline (Init_command_handler)
 //
-// timer_init() and DOOR (GPIO 11) are configured by main.c before this is called.
+// The DOOR GPIO (GPIO 11) is configured by main.c before this is called.
 // PIN_SCOR = PIN_SUB_SCOR = GPIO 8 (the real SCOR output; IRQ gated by BUILD_WITH_COMMO).
 //
 // Critically, we do NOT call the full pio_hw_init() or driver_init() because
@@ -320,7 +306,7 @@ void commo_bridge_init(void) {
     return;
 #endif
 
-    // PIN_DOOR (GPIO 11) and timer_init() are configured in main.c before this call.
+    // PIN_DOOR (GPIO 11) is configured in main.c before this call.
     // PIN_SCOR = PIN_SUB_SCOR = GPIO 8.
 
     // ACTIVE (conn 24, GPIO 10): drive-active output to CD32 mainboard.
@@ -494,7 +480,7 @@ static uint8_t _handle_opc(uint8_t opc, uint8_t p1, uint8_t p2, uint8_t p3) {
         case PLAY_TRACK_OPC: {
             // p1 = BCD track number (01-99).  If p1 is valid, resolve the track's
             // start LBA directly; otherwise fall back to the last SEEK target.
-            uint8_t track_bin = (uint8_t)((p1 >> 4) * 10u + (p1 & 0x0Fu));
+            uint8_t track_bin = (uint8_t)((p1 >> 4) * 10U + (p1 & 0x0FU));
             if (track_bin >= g_disc.first_track && track_bin <= g_disc.last_track) {
                 s_seek_lba = g_disc.tracks[track_bin - 1].start_lba;
                 sector_cache_seek(&g_cache, s_seek_lba);
@@ -555,8 +541,7 @@ static uint8_t _handle_opc(uint8_t opc, uint8_t p1, uint8_t p2, uint8_t p3) {
 
         case JUMP_TRACKS_OPC: {
             // p1=high byte, p2=low byte of signed 16-bit relative track count.
-            // Explicit shift preserves the big-endian wire encoding — the
-            // byte_hl_t union in the original 8051 code inverts on little-endian ARM.
+            // Explicit shift preserves the big-endian wire encoding.
             int16_t delta = (int16_t)((uint16_t)p1 << 8 | p2);
             uint32_t cur_lba = da_get_current_lba();
             const track_t *cur_trk = disc_find_track(&g_disc, cur_lba);
@@ -667,11 +652,11 @@ void commo_bridge_send_status(uint8_t status_byte) {
     // Map drive state to COMMO player-status byte
     // Values match the Philips/Chinon wire format: 0x00=OK, 0x01=error, 0x03=busy
     if (s_drive_state == DRIVE_SEEKING || s_drive_state == DRIVE_SPINUP) {
-        pkt[1] = 0x03u;   // BUSY
+        pkt[1] = 0x03U;   // BUSY
     } else if (status_byte & DRIVE_STATUS_ERROR) {
-        pkt[1] = 0x01u;   // READY_WITH_ERROR
+        pkt[1] = 0x01U;   // READY_WITH_ERROR
     } else {
-        pkt[1] = 0x00u;   // READY_WITHOUT_ERROR
+        pkt[1] = 0x00U;   // READY_WITHOUT_ERROR
     }
 
     pkt[2] = status_byte;
@@ -721,28 +706,12 @@ drive_state_t commo_bridge_get_drive_state(void) {
 }
 
 // =============================================================================
-// PIO HARDWARE ABSTRACTION FUNCTIONS
+// COMMO PIO bus I/O
 // =============================================================================
-// These functions are declared in include/pio_hw.h and would normally
-// be defined in pio_hw.c (deleted — contained real-hardware init
-// for CXD2500BQ/DSIC2/QCHAN programs on PIO0 SM0–SM3, which are already owned
-// by the ODE's da_output and subcode_encoder PIOs).
-//
-// src/commo.c calls pio_commo_rx_ready(), pio_commo_rx_get(),
+// Real implementations of the COMMO functions declared in include/pio_hw.h.
+// src/commo_hal_pico.c calls pio_commo_rx_ready(), pio_commo_rx_get(),
 // pio_commo_tx_byte() and pio_commo_release() to service the COMMO bus.
-// We provide real implementations for those, and no-op stubs for the rest.
 // =============================================================================
-
-// ---------------------------------------------------------------------------
-// pio_hw_init — no-op stub (the real init is split across main.c and
-// commo_bridge_init())
-// ---------------------------------------------------------------------------
-// If anything in the upstream code calls pio_hw_init() directly it will
-// silently succeed without touching our PIOs.  commo_bridge_init() already
-// loaded the COMMO programs before any upstream module had a chance to run.
-void pio_hw_init(void) {
-    // Deliberately empty.  See header comment above.
-}
 
 // ---------------------------------------------------------------------------
 // pio_commo_rx_ready — true when a received byte is waiting in the RX FIFO
@@ -774,7 +743,7 @@ uint8_t pio_commo_rx_get(void) {
     }
     // Re-enable RX SM for the next byte — uses the helper from commo.pio.h
     commo_rx_enable(PIO_COMMO_RX, SM_COMMO_RX, PIN_COMMO_CLK);
-    return (uint8_t)(raw & 0xFFu);
+    return (uint8_t)(raw & 0xFFU);
 #else
     return 0;
 #endif
@@ -829,63 +798,4 @@ void pio_commo_release(void) {
     pio_sm_set_enabled(PIO_COMMO_TX, SM_COMMO_TX, false);
     commo_rx_enable(PIO_COMMO_RX, SM_COMMO_RX, PIN_COMMO_CLK);
 #endif
-}
-
-// ---------------------------------------------------------------------------
-// CXD / DSIC / QCHAN stubs — real-hardware functions, not used in ODE mode
-// ---------------------------------------------------------------------------
-// These exist only to satisfy linker references from the original firmware code
-// that might be pulled in accidentally.  drivers/ (driver.c, servo.c etc.) have
-// been deleted — only commo.c, maths.c, and timer.c are compiled in the ODE build.
-//
-// We log a warning the first time each is called so an incorrect build
-// configuration is obvious at runtime.
-
-void pio_cxd_write(uint8_t data) {
-    (void)data;
-    static bool warned = false;
-    if (!warned) {
-        printf("[PIO_HW_STUB] pio_cxd_write() called — not supported in ODE mode\n");
-        LOG_WARN_MSG("[PIO] pio_cxd_write stub called (not supported in ODE)");
-        warned = true;
-    }
-}
-
-void pio_dsic_write(uint8_t data) {
-    (void)data;
-    static bool warned = false;
-    if (!warned) {
-        printf("[PIO_HW_STUB] pio_dsic_write() called — not supported in ODE mode\n");
-        LOG_WARN_MSG("[PIO] pio_dsic_write stub called (not supported in ODE)");
-        warned = true;
-    }
-}
-
-uint8_t pio_dsic_read(void) {
-    static bool warned = false;
-    if (!warned) {
-        printf("[PIO_HW_STUB] pio_dsic_read() called — not supported in ODE mode\n");
-        LOG_WARN_MSG("[PIO] pio_dsic_read stub called (not supported in ODE)");
-        warned = true;
-    }
-    return 0;
-}
-
-void pio_qchan_start(void) {
-    static bool warned = false;
-    if (!warned) {
-        printf("[PIO_HW_STUB] pio_qchan_start() called — not supported in ODE mode\n");
-        LOG_WARN_MSG("[PIO] pio_qchan_start stub called (not supported in ODE)");
-        warned = true;
-    }
-}
-
-void pio_qchan_drain(uint8_t *buf) {
-    static bool warned = false;
-    if (buf) memset(buf, 0, 10);
-    if (!warned) {
-        printf("[PIO_HW_STUB] pio_qchan_drain() called — not supported in ODE mode\n");
-        LOG_WARN_MSG("[PIO] pio_qchan_drain stub called (not supported in ODE)");
-        warned = true;
-    }
 }

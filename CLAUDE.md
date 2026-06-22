@@ -141,16 +141,14 @@ Data transitions on the **falling** BCLK edge; Akiko samples on the **rising** e
 
 | File | Status | Notes |
 |------|--------|-------|
-| `src/commo.c` | ✅ Correct | COMMO command/status protocol; last_command cleared on CMD_ERROR; vestigial commo_hal_data_is_low() during TX documented; HAL-refactored — hardware calls replaced with commo_hal.h interface |
+| `src/commo.c` | ✅ Correct | COMMO command/status protocol; last_command cleared on CMD_ERROR; vestigial commo_hal_data_is_low() during TX documented; HAL-refactored — hardware calls replaced with commo_hal.h interface; magic ERR_SEND delay replaced with `COMMO_ERR_SEND_TICKS` (Phase 001) |
 | `src/commo_hal_pico.c` | ✅ Correct | Real PIO + GPIO implementation of commo_hal.h; linked in firmware only |
 | `include/commo_hal.h` | ✅ Correct | HAL interface: commo_hal_rxd/txd/data_is_low/release — 4 functions isolating commo.c from hardware |
 | `tests/host/commo_hal_stub.c` | ✅ Correct | Test-harness HAL: byte queue for RX, capture log for TX, controllable data_is_low flag |
 | `tests/host/commo_hal_stub.h` | ✅ Correct | Control API for the stub: reset/push/set_data_low/tx_count/tx_byte |
-| `src/dispatcher.c` | ✅ Correct | Packet routing |
-| `src/cmd_hndl.c` | ✅ Correct | Opcode dispatch |
-| `src/sts_q_id.c` | ✅ Correct | Status/Q-channel buffer |
-| `src/maths.c` | ✅ Correct | BCD/time arithmetic; tracks_calc() widened to uint64_t |
-| `src/timer.c` | ✅ Correct | 8 ms software timer; delay() zero-entry guard; SCOR IRQ guarded by #if !BUILD_WITH_COMMO (F25) |
+| `src/maths.c` | ✅ Correct | BCD/time arithmetic; tracks_calc() widened to uint64_t; `subtract_time()` removed Phase 001 (no production callers) |
+| `src/psram.c` | ✅ Correct | QSPI PSRAM driver + bump allocator (BUILD_WITH_PSRAM only); Phase 001: compile-time `CD32_SASSERT` that PSRAM_BASE is 8-byte aligned + runtime write-readback probe (complementary patterns at two addresses) — on probe failure `s_available=false` so sector_cache_init() falls back to SRAM slots |
+| `src/timer.c` | ❌ Deleted | Removed in Phase 001 — vestigial 8051-port artifact. `timers[]`, `delay_byte`, `scor_counter`, `delay()`, `delay_us_500x()` had zero readers anywhere in src/. timer.h also deleted; `timer_init()` call (main.c) and includes (commo_bridge.c, upstream_types.h) removed |
 | `pio/commo.pio` | ✅ Correct | COMMO PIO; RX acknowledge pulse extended to [31] delay ≈ 237 ns (F21) |
 | `src/disc_image.c` | ✅ Correct | ISO/BIN/NRG/MDF parsers; CUE PREGAP+INDEX00 fix; NRG lead-out skip fix; NRG chunk_size=0/DAOX-too-short guards; MDF sector_size=0 guard; CUE/MDF track-length underflow clamp; NRG uint64_t aligned memcpy; NRG v1 unaligned reads use memcpy; disc_find_track includes pregap LBAs; NRG v1 file_off uses idx1_lba (F11); disc_build_toc_response emits 4-byte entries [track,min,sec,frame] (F15); file_offset widened to uint64_t (F29+F30) |
 | `src/sector_cache.c` | ✅ Correct | SD prefetch ring buffer + flush_gen race fix; hard_assert null-cache guard in prefetch_tick; __atomic_acquire/release builtins; SD read error retries once before skipping; sector_cache_is_full() added; error slots marked valid with valid_bytes=0 (permanent miss sentinel); sector_cache_get/release_before pinned to SRAM via sram_attr.h |
@@ -163,7 +161,7 @@ Data transitions on the **falling** BCLK edge; Akiko samples on the **rising** e
 | `include/ffconf.h` | ✅ Correct | Project-owned FatFS config; FF_MULTI_PARTITION=1 enables two-partition support; shadows vendor copy in libs/ |
 | `include/sram_attr.h` | ✅ Correct | Host-compatible __not_in_flash_func shim: firmware includes pico.h (NOT pico/platform.h — SDK 2.2 forbids direct include); host builds get a no-op macro. Used by sector_cache.c and vis_audio.c (both host-compiled) |
 | `src/ecc.c` | ✅ Correct | EDC/ECC computation; P-parity fixed to 24 rows; Q-parity uses correct ECMA-130 diagonal interleave (stride 44 mod 2236) |
-| `src/logger.c` | ✅ Correct | SD activity log + `nebula32.cfg` parser; WiFi fields (ssid/password/hostname); `playlist_save_ms` debounce key (0–60000, default 1500); log_max_kb negative guard; dead cmd_name/_log_cmd/_log_cmd_resp/_log_irq removed; state_names[] offset corrected (F7+F18) |
+| `src/logger.c` | ✅ Correct | SD activity log + `nebula32.cfg` parser; WiFi fields (ssid/password/hostname); `playlist_save_ms` debounce key (0–60000, default 1500); log_max_kb negative guard; ponytail cleanup — dead granularity knobs (log_commands/sectors/seeks/state/irq) + their never-called macros (LOG_SECTOR/SEEK_START/SEEK_DONE/STATE/DEBUG_MSG) + _log_sector/_log_seek_start/_log_state helpers removed; only logging_enabled/log_errors/log_max_kb gate output now |
 | `src/config.c` | ✅ Correct | Flash-backed settings; multicore_lockout_start/end_blocking() wraps flash erase/program (BUG-1) |
 | `src/display.cpp` | ✅ Correct | ST7789 240×240 cover art + scanline API; `display_fw_progress()` firmware update overlay; `display_fw_success_animation()` Boing Ball (spherical UV mapped, FPU trig); scanline-sized writes go via async SPI TX DMA (SRAM bounce buffer, deferred CS, command writes drain first); JPEG MCU blocks stay blocking (JPEGDEC reuses its buffer) |
 | `src/ui.c` | ✅ Correct | UI event handler; rotary turn=scroll / press=load / long-press=eject; **hold-button + turn = playlist-menu gesture** (emits a delta via `ui_take_playlist_delta()`; release swallowed so it doesn't also load/eject) |
@@ -172,11 +170,10 @@ Data transitions on the **falling** BCLK edge; Akiko samples on the **rising** e
 | `src/rotary_gpio.c` | ✅ Correct | Direct GPIO encoder (GPIO 12/15/18/19); quadrature table; edge-IRQ decode on ENC_A/B (no dropped detents on fast spins); buttons polled; same API as rotary.h |
 | `src/carousel.c` | ✅ Correct | Pure-logic multi-disc carousel (ALL + PLAYLIST sources, wrap nav, sync_pos_to_abs) + `.m3u` text parser (no FatFS — host-testable); basename-match for playlist resolution |
 | `src/commo_bridge.c` | ✅ Correct | PLAY_TRACK_OPC BCD decode, TRAY_IN seek, audio mode set, DRQ packet; _send_toc_packets guards first_track==0; PIN_RESET init+poll; send_status/qchannel pkt stack-allocated; _wait_commo_ready 5 ms timeout; FAKE_TIMING enabled + 1.8s spinup (F2); TOC 0xA1 uses ctrl_first (F5); _wait_commo_ready removed from _send_toc_packets (F10); da_get_resume_lba in PAUSE_OFF (F12); Dispatcher/cmd_hndl called only when Path A idle (F13) |
-| `src/player_shim.c` | ✅ Correct | Linkage shim — provides player_interface globals and no-op player() for cmd_hndl.c |
 | `src/fft.c` | ✅ Correct | 256-point Q15 radix-2 FFT with Hann window |
 | `src/effects.c` | ✅ Correct | 6 demoscene visualiser effects (SPECTRUM/SCOPE/RASTER/COMBO/SPACEBALLS/JUGGLER); JUGGLER is procedural 3-ball cascade with orbital balls and audio-reactive brightness; copper_color() lerps via INTERP0 blend mode (bit-identical to C lerp); builds at -O3 |
 | `src/vis_audio.c` | ✅ Correct | DA DMA snoop — SPSC ring, left-channel extraction; vis_audio_push_sector pinned to SRAM via sram_attr.h |
-| `src/main.c` | ✅ Correct | Entry point — 135 MHz sys_clk, 13-step boot sequence; Core 1 sector-prefetch loop; `load_image_page()` pagination (64-image pages); M17SINE clkdiv trim every 2 s during playback; boot-time firmware update sentinel (delegates to `fw_flash_and_reboot`); USB CDC console ('H' for help; n/p/m/a/j/P carousel+playlist keys); multi-disc carousel + jukebox auto-advance (all-audio EOD → next disc) via `disc_swap_locked()` Core-1 quiesce; playlist menu (rotary gesture / `P`) with debounced flash save (`playlist_save_ms`); visualiser tick with cover-art restore on stop — render capped at 30 fps (FFT still per batch; frame += 2 preserves animation speed) |
+| `src/main.c` | ✅ Correct | Entry point — 135 MHz sys_clk, 14-step boot sequence; Core 1 sector-prefetch loop; `load_image_page()` pagination (64-image pages); M17SINE clkdiv trim every 2 s during playback; boot-time firmware update sentinel (delegates to `fw_flash_and_reboot`); USB CDC console ('H' for help; n/p/m/a/j/P carousel+playlist keys); multi-disc carousel + jukebox auto-advance (all-audio EOD → next disc) via `disc_swap_locked()` Core-1 quiesce; playlist menu (rotary gesture / `P`) with debounced flash save (`playlist_save_ms`); visualiser tick with cover-art restore on stop — render capped at 30 fps (FFT still per batch; frame += 2 preserves animation speed) |
 | `src/selftest.c` | ✅ Correct | Hardware self-test triggered by '#' at boot — GPIO pull-high/pull-low check on DA/SUB output pins 0–8, /RESET idle-high check, SD mount + disc open + sector-0 read; prints PASS/FAIL over USB CDC; no host unit tests (hardware-only checks) |
 | `src/fw_update.c` | ✅ Correct | SD-card UF2 self-update; dual-stage flash: `fw_validate()` pass-1 SD read-only + `fw_flash_and_reboot()` write Bank 1 → verify via XIP → copy Bank1→Bank0 → watchdog reboot; erase_map tracks dirty 4 KB sectors; security fixes B1 (SRAM address guard), B2 (payload_size=0/oversized/unaligned), B4 (NOFLASH block_no sequencing), B5/B6 (rename sentinel), B7 (per-page IRQ window); display progress overlay during flash |
 | `pio/da_output.pio` | ✅ Correct | 24-bit I2S frames, clkdiv=32 (2.12 MHz), 96 SM cycles/pair → 44.1 kHz; LRCLK polarity corrected (low=L, high=R) (F3) |
@@ -236,7 +233,7 @@ All four PIO programs are always loaded. The upstream servo PIO programs
 
 **Location:** `tests/host/`  
 **Run:** `make && ./cd32_tests -v`  
-**Result:** 647 tests, 0 failures  
+**Result:** 652 tests, 0 failures  
 **Parser tests:** `make parser_tests && ./parser_tests -v` → 33 tests, 0 failures (separate binary; uses FatFS injectable sim)
 **Virtual disc tests:** `make vdisc_tests && ./vdisc_tests -v` → 73 tests, 0 failures (separate binary; uses vdisc_sim with directory traversal support)
 **Stress tests:** `make stress_sector_cache && ./stress_sector_cache` → 5 tests, 0 failures (TSan binary; concurrent producer/consumer)
@@ -252,7 +249,7 @@ All four PIO programs are always loaded. The upstream servo PIO programs
 | `Fft` | 9 | Init, zero input, range, peak hold/decay, waveform populated for non-zero input, single-frame decay by PEAK_DECAY |
 | `VisAudio` | 6 | SPSC ring, left-channel extraction, FIFO order |
 | `SectorCache` | 15 | Slot injection, seek/flush, flush_gen counter, partial-sector valid_bytes, sector_cache_is_full() (all-valid/post-seek/one-hole) |
-| `Maths` | 30 | BCD↔hex, add/subtract time, compare, calc_tracks |
+| `Maths` | 27 | BCD↔hex, add time, compare, calc_tracks (subtract_time removed Phase 001 — no production callers) |
 | `CsvReplay` | 10 | Real hardware signal validation (digital.csv, 4.9 GB, 100M rows) |
 | `CsvReplayPonPoff` | 10 | Power-on/power-off idle capture (pon-poff-idle.csv, 5.2 GB) |
 | `CsvReplayZool2` | 10 | Zool 2 gameplay capture (zool2.csv, 12.1 GB) |
@@ -260,7 +257,7 @@ All four PIO programs are always loaded. The upstream servo PIO programs
 | `DoorTray` | 10 | Disc insert/eject state machine, ACTIVE pin/LED, status bits |
 | `DoorPin` | 8 | GPIO door-pin edge detection: rising edge ejects, stable/falling silent, boot snapshot, motor/LED state |
 | `OpcResponses` | 1 | All 34 COMMO opcodes → correct status byte + drive state (table-driven; incl. SEEK from PLAYING, SEEK invalid BCD) |
-| `MotorSledFake` | 10 | Motor active states, BCD MSF→LBA, seek LBA, virtual sled positioning |
+| `MotorSledFake` | 15 | Motor active states, BCD MSF→LBA, seek LBA, virtual sled positioning; SEEK covert-channel boundaries (Phase 001): LBA 0, last sector, off-the-end clamp serves nothing, far-out seek safe, invalid-BCD decodes+clamps |
 | `DiscFindTrack` | 9 | disc_find_track boundaries, single/multi-track, track type, zero-track disc returns NULL |
 | `Be32Be64` | 6 | be32/be64 byte-swap: known value, fixed points (0/0xFFFFFFFF), NRG magic, involution round-trip, be64 known value and round-trip |
 | `TocResponse` | 6 | disc_build_toc_response BCD encoding, lead-out 0xAA, truncation |
@@ -277,7 +274,7 @@ All four PIO programs are always loaded. The upstream servo PIO programs
 | `DaExpand` | 12 | I2S word packing: zero sector, L/R separation, max/min int16_t, lower-half always zero, pair-N addressing, last pair, clkdiv 32/16, full 588-pair sweep, explicit little-endian byte order |
 | `DaSpeed` | 19 | DA playback state machine: init 1×/2×, start/pause/resume/stop transitions, da_set_double_speed idempotency, clkdiv write capture, speed change while playing; subcode PIO clkdiv updated atomically with DA clkdiv on speed change (F14), idempotent on same-value call |
 | `CommoProtocol` | 13 | COMMO state machine: single-byte opcode, opcode+param, bad checksum, same-command detection, zero opcode ERR_SEND countdown, free-buffer clear, max-param opcode, A→B→A sequence, CMD_ERROR clears last_command (fixed), TX data+checksum byte capture, BUSY/READY states |
-| `CommoFuzz` | 7 | Adversarial COMMO paths: aborted command (param byte consumed as checksum → CMD_ERROR + recovery), 50-tick rapid poll stays IDLE, TX blocked by spurious data strobe without corruption, TXD_CHECKSUM state also blocks on data_is_low, successive errors keep last_command=0 so retry is NEW_COMMAND, rapid-fire second command overwrites first (Amiga game engine bug), glitched data-phase param byte produces CMD_ERROR + clean retry |
+| `CommoFuzz` | 10 | Adversarial COMMO paths: aborted command (param byte consumed as checksum → CMD_ERROR + recovery), 50-tick rapid poll stays IDLE, TX blocked by spurious data strobe without corruption, TXD_CHECKSUM state also blocks on data_is_low, successive errors keep last_command=0 so retry is NEW_COMMAND, rapid-fire second command overwrites first (Amiga game engine bug), glitched data-phase param byte produces CMD_ERROR + clean retry; **Phase 001:** mid-param RX_TIMEOUT parks then recovers, RXD_CHECKSUM RX_TIMEOUT parks then recovers, SM_ERR_SEND countdown is exactly COMMO_ERR_SEND_TICKS (128) |
 | `CommoPowerOn` | 6 | Wire-level power-on handshake: SPINDLE_MOTOR_OFF (0x15 0x00 0xEA) parses as NEW_COMMAND, checksum byte 0xEA verified, FOCUS_ON (0x12 0xED) parses as NEW_COMMAND, 15-byte STATUS packet produces 16 wire bytes, additive checksum invariant (sum=0xFF), Chinon 0x27+0xD8=0xFF explains why frame-header pairs look like valid Pico ODE checksum pairs |
 | `EffectsColor` | 20 | rgb() RGB565 bswap packing, hsv() grey/red/black/distinct hues/all-6-sectors-distinct, copper_color() darkest/brightest/monotone/red-channel-monotonic, sample_to_y() centre/top/bottom/bounds |
 | `CoverDir` | 6 | display.cpp and webserver.c agree on cover-art directory; FatFS volume prefix; trailing slash; default path starts in covers dir |
@@ -415,7 +412,7 @@ All four captures share the same 10 test names (W0–W9) and assertion threshold
 | HIGH-4 | `da_output.pio` / `da_output.c` | 24-bit I2S frames (clkdiv=32), `expand_to_i2s24()` for DMA buffers |
 | UPSTREAM-1 | `src/commo.c` | `last_command = 0` on CMD_ERROR so retry is treated as NEW_COMMAND |
 | UPSTREAM-2 | `src/maths.c` | `isqrt()` + `tracks_calc()` widened to uint64_t; A×T overflowed uint32_t for discs > ~20 min |
-| UPSTREAM-3 | `src/timer.c` | `delay()` guard for `delay_byte == 0` on entry; do-while wrapped to 255 and blocked 127.5 ms |
+| UPSTREAM-3 | `src/timer.c` (deleted) | ~~`delay()` guard for `delay_byte == 0`~~ — superseded: entire timer subsystem deleted in Phase 001 (vestigial, zero readers) |
 | UPSTREAM-4 | `upstream/core/play.c` (deleted) | Pointer truncation: `param1 = (uint8_t)(uintptr_t)&store` → side-channel `play_subcode_result` pointer |
 | UPSTREAM-5 | `upstream/core/play.c` (deleted) | `jump_time()` overshoot: `compare_time` guard before `subtract_time`; underflow wrapped `delta.frm` to 75−N |
 

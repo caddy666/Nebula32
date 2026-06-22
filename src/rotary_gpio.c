@@ -87,7 +87,6 @@ static const int8_t s_quad_table[16] = {
 };
 
 static volatile uint8_t  s_quad_state  = 0;
-static volatile int32_t  s_count       = 0;
 static volatile int32_t  s_half_steps  = 0;
 static absolute_time_t   s_last_turn_time;
 
@@ -136,7 +135,6 @@ static void _enc_gpio_irq(uint gpio, uint32_t events) {
     if (s_half_steps >= 2 || s_half_steps <= -2) {
         int direction = (s_half_steps > 0) ? 1 : -1;
         s_half_steps  = 0;
-        s_count      += direction;
 
         absolute_time_t now = get_absolute_time();
         int64_t gap_ms = absolute_time_diff_us(s_last_turn_time, now) / 1000;
@@ -170,10 +168,6 @@ void rotary_init(void) {
     s_last_poll_time = get_absolute_time();
     s_poll_init      = true;
 
-    // Enable edge IRQs on the two quadrature lines.  The first call installs the
-    // single per-core GPIO callback; the second just adds pin B to it.  This is
-    // safe because timer.c only registers its GPIO callback under !BUILD_WITH_COMMO
-    // (the SCOR-IRQ build), and this firmware is always BUILD_WITH_COMMO=1.
     gpio_set_irq_enabled_with_callback(PIN_ENC_A,
         GPIO_IRQ_EDGE_RISE | GPIO_IRQ_EDGE_FALL, true, &_enc_gpio_irq);
     gpio_set_irq_enabled(PIN_ENC_B,
@@ -253,13 +247,4 @@ rotary_event_t rotary_poll(int *steps_out) {
 
 bool rotary_button_held(void) {
     return s_btn_pressed;
-}
-
-int32_t rotary_get_count(void) {
-    return s_count;
-}
-
-void rotary_reset_count(void) {
-    s_count      = 0;
-    s_half_steps = 0;
 }

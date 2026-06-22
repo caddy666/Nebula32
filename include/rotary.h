@@ -99,10 +99,3 @@ rotary_event_t rotary_poll(int *steps_out);
 // Returns true if the button is currently held down (useful for combo checks).
 bool rotary_button_held(void);
 
-// Returns the raw accumulated count of CW turns minus CCW turns since init.
-// Useful for absolute position tracking.
-int32_t rotary_get_count(void);
-
-// Reset the accumulated count to zero.
-void rotary_reset_count(void);
-

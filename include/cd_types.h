@@ -38,9 +38,9 @@ CD32_SASSERT(SECTOR_DATA_BYTES == 2048, "SECTOR_DATA_BYTES must be 2048 (Mode 1)
 // LBA ↔ MSF conversion (150-sector lead-in offset per Red Book)
 // ---------------------------------------------------------------------------
 static inline uint32_t msf_to_lba(msf_t m) {
-    uint32_t min = ((uint32_t)m.minute >> 4u) * 10u + ((uint32_t)m.minute & 0x0Fu);
-    uint32_t sec = ((uint32_t)m.second >> 4u) * 10u + ((uint32_t)m.second & 0x0Fu);
-    uint32_t frm = ((uint32_t)m.frame  >> 4u) * 10u + ((uint32_t)m.frame  & 0x0Fu);
+    uint32_t min = ((uint32_t)m.minute >> 4U) * 10U + ((uint32_t)m.minute & 0x0FU);
+    uint32_t sec = ((uint32_t)m.second >> 4U) * 10U + ((uint32_t)m.second & 0x0FU);
+    uint32_t frm = ((uint32_t)m.frame  >> 4U) * 10U + ((uint32_t)m.frame  & 0x0FU);
     uint32_t lba = (min * 60 + sec) * SECTORS_PER_SECOND + frm;
     return (lba >= 150) ? lba - 150 : 0;
 }

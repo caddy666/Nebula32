@@ -78,12 +78,12 @@ static bool is_rp2350_family(uint32_t fid) {
 
 static void erase_map_set(uint8_t map[64], uint32_t sector_index) {
     if (sector_index < (uint32_t)FW_TOTAL_SECTORS)
-        map[sector_index / 8] |= (uint8_t)(1u << (sector_index % 8));
+        map[sector_index / 8] |= (uint8_t)(1U << (sector_index % 8));
 }
 
 static bool erase_map_get(const uint8_t map[64], uint32_t sector_index) {
     if (sector_index >= (uint32_t)FW_TOTAL_SECTORS) return false;
-    return (map[sector_index / 8] >> (sector_index % 8)) & 1u;
+    return (map[sector_index / 8] >> (sector_index % 8)) & 1U;
 }
 
 // ---------------------------------------------------------------------------
@@ -281,7 +281,7 @@ fw_result_t fw_flash_and_reboot(const char *path) {
         restore_interrupts(ints);
         blocks_written++;
         if (num_blocks > 0)
-            display_fw_progress((uint8_t)(5u + 65u * blocks_written / num_blocks));
+            display_fw_progress((uint8_t)(5U + 65U * blocks_written / num_blocks));
     }
     f_close(&fil);
 
@@ -366,7 +366,7 @@ fw_result_t fw_flash_and_reboot(const char *path) {
 
         sectors_copied++;
         if (sectors_to_copy > 0)
-            display_fw_progress((uint8_t)(85u + 14u * sectors_copied / sectors_to_copy));
+            display_fw_progress((uint8_t)(85U + 14U * sectors_copied / sectors_to_copy));
     }
 
     multicore_lockout_end_blocking();

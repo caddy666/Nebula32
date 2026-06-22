@@ -25,6 +25,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <ctype.h>
+#include <inttypes.h>   // PRIu32 — uint32_t is 'unsigned long' on ARM, 'unsigned int' on host
 
 // 12-byte CD sync mark
 const uint8_t CD_SYNC_PATTERN[CD_SYNC_SIZE] = {
@@ -119,7 +120,7 @@ bool disc_open(disc_image_t *disc, const char *path) {
         return false;
     }
 
-    printf("[DISC] Opened: %d tracks, %u total sectors\n",
+    printf("[DISC] Opened: %d tracks, %" PRIu32 " total sectors\n",
            disc->last_track, disc->total_sectors);
     return true;
 }
@@ -168,8 +169,8 @@ bool disc_parse_iso(disc_image_t *disc) {
     trk->sector_size     = SECTOR_DATA_BYTES;  // Stored as 2048-byte sectors
     trk->data_offset     = 0;                  // Data starts at byte 0 of file sector
 
-    printf("[ISO] %u sectors (%.1f MB)\n",
-           total_sectors, (float)(fsize) / (1024.0f * 1024.0f));
+    printf("[ISO] %" PRIu32 " sectors (%.1f MB)\n",
+           total_sectors, (double)fsize / (1024.0 * 1024.0));
     return true;
 }
 
@@ -271,8 +272,8 @@ bool disc_parse_bin(disc_image_t *disc, const char *cue_path) {
             // Accumulate so INDEX 01 file offsets are adjusted correctly.
             uint8_t mm, ss, ff;
             sscanf(p + 7, "%hhu:%hhu:%hhu", &mm, &ss, &ff);
-            accumulated_pregap += (uint32_t)mm * 60u * 75u
-                                + (uint32_t)ss * 75u
+            accumulated_pregap += (uint32_t)mm * 60U * 75U
+                                + (uint32_t)ss * 75U
                                 + ff;
 
         } else if (strncmp(p, "INDEX 00 ", 9) == 0 && current_track > 0) {
@@ -478,7 +479,7 @@ bool disc_parse_nrg(disc_image_t *disc) {
                     trk->data_offset = (trk->sector_size == 2352) ? 16 : 0;
                 }
 
-                printf("[NRG] Track %d: LBA %u-%u, size %u\n",
+                printf("[NRG] Track %d: LBA %" PRIu32 "-%" PRIu32 ", size %" PRIu32 "\n",
                        trk->number, trk->start_lba,
                        trk->start_lba + trk->length_sectors, trk->sector_size);
 
@@ -570,7 +571,7 @@ bool disc_parse_mdf(disc_image_t *disc, const char *mds_path) {
                 trk->data_offset = (trk->sector_size == 2352) ? 16 : 0;
             }
 
-            printf("[MDF] Track %d: LBA %u sector_size %u\n",
+            printf("[MDF] Track %d: LBA %" PRIu32 " sector_size %" PRIu32 "\n",
                    trk->number, trk->start_lba, trk->sector_size);
 
             if (disc->first_track == 0) disc->first_track = trk->number;
@@ -712,40 +713,6 @@ const track_t *disc_find_track(const disc_image_t *disc, uint32_t lba) {
 }
 
 // ---------------------------------------------------------------------------
-// TOC response builder
-// ---------------------------------------------------------------------------
-// The CD32 akiko reads the TOC as a series of bytes in the format returned
-// by READTOC / GETTD commands.  Each entry is: [track_no, min, sec, frame] (BCD).
-
-uint32_t disc_build_toc_response(const disc_image_t *disc,
-                                  uint8_t *buf, uint32_t buf_size) {
-    uint32_t pos = 0;
-
-    for (uint8_t i = disc->first_track; i <= disc->last_track; i++) {
-        if (pos + 4 > buf_size) break;
-        const track_t *trk = &disc->tracks[i - 1];
-        msf_t msf = lba_to_msf(trk->start_lba);
-
-        // Encode track number as BCD
-        buf[pos++] = ((i / 10) << 4) | (i % 10);
-        buf[pos++] = msf.minute;
-        buf[pos++] = msf.second;
-        buf[pos++] = msf.frame;
-    }
-
-    // Lead-out entry (track 0xAA)
-    if (pos + 4 <= buf_size) {
-        msf_t msf = lba_to_msf(disc->total_sectors);
-        buf[pos++] = 0xAA;
-        buf[pos++] = msf.minute;
-        buf[pos++] = msf.second;
-        buf[pos++] = msf.frame;
-    }
-
-    return pos;
-}
-
-// ---------------------------------------------------------------------------
 // disc_open_vdir — mount partition 2 as a virtual ISO 9660 data disc
 // ---------------------------------------------------------------------------
 bool disc_open_vdir(disc_image_t *disc, vdisc_t *vd) {
@@ -773,8 +740,8 @@ bool disc_open_vdir(disc_image_t *disc, vdisc_t *vd) {
     trk->sector_size    = SECTOR_DATA_BYTES;
     trk->data_offset    = 0;
 
-    printf("[VDIR] Mounted: %u entries, %u sectors (%.1f MB)\n",
+    printf("[VDIR] Mounted: %" PRIu32 " entries, %" PRIu32 " sectors (%.1f MB)\n",
            vd->entry_count, vd->total_sectors,
-           (float)vd->total_sectors * 2048.0f / (1024.0f * 1024.0f));
+           (double)vd->total_sectors * 2048.0 / (1024.0 * 1024.0));
     return true;
 }

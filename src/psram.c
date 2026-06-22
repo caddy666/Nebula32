@@ -15,13 +15,20 @@
 #ifdef BUILD_WITH_PSRAM
 
 #include "psram.h"
+#include "cd_types.h"     // CD32_SASSERT
 #include "pico/stdlib.h"
 #include "hardware/gpio.h"
+#include "hardware/sync.h" // __dmb()
 #include "hardware/structs/qmi.h"
 #include "hardware/structs/xip_ctrl.h"
 
 #include <string.h>
 #include <stdio.h>
+
+// The bump allocator hands out 8-byte-aligned blocks measured from s_heap =
+// PSRAM_BASE, so the base itself must be 8-byte aligned or every returned
+// pointer is misaligned.  Caught at compile time rather than via a runtime fault.
+CD32_SASSERT((PSRAM_BASE & 7U) == 0U, "PSRAM_BASE must be 8-byte aligned");
 
 // ---------------------------------------------------------------------------
 // Hardware configuration — EDIT FOR YOUR PCB
@@ -71,8 +78,8 @@ static void _qmi_wait_ready(void) {
 }
 
 static void _qmi_cs1_cmd(uint8_t cmd) {
-    qmi_hw->direct_csr = (1u << QMI_DIRECT_CSR_EN_LSB)
-                       | (1u << QMI_DIRECT_CSR_ASSERT_CS1N_LSB);
+    qmi_hw->direct_csr = (1U << QMI_DIRECT_CSR_EN_LSB)
+                       | (1U << QMI_DIRECT_CSR_ASSERT_CS1N_LSB);
     qmi_hw->direct_tx  = (QMI_DIRECT_TX_NOPUSH_BITS)
                        | (QMI_DIRECT_TX_OE_BITS)
                        | cmd;
@@ -100,11 +107,11 @@ void psram_fw_init(void) {
     //    Timing for APS6404L-3SQR @ 67.5 MHz (adjust for your chip)
     qmi_hw->m[1].timing =
         (QMI_M0_TIMING_PAGEBREAK_VALUE_1024 << QMI_M0_TIMING_PAGEBREAK_LSB) |
-        (3u << QMI_M0_TIMING_SELECT_HOLD_LSB)    |
-        (1u << QMI_M0_TIMING_COOLDOWN_LSB)        |
+        (3U << QMI_M0_TIMING_SELECT_HOLD_LSB)    |
+        (1U << QMI_M0_TIMING_COOLDOWN_LSB)        |
         ((uint32_t)PSRAM_RXDELAY << QMI_M0_TIMING_RXDELAY_LSB) |
-        (18u << QMI_M0_TIMING_MAX_SELECT_LSB)     |
-        (7u  << QMI_M0_TIMING_MIN_DESELECT_LSB)   |
+        (18U << QMI_M0_TIMING_MAX_SELECT_LSB)     |
+        (7U  << QMI_M0_TIMING_MIN_DESELECT_LSB)   |
         ((uint32_t)PSRAM_CLKDIV << QMI_M0_TIMING_CLKDIV_LSB);
 
     // Quad-SPI read: command EB, 24-bit addr, 6 dummy, quad data
@@ -114,7 +121,7 @@ void psram_fw_init(void) {
         (QMI_M0_RFMT_SUFFIX_WIDTH_VALUE_Q << QMI_M0_RFMT_SUFFIX_WIDTH_LSB) |
         (QMI_M0_RFMT_DUMMY_WIDTH_VALUE_Q  << QMI_M0_RFMT_DUMMY_WIDTH_LSB)  |
         (QMI_M0_RFMT_DATA_WIDTH_VALUE_Q   << QMI_M0_RFMT_DATA_WIDTH_LSB)   |
-        (6u  << QMI_M0_RFMT_DUMMY_LEN_LSB)                                  |
+        (6U  << QMI_M0_RFMT_DUMMY_LEN_LSB)                                  |
         (QMI_M0_RFMT_PREFIX_LEN_VALUE_8   << QMI_M0_RFMT_PREFIX_LEN_LSB);
 
     qmi_hw->m[1].rcmd = 0xEB;  // Fast Read Quad I/O
@@ -129,14 +136,48 @@ void psram_fw_init(void) {
 
     qmi_hw->m[1].wcmd = 0x38;  // Quad Write
 
-    // 5. Initialise the bump allocator over the full PSRAM region
+    // 5. Verify the chip actually responds before trusting it.
+    //    The PSRAM is now memory-mapped at PSRAM_BASE.  A wrong PSRAM_RXDELAY or
+    //    PSRAM_CLKDIV produces garbage reads that would silently corrupt the
+    //    sector cache (its slots now live in PSRAM).  We write four patterns to
+    //    two well-separated addresses — catching stuck data lines, stuck address
+    //    lines, and gross timing failures — then restore the originals.  On any
+    //    mismatch we leave s_available = false so sector_cache_init() cleanly
+    //    falls back to its SRAM slots instead of running on dead memory.
+    volatile uint32_t *p0 = (volatile uint32_t *)PSRAM_BASE;
+    volatile uint32_t *p1 = (volatile uint32_t *)(PSRAM_BASE + (PSRAM_SIZE_BYTES / 2U));
+    static const uint32_t pat[2] = { 0xA5C30F69U, 0x5A3CF096U };
+
+    const uint32_t saved0 = p0[0];
+    const uint32_t saved1 = p1[0];
+    bool ok = true;
+    for (unsigned i = 0; i < 2U && ok; i++) {
+        p0[0] = pat[i];
+        p1[0] = ~pat[i];          // distinct value → also catches p0/p1 aliasing
+        __dmb();                   // ensure writes drain before read-back
+        if (p0[0] != pat[i] || p1[0] != ~pat[i]) ok = false;
+    }
+    p0[0] = saved0;               // restore (region may hold data on warm reset)
+    p1[0] = saved1;
+
+    if (!ok) {
+        s_heap      = NULL;
+        s_heap_size = 0;
+        s_heap_used = 0;
+        s_available = false;
+        printf("[PSRAM] probe FAILED — disabling PSRAM (check RXDELAY=%d CLKDIV=%d)\n",
+               PSRAM_RXDELAY, PSRAM_CLKDIV);
+        return;
+    }
+
+    // 6. Initialise the bump allocator over the full PSRAM region
     s_heap       = (uint8_t *)PSRAM_BASE;
     s_heap_size  = PSRAM_SIZE_BYTES;
     s_heap_used  = 0;
     s_available  = true;
 
-    printf("[PSRAM] %u MB at 0x%08lx (CS1 GPIO%d, clkdiv=%d)\n",
-           PSRAM_SIZE_BYTES / (1024u * 1024u),
+    printf("[PSRAM] %u MB at 0x%08lx (CS1 GPIO%d, clkdiv=%d) — probe OK\n",
+           PSRAM_SIZE_BYTES / (1024U * 1024U),
            (unsigned long)PSRAM_BASE, PSRAM_CS1_PIN, PSRAM_CLKDIV);
 }
 
@@ -148,7 +189,7 @@ bool psram_available(void) { return s_available; }
 
 void *psram_alloc(size_t n) {
     if (!s_available || n == 0) return NULL;
-    n = (n + 7u) & ~7u;  // 8-byte align
+    n = (n + 7U) & ~7U;  // 8-byte align
     uint32_t total = (uint32_t)(sizeof(psram_block_t) + n);
     if (s_heap_used + total > s_heap_size) {
         printf("[PSRAM] alloc exhausted (requested %u, used %lu / %lu)\n",
@@ -170,18 +211,5 @@ void psram_free(void *p) {
     hdr->magic = 0;  // mark freed; bump allocator does not reclaim
 }
 
-void *psram_realloc(void *p, size_t n) {
-    if (!p)  return psram_alloc(n);
-    if (n == 0) { psram_free(p); return NULL; }
-    psram_block_t *hdr = (psram_block_t *)p - 1;
-    if (hdr->magic != PSRAM_ALLOC_MAGIC) return NULL;
-    size_t aligned_n = (n + 7u) & ~7u;
-    if (aligned_n <= hdr->size) return p;  // fits in existing block
-    void *q = psram_alloc(n);
-    if (!q) return NULL;
-    memcpy(q, p, hdr->size < n ? hdr->size : n);
-    hdr->magic = 0;  // mark old block freed
-    return q;
-}
 
 #endif // BUILD_WITH_PSRAM

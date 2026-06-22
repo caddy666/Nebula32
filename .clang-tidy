@@ -1,0 +1,42 @@
+---
+# Scoped for a C firmware project (24 .c, 1 .cpp). We do NOT use "*": that
+# pulls in C++-oriented packs (cppcoreguidelines/hicpp/modernize) that bury the
+# genuinely useful C findings under thousands of irrelevant nits.
+# High-signal groups only; a few individually-noisy checks disabled by name.
+Checks: >
+  bugprone-*,
+  clang-analyzer-*,
+  performance-*,
+  portability-*,
+  misc-*,
+  readability-*,
+  cert-*,
+  -readability-magic-numbers,
+  -readability-identifier-length,
+  -readability-else-after-return,
+  -readability-static-accessed-through-instance,
+  -readability-avoid-const-params-in-decls,
+  -readability-function-cognitive-complexity,
+  -readability-braces-around-statements,
+  -misc-non-private-member-variables-in-classes,
+  -bugprone-easily-swappable-parameters,
+  -cert-dcl37-c,
+  -cert-dcl51-cpp,
+  -misc-include-cleaner,
+  -performance-no-int-to-ptr,
+  -bugprone-misplaced-widening-cast,
+  -bugprone-narrowing-conversions
+# Embedded-specific disables (last four above):
+#   misc-include-cleaner           — firmware pulls symbols transitively via
+#                                    pico/stdlib.h; demanding a direct include
+#                                    per symbol is churn, not correctness.
+#   performance-no-int-to-ptr      — MMIO register access legitimately casts
+#                                    fixed addresses to pointers.
+#   bugprone-misplaced-widening-cast — (unsigned long) casts for %lu printf on a
+#                                    32-bit-long target are idiomatic, not bugs.
+#   bugprone-narrowing-conversions — Q15 fixed-point DSP (fft.c) narrows to
+#                                    int16_t by design; that IS the algorithm.
+WarningsAsErrors: ''
+# Only flag our own headers, not the Pico SDK / vendored libs.
+HeaderFilterRegex: 'include/.*\.h$'
+FormatStyle:     none

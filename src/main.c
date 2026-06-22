@@ -1,6 +1,5 @@
 // =============================================================================
 // main.c — CD32 Optical Drive Emulator — Entry Point
-//          Raspberry Pi Pico 2 (RP2350)
 // =============================================================================
 //
 // CORE ASSIGNMENT:
@@ -63,7 +62,6 @@
 #include "commo_bridge.h"
 #include "psram.h"
 #include "gpio_map.h"
-#include "timer.h"
 #include "display.h"
 #include "fft.h"
 #include "effects.h"
@@ -96,12 +94,23 @@ sector_cache_t g_cache;  // Read-ahead sector ring buffer
 // multicore_lockout_start_blocking() would hang forever if the victim core was
 // never launched, so swaps that happen before launch (boot) run unlocked, which
 // is safe because Core 1 isn't touching g_disc/g_cache yet.
+//
+// OWNERSHIP: written once by Core 0 (after multicore_launch_core1), read only by
+// Core 0 in disc_swap_locked().  The `volatile` is vestigial — there is no cross-
+// core read — but kept so the intent (a launch latch) stays obvious.  Do NOT treat
+// it as a synchronisation primitive.
 static volatile bool s_core1_running = false;
 
 // Image list (extern'd by ui.c and webserver.c)
 // s_image_paths holds one page of up to PAGE_SIZE paths.
 // s_page_offset is the absolute index of the first entry in that page.
 // s_total_count is the full count across all pages (from sd_count_images at boot).
+//
+// OWNERSHIP: Core-0-only by design.  Core 1 (core1_main → sector_cache_prefetch_tick)
+// never touches these — it only reads g_cache.  Every reader (ui.c, webserver.c,
+// load_disc_image, carousel) runs in the Core 0 main loop, sequentially with the
+// rebuild in load_image_page().  Therefore NO lock is needed.  If a future change
+// reads this list from Core 1, add synchronisation first.
 #define PAGE_SIZE   64
 char     s_image_paths[PAGE_SIZE][MAX_PATH_LEN];
 uint32_t s_image_count    = 0;   // entries in current page (≤ PAGE_SIZE)
@@ -484,7 +493,7 @@ static uint32_t s_m17sine_hz = 0;   // Last measured value (0 = not yet measured
 static void m17sine_nudge_tick(void) {
     uint32_t khz = frequency_count_khz(CLOCKS_FC0_SRC_VALUE_CLKSRC_GPIN0);
     if (khz == 0) return;   // M17SINE not present (bench test without CD32)
-    s_m17sine_hz = khz * 1000u;
+    s_m17sine_hz = khz * 1000U;
     da_nudge_clkdiv_to_m17sine(s_m17sine_hz);
 }
 
@@ -622,11 +631,11 @@ static void handle_console(void) {
     }
     else if (c == 'm' || c == 'M') {
         uint32_t khz = frequency_count_khz(CLOCKS_FC0_SRC_VALUE_CLKSRC_GPIN0);
-        s_m17sine_hz = khz * 1000u;
+        s_m17sine_hz = khz * 1000U;
         uint32_t fixed = da_get_clkdiv_fixed();
         int32_t ppm = 0;
         if (s_m17sine_hz > 0) {
-            uint32_t nominal_hz = 16934400u;
+            uint32_t nominal_hz = 16934400U;
             ppm = (int32_t)(((int64_t)s_m17sine_hz - nominal_hz) * 1000000 / nominal_hz);
         }
         printf("[M17] M17SINE=%lu Hz  clkdiv=%u.%u/256  drift=%ld ppm\n",
@@ -852,11 +861,10 @@ int main(void) {
     // ---- Disc selector UI ----
     ui_init(s_image_count, s_selected_image);
 
-    // ---- DOOR / SCOR GPIOs + 8 ms software timer ----
+    // ---- DOOR GPIO ----
     gpio_init(PIN_DOOR);
     gpio_set_dir(PIN_DOOR, GPIO_IN);
     gpio_pull_up(PIN_DOOR);
-    timer_init();
 
     /* [anchor:commo_bridge_init] */
     // ---- COMMO bus bridge ----
@@ -907,8 +915,8 @@ int main(void) {
     printf("[MAIN] DA: %s speed  |  BCLK: %lu Hz\n",
            da_is_double_speed() ? "2x" : "1x",
            /* orig Commodore ref: / (da_is_double_speed() ? 24u : 48u) */
-           (unsigned long)(TARGET_SYS_CLK_KHZ * 1000ul
-                           / (da_is_double_speed() ? 16u : 32u) / 2u));
+           (unsigned long)(TARGET_SYS_CLK_KHZ * 1000UL
+                           / (da_is_double_speed() ? 16U : 32U) / 2U));
     printf("[MAIN] Type H for console help\n\n");
 
     // P3: arm hardware watchdog — 10 s window kicks at every main-loop iteration.

@@ -34,7 +34,7 @@ static uint32_t crc32_byte(uint32_t crc, uint8_t byte) {
     crc ^= byte;
     for (int b = 0; b < 8; b++) {
         if (crc & 1) {
-            crc = (crc >> 1) ^ 0xEDB88320u;
+            crc = (crc >> 1) ^ 0xEDB88320U;
         } else {
             crc >>= 1;
         }
@@ -46,11 +46,11 @@ uint32_t config_crc32(const ode_config_t *cfg) {
     // CRC covers every byte except the last 4 (the crc32 field itself)
     const uint8_t *data = (const uint8_t *)cfg;
     size_t len = sizeof(ode_config_t) - sizeof(uint32_t);
-    uint32_t crc = 0xFFFFFFFFu;
+    uint32_t crc = 0xFFFFFFFFU;
     for (size_t i = 0; i < len; i++) {
         crc = crc32_byte(crc, data[i]);
     }
-    return crc ^ 0xFFFFFFFFu;
+    return crc ^ 0xFFFFFFFFU;
 }
 
 // ---------------------------------------------------------------------------

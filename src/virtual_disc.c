@@ -20,6 +20,7 @@
 #include "ff.h"
 #include <string.h>
 #include <stdio.h>
+#include <inttypes.h>   // PRIu32 — uint32_t differs between ARM and host ABIs
 
 // ---------------------------------------------------------------------------
 // Byte-order helpers
@@ -129,8 +130,8 @@ static uint32_t calc_path_table_size(const vdisc_t *vd) {
     uint32_t total = 0;
     for (uint32_t i = 0; i < vd->entry_count; i++) {
         if (!vd->table[i].is_dir) continue;
-        uint32_t id_len = (i == 0) ? 1u : (uint32_t)strlen(vd->table[i].name);
-        uint32_t entry_sz = 8u + id_len + (id_len & 1u);
+        uint32_t id_len = (i == 0) ? 1U : (uint32_t)strlen(vd->table[i].name);
+        uint32_t entry_sz = 8U + id_len + (id_len & 1U);
         total += entry_sz;
     }
     return total;
@@ -397,7 +398,7 @@ static void read_file_sector(const vdisc_t *vd, uint32_t entry_idx,
         s_fil_open     = true;
     }
 
-    FSIZE_t file_off = (FSIZE_t)sector_offset * 2048u;
+    FSIZE_t file_off = (FSIZE_t)sector_offset * 2048U;
     f_lseek(&s_cached_fil, file_off);
 
     UINT br = 0;
@@ -453,7 +454,7 @@ bool vdisc_mount(vdisc_t *vd) {
             }
 
             // Check depth limit
-            uint8_t child_depth = vd->table[i].depth + 1u;
+            uint8_t child_depth = vd->table[i].depth + 1U;
             if (child_depth > 8) {
                 printf("[VDISC] Skipping entry at depth %u (max 8): %s\n",
                        (unsigned)child_depth, fno.fname);
@@ -467,7 +468,7 @@ bool vdisc_mount(vdisc_t *vd) {
             sanitise_name(vd->table[ei].name, fno.fname);
             vd->table[ei].is_dir     = is_dir;
             vd->table[ei].parent_idx = (uint16_t)i;
-            vd->table[ei].size       = is_dir ? 0u : fno.fsize;
+            vd->table[ei].size       = is_dir ? 0U : fno.fsize;
             vd->table[ei].depth      = child_depth;
 
             vd->entry_count++;
@@ -496,7 +497,7 @@ bool vdisc_mount(vdisc_t *vd) {
     for (uint32_t i = 0; i < vd->entry_count; i++) {
         if (!vd->table[i].is_dir) {
             vd->table[i].lba  = file_lba;
-            file_lba         += (vd->table[i].size + 2047u) / 2048u;
+            file_lba         += (vd->table[i].size + 2047U) / 2048U;
         }
     }
 
@@ -509,7 +510,7 @@ bool vdisc_mount(vdisc_t *vd) {
         if (vd->table[i].is_dir) n_dirs++; else n_files++;
     }
 
-    printf("[VDISC] Mounted %u entries (%u dirs, %u files), %u sectors\n",
+    printf("[VDISC] Mounted %" PRIu32 " entries (%" PRIu32 " dirs, %" PRIu32 " files), %" PRIu32 " sectors\n",
            vd->entry_count, n_dirs, n_files, vd->total_sectors);
     return true;
 }
@@ -542,7 +543,7 @@ void vdisc_read_sector(const vdisc_t *vd, uint32_t lba, uint8_t *buf2048) {
     if (lba >= vd->file_data_lba_start && lba < vd->total_sectors) {
         for (uint32_t i = 0; i < vd->entry_count; i++) {
             if (vd->table[i].is_dir) continue;
-            uint32_t file_sectors = (vd->table[i].size + 2047u) / 2048u;
+            uint32_t file_sectors = (vd->table[i].size + 2047U) / 2048U;
             if (lba >= vd->table[i].lba && lba < vd->table[i].lba + file_sectors) {
                 read_file_sector(vd, i, lba - vd->table[i].lba, buf2048);
                 return;

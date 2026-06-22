@@ -675,15 +675,6 @@ TEST(VdiscToc, TocLeadOutLbaMatchesTotalSectors) {
     CHECK_EQUAL(vd.total_sectors, disc.total_sectors);
 }
 
-TEST(VdiscToc, TocResponseEncodesCorrectly) {
-    uint8_t toc[32];
-    uint32_t len = disc_build_toc_response(&disc, toc, sizeof(toc));
-    CHECK(len >= 8u);  // At least one track + lead-out
-    // First 4 bytes: track 1 BCD = 0x01, then MSF
-    CHECK_EQUAL(0x01, toc[0]);
-    // Last 4 bytes: lead-out 0xAA
-    CHECK_EQUAL(0xAA, toc[len - 4]);
-}
 
 // ============================================================================
 // VdiscIntegration — disc_open_vdir full round-trip

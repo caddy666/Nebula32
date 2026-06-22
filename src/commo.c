@@ -32,6 +32,11 @@ typedef enum {
     SM_ERR_SEND
 } sm_state_t;
 
+/* Number of commo_step() ticks the SM dwells in SM_ERR_SEND before re-emitting
+ * COMMO_CMD_ERROR.  Loaded into byte_counter on entry; counted down one per
+ * tick (see SM_ERR_SEND). */
+#define COMMO_ERR_SEND_TICKS  128u
+
 static const uint8_t command_length_table[16] = {
     1, 2, 1, 1, 12, 2, 1, 1, 4, 1, 1, 1, 1, 2, 1, 1
 };
@@ -62,13 +67,13 @@ static void commo_step(commo_ctx_t *c)
             /* b==0: null opcode is a Chinon COMMO bus-reset signal, not a
              * valid command.  Treat it identically to a hardware timeout. */
             c->state        = SM_ERR_SEND;
-            c->byte_counter = 128;
+            c->byte_counter = COMMO_ERR_SEND_TICKS;
             break;
         }
         c->rx_buffer[0] = b;
         c->checksum     = b;
         c->byte_counter = 1;
-        c->cmd_length   = command_length_table[b & 0x0Fu];
+        c->cmd_length   = command_length_table[b & 0x0FU];
         c->state = (c->cmd_length == 1) ? SM_RXD_CHECKSUM : SM_RXD_PARM;
         break;
     }
@@ -187,7 +192,7 @@ bool commo_send(commo_ctx_t *ctx, const uint8_t *data, uint8_t len,
     memcpy(ctx->tx_buffer, data, len);
     ctx->byte_counter = len;
     ctx->tx_length    = len;
-    ctx->tx_chk_req   = (mode == COMMO_SEND_COMPLETE) ? 1u : 0u;
+    ctx->tx_chk_req   = (mode == COMMO_SEND_COMPLETE) ? 1U : 0U;
     ctx->tx_req       = 1;
     return true;
 }

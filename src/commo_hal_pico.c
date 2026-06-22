@@ -17,7 +17,7 @@ commo_hal_rx_status_t commo_hal_rxd(uint8_t *out)
 {
     commo_rx_enable(PIO_COMMO_RX, SM_COMMO_RX, PIN_COMMO_CLK);
 
-    uint32_t timeout = 500000u;
+    uint32_t timeout = 500000U;
     while (!pio_commo_rx_ready() && --timeout)
         tight_loop_contents();
 

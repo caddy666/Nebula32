@@ -301,3 +301,91 @@ TEST(MotorSledFake, SequentialSeeksSledEndsAtLastTarget)
     CHECK_EQUAL_TEXT(44850u, cache.next_fetch_lba,
                      "next_fetch_lba must be the last seek target after two seeks");
 }
+
+// ---------------------------------------------------------------------------
+// SEEK covert-channel boundary cases (CAPABILITY_BOUNDARY.md)
+//
+// The Amiga's only inbound data path is the SEEK LBA.  These tests pin the
+// behaviour at the edges of the addressable range using the REAL sector cache
+// plus a disc with a known total_sectors.  The clamp under test is in
+// sector_cache_prefetch_tick(): `if (fetch_lba >= total_sectors) return;` —
+// an off-the-end seek must serve nothing rather than read past the image.
+// ---------------------------------------------------------------------------
+
+// Helper: a minimal "open" disc of N sectors (no real I/O — disc_read_sector
+// is stubbed; the boundary path returns before any read is attempted).
+static void make_disc(disc_image_t *disc, uint32_t total_sectors)
+{
+    memset(disc, 0, sizeof(*disc));
+    disc->file_open     = true;
+    disc->total_sectors = total_sectors;
+}
+
+// Seek to LBA 0 — the first valid sector (Red Book lead-in boundary).
+TEST(MotorSledFake, SeekToFirstSectorLanded)
+{
+    disc_image_t disc; make_disc(&disc, 1000u);
+    sector_cache_t cache; sector_cache_init(&cache, &disc);
+
+    sector_cache_seek(&cache, 0u);
+    CHECK_EQUAL_TEXT(0u, cache.next_fetch_lba,
+                     "seek to LBA 0 must set next_fetch_lba to 0");
+}
+
+// Seek to total_sectors-1 — the last valid sector — must store exactly.
+TEST(MotorSledFake, SeekToLastSectorLanded)
+{
+    disc_image_t disc; make_disc(&disc, 1000u);
+    sector_cache_t cache; sector_cache_init(&cache, &disc);
+
+    sector_cache_seek(&cache, 999u);
+    CHECK_EQUAL_TEXT(999u, cache.next_fetch_lba,
+                     "seek to total_sectors-1 must set next_fetch_lba to that LBA");
+}
+
+// Seek exactly to total_sectors — the first off-the-end LBA.  The prefetch tick
+// must early-return and buffer nothing; next_fetch_lba must stay put (not wrap
+// or advance).
+TEST(MotorSledFake, SeekPastEndPrefetchesNothing)
+{
+    disc_image_t disc; make_disc(&disc, 1000u);
+    sector_cache_t cache; sector_cache_init(&cache, &disc);
+
+    sector_cache_seek(&cache, 1000u);          // == total_sectors → off the end
+    sector_cache_prefetch_tick(&cache);        // must hit the clamp, do nothing
+    CHECK_FALSE_TEXT(sector_cache_ready(&cache, 1000u),
+                     "off-the-end seek must not buffer any sector");
+    CHECK_EQUAL_TEXT(1000u, cache.next_fetch_lba,
+                     "off-the-end seek must leave next_fetch_lba unchanged");
+}
+
+// A wildly out-of-range seek (e.g. a corrupt covert-channel address) must be
+// handled gracefully: no crash, nothing served, position preserved.
+TEST(MotorSledFake, SeekFarBeyondEndIsSafe)
+{
+    disc_image_t disc; make_disc(&disc, 1000u);
+    sector_cache_t cache; sector_cache_init(&cache, &disc);
+
+    sector_cache_seek(&cache, 0xFFFF0000u);
+    sector_cache_prefetch_tick(&cache);
+    CHECK_FALSE_TEXT(sector_cache_ready(&cache, 0xFFFF0000u),
+                     "far-out seek must serve nothing");
+}
+
+// Invalid BCD MSF (0xFF:0xFF:0xFF) decodes to a huge but valid LBA.  Per
+// OpcResponses the drive must NOT error — it decodes via msf_to_lba and seeks.
+// On a small disc the result is off-the-end, so it folds into the clamp above.
+TEST(MotorSledFake, InvalidBcdSeekDecodesAndClamps)
+{
+    s_state = DRIVE_READY;
+    handle_seek(0xFF, 0xFF, 0xFF);             // garbage BCD → large LBA, state SEEKING
+    CHECK_EQUAL_TEXT((int)DRIVE_SEEKING, (int)s_state,
+                     "invalid-BCD SEEK must still enter DRIVE_SEEKING, not error");
+
+    disc_image_t disc; make_disc(&disc, 1000u);
+    sector_cache_t cache; sector_cache_init(&cache, &disc);
+    sector_cache_seek(&cache, s_seek_lba);     // decoded LBA is >> total_sectors
+    sector_cache_prefetch_tick(&cache);
+    CHECK_FALSE_TEXT(sector_cache_ready(&cache, s_seek_lba),
+                     "invalid-BCD seek lands off-the-end → nothing served");
+}

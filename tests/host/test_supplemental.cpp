@@ -47,21 +47,6 @@ static uint32_t msf_frames(const uint8_t *buf, int min_off)
          + bcd_dec(buf[min_off + 2]);
 }
 
-// Build a minimal single-track data disc for TOC tests.
-static disc_image_t make_single_track_disc(uint32_t sectors)
-{
-    disc_image_t d;
-    memset(&d, 0, sizeof(d));
-    d.first_track = 1;
-    d.last_track  = 1;
-    d.total_sectors = sectors;
-    d.tracks[0].number         = 1;
-    d.tracks[0].type           = TRACK_TYPE_DATA;
-    d.tracks[0].start_lba      = 0;
-    d.tracks[0].length_sectors = sectors;
-    return d;
-}
-
 // =============================================================================
 // Section 1 — CD Audio (CDDA) & Subcode Generation (Tests 1-10)
 // =============================================================================
@@ -122,40 +107,6 @@ TEST(SubcodeExtended, MultiIndexTransition)
     CHECK_EQUAL(0x00, b2[3]);  // relative minute
     CHECK_EQUAL(0x00, b2[4]);  // relative second
     CHECK_EQUAL(0x00, b2[5]);  // relative frame
-}
-
-// Test 4: 99-track disc (Red Book maximum) must not overflow disc_build_toc_response.
-TEST(SubcodeExtended, MaxTracksTOC)
-{
-    disc_image_t d;
-    memset(&d, 0, sizeof(d));
-    d.first_track   = 1;
-    d.last_track    = 99;
-    d.total_sectors = 99u * 1000u;
-    for (int i = 0; i < 99; i++) {
-        d.tracks[i].number         = (uint8_t)(i + 1);
-        d.tracks[i].type           = TRACK_TYPE_AUDIO;
-        d.tracks[i].start_lba      = (uint32_t)i * 1000u;
-        d.tracks[i].length_sectors = 1000;
-    }
-
-    uint8_t buf[400];   // 99×4 + 4 = 400
-    uint32_t n = disc_build_toc_response(&d, buf, sizeof(buf));
-    CHECK_EQUAL(400u, n);            // no truncation
-    CHECK_EQUAL(0x01u, buf[0]);      // first track BCD 01
-    CHECK_EQUAL(0x99u, buf[98u * 4u]); // last track BCD 99
-    CHECK_EQUAL(0xAAu, buf[99u * 4u]); // lead-out marker
-}
-
-// Test 5: Lead-out Q-channel entry uses track byte 0xAA (per Red Book).
-// disc_build_toc_response always places 0xAA as the final track number.
-TEST(SubcodeExtended, LeadOutQChannel)
-{
-    disc_image_t d = make_single_track_disc(3000);
-    uint8_t buf[16];
-    uint32_t n = disc_build_toc_response(&d, buf, sizeof(buf));
-    // Lead-out is the last 4-byte entry
-    BYTES_EQUAL(0xAA, buf[n - 4u]);
 }
 
 // Test 6: A track with length_sectors=0 must never be returned by disc_find_track

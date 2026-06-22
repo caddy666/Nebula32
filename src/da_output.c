@@ -83,7 +83,7 @@ static uint32_t        s_next_lba   = 0;
 static bool            s_audio_mode = false; // true = CD-DA; enables vis_audio snoop
 static bool            s_drq_pending = false; // set by ISR via __atomic_store RELEASE
 static bool            s_eod_reached = false; // set by ISR at end-of-disc (Option B); jukebox edge
-static uint32_t        s_clkdiv_fixed = 32u * 256u; // 16.8 fixed-point: nominal 32×256 at 1×
+static uint32_t        s_clkdiv_fixed = 32U * 256U; // 16.8 fixed-point: nominal 32×256 at 1×
 
 // ---------------------------------------------------------------------------
 // Forward declaration
@@ -99,7 +99,7 @@ static float _clkdiv(bool dbl) {
     // clkdiv 32 → SM clock = 4,234,225 Hz → BCLK = 2,117,112 Hz (1× CD) ✓
     // clkdiv 16 → SM clock = 8,468,450 Hz → BCLK = 4,234,225 Hz (2× CD)
     // 96 SM cycles per stereo pair → LRCLK = 4,234,225/96 ≈ 44,107 Hz ✓
-    return dbl ? 16.0f : 32.0f;
+    return dbl ? 16.0F : 32.0F;
 }
 
 // expand_to_i2s24 — convert 2352-byte raw sector to 1176 uint32_t I2S words.
@@ -176,7 +176,7 @@ void da_output_init(bool double_speed) {
 
     printf("[DA] init %s speed, BCLK=%lu Hz\n",
            double_speed ? "2x" : "1x",
-           (unsigned long)(135475200ul / (unsigned)(double_speed ? 16 : 32) / 2));
+           (unsigned long)(135475200UL / (unsigned)(double_speed ? 16 : 32) / 2));
     LOG_INFO_MSG("DA", "init %s speed", double_speed ? "2x" : "1x");
 }
 
@@ -194,7 +194,7 @@ void da_set_double_speed(bool double_speed) {
     // 352800 at 2×; each sample takes 32 SM clock cycles in the PIO program).
     {
         float sub_clkdiv = (float)clock_get_hz(clk_sys) /
-                           ((double_speed ? 176400.0f * 2.0f : 176400.0f) * 32.0f);
+                           ((double_speed ? 176400.0F * 2.0F : 176400.0F) * 32.0F);
         pio_sm_set_clkdiv(SUBCODE_PIO, SUBCODE_SM, sub_clkdiv);
     }
 
@@ -461,17 +461,17 @@ void da_set_audio_mode(bool is_audio) {
 // Clamp to ±0.5% of the nominal clkdiv to avoid runaway on a bad reading.
 void da_nudge_clkdiv_to_m17sine(uint32_t m17sine_hz) {
     // Reject implausible readings (should be ~16.9344 MHz ± a few hundred ppm)
-    if (m17sine_hz < 16800000u || m17sine_hz > 17100000u) return;
+    if (m17sine_hz < 16800000U || m17sine_hz > 17100000U) return;
 
     uint32_t sys_hz    = clock_get_hz(clk_sys);
-    uint32_t factor    = s_double_speed ? 2u : 4u;
+    uint32_t factor    = s_double_speed ? 2U : 4U;
 
     // Compute clkdiv × 256 with 64-bit intermediate to avoid overflow
-    uint64_t div_256   = ((uint64_t)sys_hz * factor * 256u) / m17sine_hz;
+    uint64_t div_256   = ((uint64_t)sys_hz * factor * 256U) / m17sine_hz;
 
     // Nominal clkdiv×256 for sanity-clamp (32×256=8192 at 1×, 16×256=4096 at 2×)
-    uint32_t nom_256   = (uint32_t)_clkdiv(s_double_speed) * 256u;
-    uint32_t half_pct  = nom_256 / 200u;  // 0.5% of nominal
+    uint32_t nom_256   = (uint32_t)_clkdiv(s_double_speed) * 256U;
+    uint32_t half_pct  = nom_256 / 200U;  // 0.5% of nominal
     if (div_256 < nom_256 - half_pct || div_256 > nom_256 + half_pct) return;
 
     uint16_t div_int   = (uint16_t)(div_256 >> 8);

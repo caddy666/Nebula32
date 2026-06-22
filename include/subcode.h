@@ -8,14 +8,11 @@
 // P, Q, R, S, T, U, V, W.  Each channel contributes 1 bit per frame giving
 // 96 bits (12 bytes) per channel per sector.
 //
-// The Q-channel is the only one the CD32 akiko cares about.  It carries:
-//   Mode 1 (ADR=1): current track, index, relative time, absolute time
-//   Mode 2 (ADR=2): Media Catalog Number (MCN / UPC-EAN barcode)
-//   Mode 3 (ADR=3): ISRC code for the current track
-//
-// We generate Mode 1 Q-channel data for every sector.  Mode 2/3 are emitted
-// periodically (every ~100 sectors) as the Red Book specifies, but their
-// absence does not cause compatibility problems on real CD32 hardware.
+// The Q-channel is the only one the CD32 akiko cares about.  We generate the
+// mandatory Mode 1 (ADR=1) position frame — track, index, relative + absolute
+// time, CRC-16 — for every sector.  The optional Mode 2 (MCN) and Mode 3 (ISRC)
+// frames are not generated: no disc-image format we parse carries that data, and
+// their absence is spec-compliant and harmless on real CD32 hardware.
 //
 // Q-channel data layout (12 bytes, 96 bits):
 //   Byte 0  : [CTRL(7:4) | ADR(3:0)]
@@ -53,9 +50,7 @@ CD32_SASSERT(QCHANNEL_SIZE  == 12, "Q-channel is 12 bytes (Red Book 22.3.4)");
 CD32_SASSERT(SUBCODE_FRAMES == 98, "98 subcode frames per sector (96 data + 2 sync)");
 
 // Q-channel ADR values
-#define Q_ADR_POSITION  0x01   // Current position mode
-#define Q_ADR_MCN       0x02   // Media Catalog Number mode
-#define Q_ADR_ISRC      0x03   // ISRC mode
+#define Q_ADR_POSITION  0x01   // Current position mode (the only mode generated)
 
 // Q-channel CTRL field (upper nibble of byte 0)
 //   These match the track descriptor CTRL nibble in the TOC.
@@ -81,17 +76,6 @@ void subcode_build_q_position(uint8_t track_no, uint8_t index,
                                uint32_t track_lba, uint32_t disc_lba,
                                uint8_t *buf);
 
-// Build a 12-byte Q-channel MCN (Media Catalog Number) block (ADR=2).
-// 'mcn' must point to a 13-byte ASCII string "DDDDDDDDDDDDDD\0".
-// If mcn is NULL, all-zero MCN is used (no barcode).
-void subcode_build_q_mcn(const char *mcn, uint8_t *buf);
-
-// Build a 12-byte Q-channel ISRC block (ADR=3).
-// 'isrc' must point to a 12-byte string (country[2]+owner[3]+year[2]+serial[5]).
-// If isrc is NULL, a blank ISRC is encoded.
-void subcode_build_q_isrc(uint8_t track_no, bool is_data,
-                           const char *isrc, uint8_t *buf);
-
 // Compute the Q-channel CRC-16/CCITT over bytes 0–9.
 // The CRC is bit-inverted before storing in bytes 10–11.
 // Polynomial: x^16 + x^12 + x^5 + 1  (0x1021), initial value 0x0000.
@@ -100,8 +84,8 @@ uint16_t subcode_crc16(const uint8_t *data, uint32_t len);
 // Convenience: compute CRC and write it into buf[10..11]
 static inline void subcode_append_crc(uint8_t *buf) {
     uint16_t crc = subcode_crc16(buf, 10);
-    buf[10] = (uint8_t)((crc >> 8u) & 0xFFu);
-    buf[11] = (uint8_t)(crc & 0xFFu);
+    buf[10] = (uint8_t)((crc >> 8U) & 0xFFU);
+    buf[11] = (uint8_t)(crc & 0xFFU);
 }
 
 // ---------------------------------------------------------------------------

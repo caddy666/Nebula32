@@ -62,7 +62,7 @@ static void test_sys_clock(void) {
     TEST_SECTION("System Clock");
     uint32_t hz = clock_get_hz(clk_sys);
     printf("         sys_clk = %lu Hz\n", (unsigned long)hz);
-    TEST_ASSERT(hz >= 135000000u && hz <= 136000000u,
+    TEST_ASSERT(hz >= 135000000U && hz <= 136000000U,
                 "sys_clk in range 135.0-136.0 MHz (target 135,475,200)");
 }
 
@@ -117,7 +117,7 @@ static void test_gpio_mux(void) {
     TEST_ASSERT(gpio_get_function(PIN_IF_DIR)  == GPIO_FUNC_PIO1, "GPIO46 (IF_DIR)     = PIO1");
 
     // PSRAM QMI CS1 (GPIO 47)
-    TEST_ASSERT(gpio_get_function(47u) == GPIO_FUNC_XIP_CS1, "GPIO47 (PSRAM_CS)   = XIP_CS1");
+    TEST_ASSERT(gpio_get_function(47U) == GPIO_FUNC_XIP_CS1, "GPIO47 (PSRAM_CS)   = XIP_CS1");
 }
 
 // ---------------------------------------------------------------------------
@@ -129,26 +129,26 @@ static void test_pio_config(void) {
     // PIO0 SM0 — DA output clkdiv integer = 32 → BCLK ≈ 2.117 MHz (1× CD-DA)
     // clkdiv register [31:16] = integer part, [15:8] = 1/256 fractional
     uint32_t da_clkdiv_int  = pio0->sm[0].clkdiv >> 16;
-    uint32_t da_clkdiv_frac = (pio0->sm[0].clkdiv >> 8) & 0xFFu;
+    uint32_t da_clkdiv_frac = (pio0->sm[0].clkdiv >> 8) & 0xFFU;
     printf("         PIO0 SM0 (DA) clkdiv = %lu.%lu\n",
            (unsigned long)da_clkdiv_int, (unsigned long)da_clkdiv_frac);
-    TEST_ASSERT(da_clkdiv_int == 32u,
+    TEST_ASSERT(da_clkdiv_int == 32U,
                 "PIO0 SM0 (DA output) CLKDIV int = 32 (2.117 MHz BCLK)");
 
     // PIO0 SM1 — subcode encoder clkdiv integer = 24 → 176,400 bps bit clock
     // 135,475,200 / (176,400 × 32) = 24.0 exactly
 #if BUILD_WITH_COMMO
     uint32_t sub_clkdiv_int  = pio0->sm[1].clkdiv >> 16;
-    uint32_t sub_clkdiv_frac = (pio0->sm[1].clkdiv >> 8) & 0xFFu;
+    uint32_t sub_clkdiv_frac = (pio0->sm[1].clkdiv >> 8) & 0xFFU;
     printf("         PIO0 SM1 (subcode) clkdiv = %lu.%lu\n",
            (unsigned long)sub_clkdiv_int, (unsigned long)sub_clkdiv_frac);
-    TEST_ASSERT(sub_clkdiv_int == 24u,
+    TEST_ASSERT(sub_clkdiv_int == 24U,
                 "PIO0 SM1 (subcode encoder) CLKDIV int = 24 (176,400 bps)");
 #endif
 
     // PIO1 SM0 — COMMO RX: IN_BASE should be PIN_IF_CLK (GPIO 44)
     // PINCTRL register [19:15] = IN_BASE (5 bits)
-    uint32_t commo_in_base = (pio1->sm[0].pinctrl >> 15) & 0x1Fu;
+    uint32_t commo_in_base = (pio1->sm[0].pinctrl >> 15) & 0x1FU;
     printf("         PIO1 SM0 (COMMO RX) IN_BASE = GPIO%lu (expect %d)\n",
            (unsigned long)commo_in_base, PIN_IF_CLK);
     TEST_ASSERT(commo_in_base == (uint32_t)PIN_IF_CLK,
@@ -156,7 +156,7 @@ static void test_pio_config(void) {
 
     // PIO1 SM1 — COMMO TX side-set base should also be PIN_IF_CLK (GPIO 44)
     // PINCTRL register [14:10] = SIDESET_BASE (5 bits)
-    uint32_t commo_side_base = (pio1->sm[1].pinctrl >> 10) & 0x1Fu;
+    uint32_t commo_side_base = (pio1->sm[1].pinctrl >> 10) & 0x1FU;
     printf("         PIO1 SM1 (COMMO TX) SIDESET_BASE = GPIO%lu (expect %d)\n",
            (unsigned long)commo_side_base, PIN_IF_CLK);
     TEST_ASSERT(commo_side_base == (uint32_t)PIN_IF_CLK,

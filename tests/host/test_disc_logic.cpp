@@ -137,67 +137,6 @@ TEST(DiscFindTrack, TrackType_IsPreserved)
 }
 
 /* =========================================================================
- * 02 — TocResponse
- *
- * Validates disc_build_toc_response() encoding for a two-track disc.
- * The format is: [bcd_track, min, sec] × N tracks, then [0xAA, min, sec].
- * ======================================================================= */
-TEST_GROUP(TocResponse) {};
-
-TEST(TocResponse, TwoTracks_LengthIs12Bytes)
-{
-    disc_image_t d = make_two_track_disc();
-    uint8_t buf[32];
-    uint32_t n = disc_build_toc_response(&d, buf, sizeof(buf));
-    /* 2 tracks × 4 bytes + 4 bytes lead-out = 12 bytes */
-    LONGS_EQUAL(12, n);
-}
-
-TEST(TocResponse, Track1Number_IsBcd01)
-{
-    disc_image_t d = make_two_track_disc();
-    uint8_t buf[32];
-    disc_build_toc_response(&d, buf, sizeof(buf));
-    BYTES_EQUAL(0x01, buf[0]);
-}
-
-TEST(TocResponse, Track1StartsAtLba0_Msf000200)
-{
-    /* LBA 0 → MSF 00:02:00 BCD */
-    disc_image_t d = make_two_track_disc();
-    uint8_t buf[32];
-    disc_build_toc_response(&d, buf, sizeof(buf));
-    BYTES_EQUAL(0x00, buf[1]);   /* minute */
-    BYTES_EQUAL(0x02, buf[2]);   /* second */
-}
-
-TEST(TocResponse, Track2Number_IsBcd02)
-{
-    disc_image_t d = make_two_track_disc();
-    uint8_t buf[32];
-    disc_build_toc_response(&d, buf, sizeof(buf));
-    /* Each entry is now 4 bytes: [track_no, min, sec, frame] */
-    BYTES_EQUAL(0x02, buf[4]);
-}
-
-TEST(TocResponse, LeadOutByte_Is0xAA)
-{
-    disc_image_t d = make_two_track_disc();
-    uint8_t buf[32];
-    uint32_t n = disc_build_toc_response(&d, buf, sizeof(buf));
-    /* Lead-out entry is 4 bytes: [0xAA, min, sec, frame] */
-    BYTES_EQUAL(0xAA, buf[n - 4]);
-}
-
-TEST(TocResponse, TruncatedBuffer_NoOverrun)
-{
-    disc_image_t d = make_two_track_disc();
-    uint8_t buf[4];   /* only room for 1 track entry + 1 byte */
-    uint32_t n = disc_build_toc_response(&d, buf, sizeof(buf));
-    CHECK_TRUE(n <= sizeof(buf));
-}
-
-/* =========================================================================
  * 03 — ConfigCrc
  *
  * Validates the CRC-32 algorithm used by config.c.
@@ -471,17 +410,6 @@ TEST(IsoLayout, OnePastEnd_ReturnsNull)
 {
     disc_image_t d = make_iso_disc(10000);
     POINTERS_EQUAL(NULL, disc_find_track(&d, 10000));
-}
-
-TEST(IsoLayout, TocLeadOut_MatchesTotalSectors)
-{
-    disc_image_t d = make_iso_disc(10000);
-    uint8_t buf[32];
-    uint32_t n = disc_build_toc_response(&d, buf, sizeof(buf));
-    /* 1 track × 4 bytes + 4 lead-out = 8 bytes */
-    LONGS_EQUAL(8, n);
-    /* Lead-out track number is 0xAA (at start of lead-out entry) */
-    BYTES_EQUAL(0xAA, buf[4]);
 }
 
 /* =========================================================================

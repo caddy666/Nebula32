@@ -44,7 +44,6 @@ WARN_SRCS = \
     ../../src/fft.c \
     ../../src/vis_audio.c \
     ../../src/sector_cache.c \
-    ../../src/maths.c \
     ../../src/commo.c \
     ../../src/carousel.c
 
@@ -54,7 +53,6 @@ SRCS_C = \
     ../../src/fft.c \
     ../../src/vis_audio.c \
     ../../src/sector_cache.c \
-    ../../src/maths.c \
     ../../src/commo.c \
     ../../src/carousel.c \
     commo_hal_stub.c \
@@ -68,7 +66,6 @@ SRCS_CPP = \
     test_fft.cpp \
     test_vis_audio.cpp \
     test_sector_cache.cpp \
-    test_maths.cpp \
     test_csv_replay.cpp \
     test_csv_replay_pon_poff.cpp \
     test_csv_replay_zool2.cpp \
@@ -102,9 +99,9 @@ DEPS = $(OBJS_C:.o=.d) $(OBJS_CPP:.o=.d) \
        stress_vis_audio.d stress_fft.d stress_test.d \
        stress_sc_cache.d stress_sc_test.d \
        parser_disc_image.d parser_virtual_disc.d parser_ecc.d parser_subcode.d \
-       parser_maths.d parser_fatfs_sim.d parser_main.d parser_test.d \
+       parser_fatfs_sim.d parser_main.d parser_test.d \
        vdisc_virtual_disc.d vdisc_disc_image.d vdisc_ecc.d vdisc_subcode.d \
-       vdisc_maths.d vdisc_sim.d vdisc_main.d vdisc_test.d
+       vdisc_sim.d vdisc_main.d vdisc_test.d
 
 # webserver.c compiled with Pico W + test stubs active.
 # -Wall/-Wextra/-Werror are omitted because the lwIP/CYW43 stub headers
@@ -283,9 +280,6 @@ parser_ecc.o: ../../src/ecc.c
 parser_subcode.o: ../../src/subcode.c
 	$(CC) $(PARSER_CFLAGS) -c $< -o $@
 
-parser_maths.o: ../../src/maths.c
-	$(CC) $(PARSER_CFLAGS) -c $< -o $@
-
 parser_fatfs_sim.o: fatfs_sim.c
 	$(CC) $(PARSER_CFLAGS) -c $< -o $@
 
@@ -296,7 +290,6 @@ parser_test.o: test_disc_parser.cpp
 	$(CXX) $(PARSER_CXXFLAGS) -c $< -o $@
 
 $(OUTDIR)/parser_tests: parser_disc_image.o parser_virtual_disc.o parser_ecc.o parser_subcode.o \
-              parser_maths.o \
               parser_fatfs_sim.o parser_main.o parser_test.o
 	@mkdir -p $(OUTDIR)
 	$(CXX) $(UBSAN) $^ -o $@ -lCppUTest -lstdc++ -lm
@@ -341,9 +334,6 @@ vdisc_ecc.o: ../../src/ecc.c
 vdisc_subcode.o: ../../src/subcode.c
 	$(CC) $(VDISC_CFLAGS) -c $< -o $@
 
-vdisc_maths.o: ../../src/maths.c
-	$(CC) $(VDISC_CFLAGS) -c $< -o $@
-
 vdisc_sim.o: vdisc_sim.c
 	$(CC) $(VDISC_CFLAGS) -c $< -o $@
 
@@ -354,7 +344,7 @@ vdisc_test.o: test_virtual_disc.cpp
 	$(CXX) $(VDISC_CXXFLAGS) -c $< -o $@
 
 $(OUTDIR)/vdisc_tests: vdisc_virtual_disc.o vdisc_disc_image.o vdisc_ecc.o \
-             vdisc_subcode.o vdisc_maths.o \
+             vdisc_subcode.o \
              vdisc_sim.o vdisc_main.o vdisc_test.o
 	@mkdir -p $(OUTDIR)
 	$(CXX) $(UBSAN) $^ -o $@ -lCppUTest -lstdc++ -lm

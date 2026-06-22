@@ -1,9 +1,6 @@
 /**
  * @file  defs.h
  * @brief Master type definitions and command opcodes for the CD32 Pico firmware.
- *
- * Ported from the original Commodore/Philips 8051 firmware (1992-1993).
- * Adapted for the RP2350 (Raspberry Pi Pico 2).
  */
 
 #pragma once
@@ -12,12 +9,12 @@
 #include <stdbool.h>
 
 /* -------------------------------------------------------------------------
- * Basic types (replaces 8051 'bit' and CMOS byte)
+ * Basic types
  * ---------------------------------------------------------------------- */
 typedef uint8_t  byte;
 typedef uint8_t  Byte;
 
-/* 'rom' was the 8051 keyword for const data in code memory — map to const */
+/* Map the legacy 'rom' qualifier to const. */
 #undef  rom
 #define rom  const
 

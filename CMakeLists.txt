@@ -14,6 +14,7 @@ include($ENV{PICO_SDK_PATH}/external/pico_sdk_import.cmake)
 project(Nebula32 C CXX ASM)
 set(CMAKE_C_STANDARD   11)
 set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)  # emit compile_commands.json for clang-tidy
 
 pico_sdk_init()
 
@@ -256,8 +257,6 @@ add_executable(Nebula32
     src/commo_bridge.c
     src/commo.c
     src/commo_hal_pico.c
-    src/maths.c
-    src/timer.c
 
 )
 
@@ -395,6 +394,14 @@ target_compile_options(Nebula32 PRIVATE
     -Wall
     -Wextra
     -Wno-unused-parameter   # Several callbacks take unused context pointers
+    # Extra warnings not in -Wall/-Wextra. -Wformat=2 catches %u-vs-uint32_t
+    # (uint32_t is 'unsigned long' on this ABI); -Wdouble-promotion catches
+    # silent float->double on the M33's single-precision FPU.
+    -Wformat=2
+    -Wdouble-promotion
+    -Wshadow
+    -Wpointer-arith
+    -Wnull-dereference
     ${NEBULA_OPT_LEVEL}     # -O2 (release) or -Og -g3 (NEBULA_DEBUG)
     -fstack-usage           # Emit .su files — per-function stack depth for RP2350 SRAM auditing
 )

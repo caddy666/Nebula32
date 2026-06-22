@@ -22,7 +22,7 @@
 
 /* Pack R,G,B (0-255 each) into byte-swapped RGB565 (RAMCTRL bswap enabled). */
 static inline uint16_t rgb(uint8_t r, uint8_t g, uint8_t b) {
-    uint16_t c = ((uint16_t)(r & 0xF8u) << 8) | ((uint16_t)(g & 0xFCu) << 3) | (b >> 3);
+    uint16_t c = ((uint16_t)(r & 0xF8U) << 8) | ((uint16_t)(g & 0xFCU) << 3) | (b >> 3);
     return (uint16_t)((c >> 8) | (c << 8));
 }
 

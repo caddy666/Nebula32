@@ -1069,13 +1069,13 @@ static void handle_request(struct tcp_pcb *pcb, http_conn_t *conn) {
         int pos = snprintf(conn->resp_buf, sizeof(conn->resp_buf),
             "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
             "Connection: close\r\n\r\n{\"playlists\":[");
-        for (uint32_t i = 0; i < n && pos < (int)sizeof(conn->resp_buf) - 4; i++) {
+        for (uint32_t j = 0; j < n && pos < (int)sizeof(conn->resp_buf) - 4; j++) {
             char base[MAX_PATH_LEN];
-            basename_no_ext(pl_paths[i], base, sizeof(base));
+            basename_no_ext(pl_paths[j], base, sizeof(base));
             char esc[MAX_PATH_LEN * 2];
             json_escape(esc, sizeof(esc), base);
             pos += snprintf(conn->resp_buf + pos, sizeof(conn->resp_buf) - pos,
-                "%s\"%s\"", i ? "," : "", esc);
+                "%s\"%s\"", j ? "," : "", esc);
         }
         snprintf(conn->resp_buf + pos, sizeof(conn->resp_buf) - pos, "]}");
         wolfSSL_write(conn->ssl, conn->resp_buf, (int)strlen(conn->resp_buf));
@@ -1089,14 +1089,14 @@ static void handle_request(struct tcp_pcb *pcb, http_conn_t *conn) {
         int pos = snprintf(conn->resp_buf, sizeof(conn->resp_buf),
             "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
             "Connection: close\r\n\r\n{\"files\":[");
-        for (uint32_t i = 0; i < n && pos < (int)sizeof(conn->resp_buf) - 4; i++) {
+        for (uint32_t j = 0; j < n && pos < (int)sizeof(conn->resp_buf) - 4; j++) {
             // Strip the "0:/" prefix for the client
-            const char *name = fw_paths[i];
+            const char *name = fw_paths[j];
             if (name[0] == '0' && name[1] == ':' && name[2] == '/') name += 3;
             char esc[MAX_PATH_LEN * 2];
             json_escape(esc, sizeof(esc), name);
             pos += snprintf(conn->resp_buf + pos, sizeof(conn->resp_buf) - pos,
-                "%s\"%s\"", i ? "," : "", esc);
+                "%s\"%s\"", j ? "," : "", esc);
         }
         snprintf(conn->resp_buf + pos, sizeof(conn->resp_buf) - pos, "]}");
         wolfSSL_write(conn->ssl, conn->resp_buf, (int)strlen(conn->resp_buf));
@@ -1120,7 +1120,7 @@ static void handle_request(struct tcp_pcb *pcb, http_conn_t *conn) {
         // Strip query string from fname before filename validation.
         const char *fname_raw = path + 14;
         char fname[MAX_PATH_LEN];
-        size_t fn_max = sizeof(path) - 14u - 1u; // bytes remaining in path[] after prefix
+        size_t fn_max = sizeof(path) - 14U - 1U; // bytes remaining in path[] after prefix
         size_t fn_len = 0;
         while (fname_raw[fn_len] && fname_raw[fn_len] != '?' && fn_len < fn_max)
             fn_len++;
